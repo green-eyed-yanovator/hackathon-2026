@@ -280,10 +280,9 @@ function readString(p: Pbf) {
   return s
 }
 
-const DRAWN_LAYERS = new Set([
-  'water', 'waterway', 'landcover', 'landuse', 'park', 'building', 'transportation', 'transportation_name',
-  'boundary', 'place', 'water_name', 'poi', 'mountain_peak',
-])
+// Layers the map never draws, so they aren't worth decoding. (A deny-list: a
+// layer someone starts drawing later still decodes without anyone remembering this.)
+const SKIPPED_LAYERS = new Set(['housenumber', 'aerodrome_label', 'aeroway'])
 
 // Only these properties are kept; the tiles carry dozens of translated names we never show.
 const KEPT = new Set(['class', 'subclass', 'name', 'name:latin', 'rank', 'brunnel', 'admin_level', 'maritime', 'layer', 'intermittent', 'ele'])
@@ -300,6 +299,16 @@ type Feature = {
   maxY: number
 }
 
+// A tile's own ring and how to turn it into world units, so names that bend
+// along a line don't need a copy of its coordinates.
+type Line = { ring: Int32Array; baseX: number; baseY: number; scale: number }
+
+function lineLength(ring: Int32Array) {
+  let length = 0
+  for (let i = 2; i < ring.length; i += 2) length += Math.hypot(ring[i] - ring[i - 2], ring[i + 1] - ring[i - 1])
+  return length
+}
+
 type Label = {
   kind: 'place' | 'road' | 'water' | 'park' | 'poi'
   text: string
@@ -307,8 +316,8 @@ type Label = {
   y: number
   angle: number
   length: number // world units of straight road available for the text
-  path: number[] | null // roads: the whole line in world units, for names that follow a bend
-  pathLength: number
+  line: Line | null // roads and rivers: their whole line, for names that follow a bend
+  pathLength: number // that line's length in world units
   rank: number // lower goes first
   minZoom: number
   maxZoom: number
@@ -434,7 +443,7 @@ function decodeTile(buf: Uint8Array, z: number, x: number, y: number): SourceTil
 
     // Layers we never draw aren't worth decoding.
     const features: Feature[] = []
-    if (!DRAWN_LAYERS.has(name)) featureRanges.length = 0
+    if (SKIPPED_LAYERS.has(name)) featureRanges.length = 0
     for (let i = 0; i < featureRanges.length; i += 2) {
       p.pos = featureRanges[i]
       features.push(decodeFeature(p, featureRanges[i + 1], keys, values))
@@ -503,13 +512,14 @@ function collectLabels(tile: SourceTile) {
   const toWorldX = (u: number) => (tile.x * tile.extent + u) / scale
   const toWorldY = (v: number) => (tile.y * tile.extent + v) / scale
   const inside = (u: number, v: number) => u >= 0 && v >= 0 && u < tile.extent && v < tile.extent
+  const lineOf = (ring: Int32Array): Line => ({ ring, baseX: tile.x * tile.extent, baseY: tile.y * tile.extent, scale })
 
   for (const f of tile.layers.place ?? []) {
     const text = nameOf(f.props)
     const rank = PLACE_RANK[String(f.props.class)]
     if (!text || !rank || !inside(f.rings[0][0], f.rings[0][1])) continue
     tile.labels.push({
-      kind: 'place', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
+      kind: 'place', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
       rank: rank[0] * 10 + Number(f.props.rank ?? 0) / 10, minZoom: rank[1], maxZoom: rank[2], size: rank[3], icon: null, color: null,
     })
   }
@@ -522,14 +532,9 @@ function collectLabels(tile: SourceTile) {
     for (const ring of f.rings) {
       const mid = ring.length >> 2 << 1
       if (ring.length < 4 || !inside(ring[mid], ring[mid + 1])) continue
-      const path: number[] = []
-      let pathLength = 0
-      for (let i = 0; i < ring.length; i += 2) {
-        path.push(toWorldX(ring[i]), toWorldY(ring[i + 1]))
-        if (i >= 2) pathLength += Math.hypot(ring[i] - ring[i - 2], ring[i + 1] - ring[i - 1]) / scale
-      }
       tile.labels.push({
-        kind: 'water', text, x: toWorldX(ring[mid]), y: toWorldY(ring[mid + 1]), angle: 0, length: 0, path, pathLength,
+        kind: 'water', text, x: toWorldX(ring[mid]), y: toWorldY(ring[mid + 1]), angle: 0, length: 0,
+        line: lineOf(ring), pathLength: lineLength(ring) / scale,
         rank: cls === 'river' ? 45 : 65, minZoom: cls === 'river' ? 12 : 14.5, maxZoom: 20, size: 11, icon: null, color: null,
       })
     }
@@ -540,7 +545,7 @@ function collectLabels(tile: SourceTile) {
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
     const cls = String(f.props.class)
     tile.labels.push({
-      kind: 'water', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
+      kind: 'water', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
       rank: cls === 'ocean' || cls === 'sea' ? 5 : 40, minZoom: cls === 'ocean' ? 3 : cls === 'sea' ? 6 : 13, maxZoom: 20,
       size: cls === 'ocean' || cls === 'sea' ? 15 : 12, icon: null, color: null,
     })
@@ -552,7 +557,7 @@ function collectLabels(tile: SourceTile) {
     const ele = Number(f.props.ele)
     tile.labels.push({
       kind: 'park', text: `▲ ${name}${ele ? ` ${Math.round(ele)} m` : ''}`, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]),
-      angle: 0, length: 0, path: null, pathLength: 0, rank: 60 + Number(f.props.rank ?? 0), minZoom: 10.5, maxZoom: 18, size: 11, icon: null, color: null,
+      angle: 0, length: 0, line: null, pathLength: 0, rank: 60 + Number(f.props.rank ?? 0), minZoom: 10.5, maxZoom: 18, size: 11, icon: null, color: null,
     })
   }
 
@@ -560,7 +565,7 @@ function collectLabels(tile: SourceTile) {
     const text = nameOf(f.props)
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
     tile.labels.push({
-      kind: 'park', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
+      kind: 'park', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
       rank: 70 + Number(f.props.rank ?? 0), minZoom: 14.5, maxZoom: 20, size: 11, icon: null, color: null,
     })
   }
@@ -574,7 +579,7 @@ function collectLabels(tile: SourceTile) {
     if (!icon || subclass === 'artwork' || subclass === 'bus_stop' || subclass === 'tram_stop') continue
     const rank = Number(f.props.rank ?? 30)
     tile.labels.push({
-      kind: 'poi', text: nameOf(f.props), x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
+      kind: 'poi', text: nameOf(f.props), x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
       rank: 100 + rank, minZoom: rank <= 4 ? 15 : rank <= 12 ? 16 : 17, maxZoom: 20, size: 11, icon, color: POI_COLORS[icon] ?? '#888888',
     })
   }
@@ -627,15 +632,9 @@ function collectLabels(tile: SourceTile) {
       if (angle > Math.PI / 2) angle -= Math.PI
       if (angle < -Math.PI / 2) angle += Math.PI
 
-      const path: number[] = []
-      let pathLength = 0
-      for (let i = 0; i < ring.length; i += 2) {
-        path.push(toWorldX(ring[i]), toWorldY(ring[i + 1]))
-        if (i >= 2) pathLength += Math.hypot(ring[i] - ring[i - 2], ring[i + 1] - ring[i - 1]) / scale
-      }
-
       tile.labels.push({
-        kind: 'road', text, x: toWorldX(mx), y: toWorldY(my), angle, length: Math.hypot(bx - ax, by - ay) / scale, path, pathLength,
+        kind: 'road', text, x: toWorldX(mx), y: toWorldY(my), angle, length: Math.hypot(bx - ax, by - ay) / scale,
+        line: lineOf(ring), pathLength: lineLength(ring) / scale,
         rank: 50 + rank, minZoom: rank <= 2 ? 13 : rank <= 4 ? 14.5 : 15.5, maxZoom: 20, size: 11, icon: null, color: null,
       })
     }
@@ -926,9 +925,15 @@ export function panBy(m: MapState, dx: number, dy: number) {
 
 // Like a fling: sets the map drifting so it comes to rest about (dx, dy) px away.
 export function glideBy(m: MapState, dx: number, dy: number) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    panBy(m, dx, dy)
+    return
+  }
   m.fly = null
-  m.vx += dx / 280 // the fling's decay (280 ms) turns speed into this much distance
-  m.vy += dy / 280
+  // Setting the speed rather than adding to it: a held key's repeats glide
+  // steadily instead of piling up. The fling's decay (280 ms) turns it into distance.
+  m.vx = dx / 280
+  m.vy = dy / 280
   requestFrame(m)
 }
 
@@ -1738,25 +1743,45 @@ function advance(font: string, ch: string) {
   return width
 }
 
-// Where each letter of a road name goes along the road: centred on the line,
-// reading left to right. Null when the road bends too sharply to read.
-function alongPath(m: MapState, path: number[], widths: number[], total: number) {
+// Where each letter of a name goes along its line: centred where the line
+// passes closest to the label's own spot (sx, sy), reading left to right.
+// Null when there's no room or the line bends too sharply to read.
+function alongPath(m: MapState, line: Line, sx: number, sy: number, widths: number[], total: number) {
   const size = worldSize(m)
+  const ring = line.ring
   let pts: number[] = []
-  for (let i = 0; i < path.length; i += 2) pts.push((path[i] - m.x) * size + m.width / 2, (path[i + 1] - m.y) * size + m.height / 2)
+  for (let i = 0; i < ring.length; i += 2) {
+    pts.push(((line.baseX + ring[i]) / line.scale - m.x) * size + m.width / 2, ((line.baseY + ring[i + 1]) / line.scale - m.y) * size + m.height / 2)
+  }
   if (pts[pts.length - 2] < pts[0]) {
     const reversed: number[] = []
     for (let i = pts.length - 2; i >= 0; i -= 2) reversed.push(pts[i], pts[i + 1])
     pts = reversed
   }
 
+  // Distance along the line, and where along it the label's spot sits.
   const along = [0]
-  for (let i = 2; i < pts.length; i += 2) along.push(along[along.length - 1] + Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]))
+  let spot = 0
+  let nearest = Infinity
+  for (let i = 2; i < pts.length; i += 2) {
+    const ax = pts[i - 2]
+    const ay = pts[i - 1]
+    const vx = pts[i] - ax
+    const vy = pts[i + 1] - ay
+    const segment = Math.hypot(vx, vy)
+    const t = clamp(((sx - ax) * vx + (sy - ay) * vy) / (segment * segment || 1), 0, 1)
+    const d = Math.hypot(sx - (ax + vx * t), sy - (ay + vy * t))
+    if (d < nearest) {
+      nearest = d
+      spot = along[along.length - 1] + segment * t
+    }
+    along.push(along[along.length - 1] + segment)
+  }
   const length = along[along.length - 1]
   if (length < total + 24) return null
 
   const out: { x: number; y: number; angle: number }[] = []
-  let d = (length - total) / 2
+  let d = clamp(spot, total / 2 + 12, length - total / 2 - 12) - total / 2
   let seg = 0
   let last: number | null = null
   for (const w of widths) {
@@ -2419,7 +2444,7 @@ function drawLabels(m: MapState, v: View, placed: Box[], dt: number) {
     const s = labelSprite(m, label)
     let box: Box
 
-    if (label.kind === 'road' || label.path) {
+    if (label.kind === 'road' || label.line) {
       // Roads, and rivers that follow their own line: one name per stretch.
       const seen = named.get(label.text)
       const apart = label.kind === 'water' ? 480 : 220 // a river's name needn't repeat as often as a street's
@@ -2440,8 +2465,8 @@ function drawLabels(m: MapState, v: View, placed: Box[], dt: number) {
         c.restore()
       } else {
         // No straight stretch long enough: bend the name along the line instead.
-        if (!label.path || label.pathLength * v.size < s.width + 24) continue
-        const bent = drawBentName(m, label, placed, fadeIn)
+        if (!label.line || label.pathLength * v.size < s.width + 24) continue
+        const bent = drawBentName(m, label, sx, sy, placed, fadeIn)
         if (!bent) continue
         box = bent
       }
@@ -2473,14 +2498,14 @@ function drawLabels(m: MapState, v: View, placed: Box[], dt: number) {
 
 // A name laid letter by letter along its road or river. Returns the space it
 // took, or null if it didn't fit or the line bends too sharply to read.
-function drawBentName(m: MapState, label: Label, placed: Box[], fadeIn: (label: Label) => void): Box | null {
+function drawBentName(m: MapState, label: Label, sx: number, sy: number, placed: Box[], fadeIn: (label: Label) => void): Box | null {
   const t = m.theme
   const c = m.ctx
   const font = labelFont(t, label)
   const text = [...labelText(t, label)]
   const spacing = t.caps ? 0.8 : 0
   const widths = text.map((ch) => advance(font, ch) + spacing)
-  const glyphs = alongPath(m, label.path!, widths, widths.reduce((a, b) => a + b, 0))
+  const glyphs = alongPath(m, label.line!, sx, sy, widths, widths.reduce((a, b) => a + b, 0))
   if (!glyphs) return null
 
   const half = label.size / 2 + 3
@@ -2491,7 +2516,8 @@ function drawBentName(m: MapState, label: Label, placed: Box[], fadeIn: (label: 
     box.x1 = Math.max(box.x1, g.x + half)
     box.y1 = Math.max(box.y1, g.y + half)
   }
-  if (hits(placed, box)) return null
+  // Off screen, or on top of something: not here.
+  if (box.x1 < 0 || box.y1 < 0 || box.x0 > m.width || box.y0 > m.height || hits(placed, box)) return null
 
   fadeIn(label)
   const color = label.kind === 'water' ? t.waterLabel : t.labelColor

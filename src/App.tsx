@@ -718,7 +718,7 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
   const interested = st.interested.get(post.id) ?? 0
   const unread = st.unread.has(post.id)
   const soon = post.starts_at && !post.resolved_at ? soonText(post.starts_at) : null
-  const photo = S.media.find((m) => m.post_id === post.id && m.media_type === 'image')
+  const photo = st.photo.get(post.id)
   const key = placeKey(post)
 
   return (
@@ -2264,10 +2264,23 @@ function fuzzy(query: string, text: string | null | undefined) {
   return best >= q.length * 5 ? best : 0
 }
 
+// A query's words, each matched on its own against any of an item's short texts
+// (fuzzy) or long texts (plainly), in any order: "coffee ann" finds Ann's coffee pin.
+function score(words: string[], short: (string | null | undefined)[], long: (string | null | undefined)[] = []) {
+  let total = 0
+  for (const word of words) {
+    let best = 0
+    for (const text of short) best = Math.max(best, fuzzy(word, text))
+    for (const text of long) if (text?.toLowerCase().includes(word)) best = Math.max(best, 10)
+    if (best === 0) return 0
+    total += best
+  }
+  return total
+}
+
 function paletteItems(query: string): { group: string; items: Command[] }[] {
   const q = query.trim().toLowerCase()
-  // Long texts (descriptions) only count on a plain match; scattered letters would find anything.
-  const inside = (text: string | null | undefined) => (q && text?.toLowerCase().includes(q) ? 10 : 0)
+  const words = q.split(/\s+/).filter(Boolean)
   const ranked = <T,>(items: T[], score: (item: T) => number) =>
     items.map((item) => ({ item, score: score(item) })).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).map((r) => r.item)
 
@@ -2292,14 +2305,14 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
       hint: UI.theme === t.id ? 'current' : undefined, run: () => applyTheme(t.id),
     })),
   ]
-  const shownCommands = q ? ranked(commands, (c) => fuzzy(q, c.label)) : commands
+  const shownCommands = q ? ranked(commands, (c) => score(words, [c.label])) : commands
 
-  const pins = (q ? ranked(S.posts, (p) => Math.max(fuzzy(q, p.title), fuzzy(q, p.author_name), fuzzy(q, flairs[p.flair]?.label), inside(p.description))) : S.posts)
+  const pins = (q ? ranked(S.posts, (p) => score(words, [p.title, p.author_name, flairs[p.flair]?.label], [p.description])) : S.posts)
     .slice(0, q ? 8 : 5)
     .map((p) => ({ key: p.id, icon: <Blip flair={p.flair} size={22} />, label: p.title, hint: p.resolved_at ? 'resolved' : ago(p.created_at), run: () => openPin(p) }))
 
   const people = q
-    ? ranked([...S.profiles.values()], (p) => Math.max(fuzzy(q, p.display_name), inside(p.neighbourhood)))
+    ? ranked([...S.profiles.values()], (p) => score(words, [p.display_name], [p.neighbourhood]))
         .slice(0, 6)
         .map((p) => ({ key: p.id, icon: <Avatar id={p.id} size={22} />, label: p.display_name, hint: p.neighbourhood ?? undefined, run: () => go(`user/${p.id}`) }))
     : []
@@ -2459,7 +2472,7 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
   if (!posts.length || (UI.route.kind === 'pin' && posts.some((p) => p.id === UI.route.id))) return null
   const post = posts[0]
   const replies = stats().replies.get(post.id) ?? 0
-  const photo = S.media.find((m) => m.post_id === post.id && m.media_type === 'image')
+  const photo = stats().photo.get(post.id)
 
   return (
     <div className="hover-card" ref={cardRef}>
@@ -2634,7 +2647,8 @@ export default function App() {
         const at = rows.findIndex((r) => r.post.id === UI.route.id)
         const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (k === 'j' ? 1 : -1)))]
         if (next) openPin(next.post)
-      } else if (k.startsWith('arrow') && map) {
+      } else if (k.startsWith('arrow') && map && (document.activeElement === document.body || document.activeElement === map.canvas)) {
+        // Only when nothing else has the focus: arrows still scroll a panel you're in.
         const step = e.shiftKey ? 300 : 100
         glideBy(map, k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0)
       } else if ((k === '=' || k === '+') && map) zoomBy(map, 1)

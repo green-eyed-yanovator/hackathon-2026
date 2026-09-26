@@ -134,6 +134,7 @@ type Stats = {
   active: Map<string, number> // last reply, or when it was posted
   unread: Set<string> // pins with unread notifications
   joined: Set<string> // pins I posted, saved, replied to or said I'm in
+  photo: Map<string, Media> // each pin's first photo
 }
 
 let statsVersion = -1
@@ -141,7 +142,8 @@ let statsCache: Stats
 
 export function stats() {
   if (statsVersion === version) return statsCache
-  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set() }
+  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set(), photo: new Map() }
+  for (const m of S.media) if (m.media_type === 'image' && !st.photo.has(m.post_id)) st.photo.set(m.post_id, m)
   for (const p of S.posts) {
     st.active.set(p.id, time(p.created_at))
     if (p.author_id && p.author_id === S.userId) st.joined.add(p.id)
@@ -328,7 +330,9 @@ async function loadPrivate(userId: string) {
   if (S.sharing) watchHere().then(() => pushLocation(true))
   else if (remembered.expired) {
     rememberSharing(false)
-    withdrawLocation()
+    // Only if the row is still the one this device left: another device may be sharing now.
+    const row = S.locations.get(userId)
+    if (row && remembered.until && time(row.updated_at) <= remembered.until + 60000) withdrawLocation()
   }
 }
 
@@ -429,13 +433,8 @@ export function start() {
     if (S.userId && S.sharing) withdrawNow()
   })
 
-  // A share for a while ends by itself.
-  setInterval(() => {
-    if (S.sharing && S.sharingUntil && Date.now() > S.sharingUntil) {
-      setSharing(false)
-      onIncoming('Stopped sharing your location', 'Your hour is up', 'friends')
-    }
-  }, 15000)
+  // A share for a while ends by itself, even if nothing moves.
+  setInterval(endSharingIfTimeIsUp, 15000)
 
   // Fires once with the stored session, then on every sign-in and sign-out.
   supabase.auth.onAuthStateChange((_event, session) => {
@@ -879,7 +878,7 @@ function remembersSharing() {
     if (value === 'on') return { on: true, until: null, expired: false }
     const until = Number(value)
     if (until > Date.now()) return { on: true, until, expired: false }
-    return { on: false, until: null, expired: until > 0 }
+    return { on: false, until: until > 0 ? until : null, expired: until > 0 }
   } catch {
     return { on: false, until: null, expired: false }
   }
@@ -906,6 +905,7 @@ function queueLocationWrite(write: () => Promise<unknown>) {
 function pushLocation(force: boolean) {
   const here = S.here
   if (!here || !S.userId || !S.sharing) return
+  if (endSharingIfTimeIsUp()) return
   const now = Date.now()
   const moved = distance(lastSent.latitude, lastSent.longitude, here.latitude, here.longitude)
   if (!force && now - lastSent.at < 20000 && moved < 40) return
@@ -951,6 +951,14 @@ function withdrawNow() {
 }
 
 // Share until switched off, or for a while (in ms) after which it stops by itself.
+// A share for a while ends when its time is up; checked on the timer and before every send.
+function endSharingIfTimeIsUp() {
+  if (!S.sharing || !S.sharingUntil || Date.now() < S.sharingUntil) return false
+  setSharing(false)
+  onIncoming('Stopped sharing your location', 'Your hour is up', 'friends')
+  return true
+}
+
 export async function setSharing(on: boolean, forMs: number | null = null) {
   if (!S.userId) return false
   if (on) {
