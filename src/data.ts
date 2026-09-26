@@ -308,6 +308,7 @@ async function loadPublic() {
   S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, p]))
   S.ready = true
   changed()
+  remindSoon()
 }
 
 function subscribePublic() {
@@ -417,6 +418,7 @@ async function loadPrivate(userId: string, attempt = 0) {
   S.sharing = remembered.on
   S.sharingUntil = remembered.until
   changed()
+  remindSoon()
   // Sharing from last time on this device picks up again. A row without it may
   // be another device of yours sharing right now, so it's left alone, unless
   // it's this device's own hour that ran out while the app was closed.
@@ -605,6 +607,7 @@ export function start() {
 
   // A share for a while ends by itself, even if nothing moves.
   setInterval(endSharingIfTimeIsUp, 15000)
+  setInterval(remindSoon, 30000)
 
   // Fires once with the stored session, then on every sign-in and sign-out.
   supabase.auth.onAuthStateChange((_event, session) => {
@@ -1124,6 +1127,31 @@ export async function enableCompass() {
     changed()
   }
   window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onTurn as EventListener)
+}
+
+// Something you're in on starts within the hour: a word about it, once, on this device.
+let reminded: Set<string> | null = null
+
+function remindSoon() {
+  if (!S.userId || !S.ready) return
+  try {
+    reminded ??= new Set(JSON.parse(localStorage.getItem('aroundhere.reminded') ?? '[]') as string[])
+  } catch {
+    reminded ??= new Set()
+  }
+  for (const i of S.interests) {
+    if (i.user_id !== S.userId || reminded.has(i.post_id)) continue
+    const post = S.posts.find((p) => p.id === i.post_id)
+    const left = post?.starts_at && !post.resolved_at ? time(post.starts_at) - Date.now() : -1
+    if (!post || left <= 0 || left > 3600000) continue
+    reminded.add(post.id)
+    try {
+      localStorage.setItem('aroundhere.reminded', JSON.stringify([...reminded].slice(-50)))
+    } catch {
+      // Private browsing: it may say it twice. No harm.
+    }
+    onIncoming('Starting soon', `${post.title}, in ${Math.max(1, Math.round(left / 60000))} min`, `pin/${post.id}`)
+  }
 }
 
 // Sharing is a choice remembered on this device. The row friends read is only
