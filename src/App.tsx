@@ -3559,7 +3559,7 @@ export default function App() {
       )}
       {UI.toast &&
         (UI.toastTo ? (
-          <button className="toast" role="status" onClick={() => { go(UI.toastTo); ui({ toast: '', toastTo: '' }) }}>
+          <button className="toast" aria-live="polite" onClick={() => { go(UI.toastTo); ui({ toast: '', toastTo: '' }) }}>
             {UI.toast}
           </button>
         ) : (
