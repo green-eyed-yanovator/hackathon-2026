@@ -2445,10 +2445,17 @@ function drawLabels(m: MapState, v: View, placed: Box[], dt: number) {
       if (seen) seen.push({ x: sx, y: sy })
       else named.set(label.text, [{ x: sx, y: sy }])
     } else {
+      // Water names come both from the water's area and from its line; one is enough nearby.
+      const seen = label.kind === 'water' ? named.get(label.text) : undefined
+      if (seen?.some((p) => Math.hypot(p.x - sx, p.y - sy) < 480)) continue
       box = { x0: sx - s.width / 2, y0: sy - s.height / 2, x1: sx + s.width / 2, y1: sy + s.height / 2 }
       if (hits(placed, box)) continue
       fadeIn(label)
       c.drawImage(s.canvas, box.x0, box.y0, s.width, s.height)
+      if (label.kind === 'water') {
+        if (seen) seen.push({ x: sx, y: sy })
+        else named.set(label.text, [{ x: sx, y: sy }])
+      }
     }
 
     placed.push(box)
