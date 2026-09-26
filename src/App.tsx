@@ -13,7 +13,7 @@ import {
   type Flair, type Post, type Revision, type Notification,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, project, center, requestFrame, nearestStreet, findPlaces,
+  createMap, destroyMap, setMarkers, setRadar, setTheme, flyTo, zoomBy, glideBy, project, center, requestFrame, nearestStreet, findPlaces,
   lngToX, latToY, icons, mapThemes, LEGEND, poiColor, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
@@ -438,6 +438,18 @@ function openArea() {
   const left = UI.feed && !(UI.route.kind && w < 1180) ? 392 : 0
   const right = UI.route.kind ? w - 436 : w
   return { left, top: 72, right, bottom: h }
+}
+
+// The game styles get a radar in the bottom-left corner of what's visible of the map.
+function radarPlace() {
+  if (UI.theme === 'day' || UI.theme === 'night' || !map) return null
+  const h = map.height
+  if (narrow()) {
+    if (UI.route.kind || UI.feed) return null
+    return { x: 70, y: h - 60 - 26 - 60, r: 58 }
+  }
+  const left = UI.feed && !(UI.route.kind && window.innerWidth < 1180) ? 392 : 0
+  return { x: left + 12 + 80, y: h - 26 - 80, r: 76 }
 }
 
 function reveal(lat: number, lng: number, zoom?: number, force = false) {
@@ -2731,6 +2743,7 @@ export default function App() {
     if (!map) return
     map.draftMode = UI.route.kind === 'new'
     setMarkers(map, buildMarkers(posts))
+    setRadar(map, radarPlace())
     map.canvas.style.cursor = map.draftMode ? 'crosshair' : 'grab'
     keepFollowing()
     revealLinked()

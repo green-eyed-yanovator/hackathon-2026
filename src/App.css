@@ -278,6 +278,7 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
+  overflow: clip; /* unlike hidden, even scrollIntoView can't shift the whole app */
   overscroll-behavior: none;
 }
 
@@ -364,6 +365,7 @@ kbd {
   position: fixed;
   inset: 0;
   overflow: hidden;
+  overflow: clip; /* never a scroll container, whatever overflows inside */
 }
 
 .map {
@@ -2471,6 +2473,7 @@ textarea::placeholder {
   position: absolute;
   inset: 0;
   z-index: 1;
+  overflow: hidden; /* the radar sweep is far bigger than the screen */
   pointer-events: none;
 }
 
