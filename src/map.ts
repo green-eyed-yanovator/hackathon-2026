@@ -2623,7 +2623,8 @@ function drawMarkers(m: MapState, v: View, time: number) {
     const hover = m.hovered?.id === marker.id || m.highlight === marker.id
     if (marker.kind === 'pin') {
       const born = m.born.get(marker.id) ?? 0
-      const age = born ? time - born : Infinity
+      // The frame's timestamp can be a hair older than the moment the pin was born.
+      const age = born ? Math.max(0, time - born) : Infinity
       drawPin(c, t, marker, p.x, p.y, hover, time, age)
       if (age < 600) dropping = true
       if (marker.flags & (MARK_NEW | MARK_LIVE) || t.blip === 'ring') animated = true
