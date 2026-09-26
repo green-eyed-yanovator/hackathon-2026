@@ -200,6 +200,11 @@ async function accept(id: string) {
   else failed("Couldn't accept")
 }
 
+async function shareForAnHour() {
+  if (await setSharing(true, 3600000)) toast('Friends can see you for the next hour')
+  else failed("Couldn't share your location")
+}
+
 async function toggleSharing() {
   if (await setSharing(!S.sharing)) toast(S.sharing ? 'Friends can see you now' : 'Stopped sharing')
   else failed("Couldn't change sharing")
@@ -261,6 +266,8 @@ const toLocalInput = (iso: string) => {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
 }
 const fromLocalInput = (value: string) => (value ? new Date(value).toISOString() : null)
+
+const minutesLeft = (until: number) => Math.max(1, Math.ceil((until - Date.now()) / 60000))
 
 const awayText = (m: number) => (m < 50 ? 'right here' : `${meters(m)} away`)
 
@@ -1621,10 +1628,17 @@ function FriendsView() {
     <Panel title="Friends" icon={<Icon name="users" />} className="tall">
       <div className={S.sharing ? 'share-card on' : 'share-card'}>
         <div>
-          <strong>{S.sharing ? 'Sharing your location' : 'Location sharing is off'}</strong>
+          <strong>
+            {!S.sharing ? 'Location sharing is off' : S.sharingUntil ? `Sharing for ${minutesLeft(S.sharingUntil)} more min` : 'Sharing your location'}
+          </strong>
           <p className="muted small">
             {S.sharing ? 'Friends see where you are while the app is open. Only friends, never anyone else.' : 'Turn it on to show up on your friends’ maps, and see theirs.'}
           </p>
+          {!S.sharing && (
+            <button className="link small" onClick={() => shareForAnHour()}>
+              Or just for the next hour
+            </button>
+          )}
         </div>
         <button
           className={S.sharing ? 'switch on' : 'switch'}

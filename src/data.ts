@@ -105,6 +105,7 @@ export const S = {
 
   here: null as Here | null,
   sharing: false,
+  sharingUntil: null as number | null, // sharing for a while stops itself at this time
 }
 
 let version = 0
@@ -317,11 +318,18 @@ async function loadPrivate(userId: string) {
   S.mutedKinds = settings.data?.muted_kinds ?? []
   S.friendships = friendships.data ?? []
   S.locations = new Map((locations.data ?? []).map((l: Location) => [l.user_id, l]))
-  S.sharing = remembersSharing()
+  const remembered = remembersSharing()
+  S.sharing = remembered.on
+  S.sharingUntil = remembered.until
   changed()
   // Sharing from last time on this device picks up again. A row without it may
-  // be another device of yours sharing right now, so it's left alone.
+  // be another device of yours sharing right now, so it's left alone, unless
+  // it's this device's own hour that ran out while the app was closed.
   if (S.sharing) watchHere().then(() => pushLocation(true))
+  else if (remembered.expired) {
+    rememberSharing(false)
+    withdrawLocation()
+  }
 }
 
 function subscribePrivate(userId: string) {
@@ -420,6 +428,14 @@ export function start() {
   window.addEventListener('pagehide', () => {
     if (S.userId && S.sharing) withdrawNow()
   })
+
+  // A share for a while ends by itself.
+  setInterval(() => {
+    if (S.sharing && S.sharingUntil && Date.now() > S.sharingUntil) {
+      setSharing(false)
+      onIncoming('Stopped sharing your location', 'Your hour is up', 'friends')
+    }
+  }, 15000)
 
   // Fires once with the stored session, then on every sign-in and sign-out.
   supabase.auth.onAuthStateChange((_event, session) => {
@@ -856,17 +872,22 @@ export async function enableCompass() {
 // only while the app is open and in view, so nobody sees a "here" from hours ago.
 const sharingKey = () => `aroundhere.sharing.${S.userId}`
 
+// Stored as 'on', or as the time a "for an hour" share ends.
 function remembersSharing() {
   try {
-    return localStorage.getItem(sharingKey()) === 'on'
+    const value = localStorage.getItem(sharingKey())
+    if (value === 'on') return { on: true, until: null, expired: false }
+    const until = Number(value)
+    if (until > Date.now()) return { on: true, until, expired: false }
+    return { on: false, until: null, expired: until > 0 }
   } catch {
-    return false
+    return { on: false, until: null, expired: false }
   }
 }
 
-function rememberSharing(on: boolean) {
+function rememberSharing(on: boolean, until: number | null = null) {
   try {
-    if (on) localStorage.setItem(sharingKey(), 'on')
+    if (on) localStorage.setItem(sharingKey(), until ? String(until) : 'on')
     else localStorage.removeItem(sharingKey())
   } catch {
     // Private mode: sharing just won't resume next time.
@@ -929,18 +950,21 @@ function withdrawNow() {
   }).catch(() => {})
 }
 
-export async function setSharing(on: boolean) {
+// Share until switched off, or for a while (in ms) after which it stops by itself.
+export async function setSharing(on: boolean, forMs: number | null = null) {
   if (!S.userId) return false
   if (on) {
     const here = await watchHere()
     if (!here) return fail("Can't find you: location is blocked or unavailable", null)
     S.sharing = true
-    rememberSharing(true)
+    S.sharingUntil = forMs ? Date.now() + forMs : null
+    rememberSharing(true, S.sharingUntil)
     changed()
     await pushLocation(true)
     return true
   }
   S.sharing = false
+  S.sharingUntil = null
   rememberSharing(false)
   changed()
   await withdrawLocation()
