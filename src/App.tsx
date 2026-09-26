@@ -8,7 +8,7 @@ import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, isOnline, locationOf, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleInterest, toggleSave, saveProfile,
-  uploadAvatar, changeEmail, deleteAccount, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
+  uploadAvatar, changeEmail, deleteAccount, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
   type Flair, type Post, type Revision, type Notification,
 } from './data'
@@ -321,6 +321,7 @@ function visiblePosts() {
   const recent = (p: Post) => (active.get(p.id) ?? 0) > Date.now() - 30 * 86400000
 
   return S.posts.filter((p) => {
+    if (p.author_id && S.blocked.has(p.author_id)) return false
     if (UI.flair && p.flair !== UI.flair) return false
     switch (UI.tab) {
       case 'around':
@@ -948,7 +949,7 @@ function PostView({ post }: { post: Post }) {
 
   const me = S.userId
   const mine = !!me && post.author_id === me
-  const replies = S.replies.filter((r) => r.post_id === post.id)
+  const replies = S.replies.filter((r) => r.post_id === post.id && !(r.author_id && S.blocked.has(r.author_id)))
   const media = S.media.filter((m) => m.post_id === post.id)
   const interested = S.interests.filter((i) => i.post_id === post.id).map((i) => i.user_id)
   const iAmIn = !!me && interested.includes(me)
@@ -1435,6 +1436,23 @@ function ProfileView({ id }: { id: string }) {
           </>
         )}
       </div>
+
+      {!own && S.userId && (
+        <div className="actions">
+          {S.blocked.has(id) ? (
+            <button className="link small" onClick={() => unblock(id).then((ok) => (ok ? toast(`Unblocked ${nameOf(id)}`) : failed("Couldn't unblock")))}>
+              Unblock {firstName(id)}
+            </button>
+          ) : (
+            <button
+              className="link small quiet-danger"
+              onClick={() => confirm(`Block ${nameOf(id)}? They won't be able to message you or add you, and you won't see their pins.`) && block(id).then((ok) => (ok ? toast(`Blocked ${nameOf(id)}`) : failed("Couldn't block")))}
+            >
+              Block {firstName(id)}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="section">{own ? 'Your pins' : 'Pins'}</div>
       {posts.length === 0 ? (

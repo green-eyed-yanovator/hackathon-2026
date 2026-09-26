@@ -100,6 +100,7 @@ export const S = {
   messages: [] as Message[], // oldest first
   mutedKinds: [] as string[],
   friendships: [] as Friendship[],
+  blocked: new Set<string>(), // people I've blocked: their pins, replies and messages stay out of sight
   locations: new Map<string, Location>(),
   online: new Set<string>(),
 
@@ -303,13 +304,14 @@ export function setIncomingHandler(handler: typeof onIncoming) {
 }
 
 async function loadPrivate(userId: string) {
-  const [saved, notifications, messages, settings, friendships, locations] = await Promise.all([
+  const [saved, notifications, messages, settings, friendships, locations, blocks] = await Promise.all([
     supabase.from('saved_posts').select('post_id, created_at'),
     supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(60),
     supabase.from('messages').select('*').order('created_at', { ascending: false }).limit(1000),
     supabase.from('notification_settings').select('muted_kinds').maybeSingle(),
     supabase.from('friendships').select('*'),
     supabase.from('locations').select('*'),
+    supabase.from('blocks').select('blocked'),
   ])
   if (S.userId !== userId) return
 
@@ -319,6 +321,7 @@ async function loadPrivate(userId: string) {
   S.messages = (messages.data ?? []).reverse()
   S.mutedKinds = settings.data?.muted_kinds ?? []
   S.friendships = friendships.data ?? []
+  S.blocked = new Set((blocks.data ?? []).map((b: { blocked: string }) => b.blocked))
   S.locations = new Map((locations.data ?? []).map((l: Location) => [l.user_id, l]))
   const remembered = remembersSharing()
   S.sharing = remembered.on
@@ -355,7 +358,7 @@ function subscribePrivate(userId: string) {
       const message = row as Message
       upsert(S.messages, message, byId)
       changed()
-      if (message.sender_id !== userId) onIncoming(nameOf(message.sender_id), message.body, `chat/${message.sender_id}`)
+      if (message.sender_id !== userId && !S.blocked.has(message.sender_id)) onIncoming(nameOf(message.sender_id), message.body, `chat/${message.sender_id}`)
     })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, ({ new: row }) => {
       upsert(S.messages, row as Message, byId)
@@ -410,6 +413,7 @@ function resetPrivate() {
   S.messages = []
   S.mutedKinds = []
   S.friendships = []
+  S.blocked = new Set()
   S.locations = new Map()
   S.online = new Set()
   S.sharing = false
@@ -715,6 +719,8 @@ export async function removeFriend(id: string) {
 
 export async function sendMessage(to: string, body: string) {
   const { data, error } = await supabase.from('messages').insert({ recipient_id: to, body }).select().single()
+  // A refusal from row security means they aren't taking messages from you.
+  if (error?.code === '42501') return fail(`${nameOf(to)} isn't taking messages right now`, { message: `${nameOf(to)} isn't taking messages right now` })
   if (error) return fail("Couldn't send", error)
   upsert(S.messages, data as Message, byId)
   changed()
@@ -793,11 +799,30 @@ export function typingChannel(otherId: string, onTyping: () => void) {
   }
 }
 
+// Blocking also ends any friendship, so they drop off your map too.
+export async function block(id: string) {
+  const { error } = await supabase.from('blocks').insert({ blocked: id })
+  if (error) return fail("Couldn't block", error)
+  S.blocked.add(id)
+  if (friendshipWith(id)) await removeFriend(id)
+  changed()
+  return true
+}
+
+export async function unblock(id: string) {
+  const { error } = await supabase.from('blocks').delete().eq('blocked', id)
+  if (error) return fail("Couldn't unblock", error)
+  S.blocked.delete(id)
+  changed()
+  return true
+}
+
 // One entry per person you've messaged, latest first.
 export function conversations() {
   const byOther = new Map<string, { other: string; last: Message; unread: number }>()
   for (const m of S.messages) {
     const other = m.sender_id === S.userId ? m.recipient_id : m.sender_id
+    if (S.blocked.has(other)) continue
     const unread = m.recipient_id === S.userId && !m.read_at ? 1 : 0
     byOther.set(other, { other, last: m, unread: (byOther.get(other)?.unread ?? 0) + unread })
   }
