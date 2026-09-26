@@ -2164,6 +2164,23 @@ textarea::placeholder {
   mix-blend-mode: multiply;
 }
 
+[data-theme='frontier'] .fx::after {
+  /* A compass rose, inked in the corner like on a survey sheet. */
+  content: '';
+  position: absolute;
+  top: 78px;
+  right: 18px;
+  width: 104px;
+  height: 104px;
+  opacity: 0.8;
+  background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='-56 -58 112 112'><g fill='none' stroke='%233f2e1e'><circle r='44' stroke-width='1.3'/><circle r='40' stroke-width='.5'/><circle r='20' stroke-width='.5' stroke-dasharray='1.5 2'/><g stroke-width='.6'><line y1='-40' y2='-34' transform='rotate(0)'/><line y1='-40' y2='-37' transform='rotate(10)'/><line y1='-40' y2='-37' transform='rotate(20)'/><line y1='-40' y2='-34' transform='rotate(30)'/><line y1='-40' y2='-37' transform='rotate(40)'/><line y1='-40' y2='-37' transform='rotate(50)'/><line y1='-40' y2='-34' transform='rotate(60)'/><line y1='-40' y2='-37' transform='rotate(70)'/><line y1='-40' y2='-37' transform='rotate(80)'/><line y1='-40' y2='-34' transform='rotate(90)'/><line y1='-40' y2='-37' transform='rotate(100)'/><line y1='-40' y2='-37' transform='rotate(110)'/><line y1='-40' y2='-34' transform='rotate(120)'/><line y1='-40' y2='-37' transform='rotate(130)'/><line y1='-40' y2='-37' transform='rotate(140)'/><line y1='-40' y2='-34' transform='rotate(150)'/><line y1='-40' y2='-37' transform='rotate(160)'/><line y1='-40' y2='-37' transform='rotate(170)'/><line y1='-40' y2='-34' transform='rotate(180)'/><line y1='-40' y2='-37' transform='rotate(190)'/><line y1='-40' y2='-37' transform='rotate(200)'/><line y1='-40' y2='-34' transform='rotate(210)'/><line y1='-40' y2='-37' transform='rotate(220)'/><line y1='-40' y2='-37' transform='rotate(230)'/><line y1='-40' y2='-34' transform='rotate(240)'/><line y1='-40' y2='-37' transform='rotate(250)'/><line y1='-40' y2='-37' transform='rotate(260)'/><line y1='-40' y2='-34' transform='rotate(270)'/><line y1='-40' y2='-37' transform='rotate(280)'/><line y1='-40' y2='-37' transform='rotate(290)'/><line y1='-40' y2='-34' transform='rotate(300)'/><line y1='-40' y2='-37' transform='rotate(310)'/><line y1='-40' y2='-37' transform='rotate(320)'/><line y1='-40' y2='-34' transform='rotate(330)'/><line y1='-40' y2='-37' transform='rotate(340)'/><line y1='-40' y2='-37' transform='rotate(350)'/></g></g><g transform='rotate(45)'><polygon points='0,-27 5,-5 0,0' fill='%233f2e1e'/><polygon points='0,-27 -5,-5 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.6'/></g><g transform='rotate(135)'><polygon points='0,-27 5,-5 0,0' fill='%233f2e1e'/><polygon points='0,-27 -5,-5 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.6'/></g><g transform='rotate(225)'><polygon points='0,-27 5,-5 0,0' fill='%233f2e1e'/><polygon points='0,-27 -5,-5 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.6'/></g><g transform='rotate(315)'><polygon points='0,-27 5,-5 0,0' fill='%233f2e1e'/><polygon points='0,-27 -5,-5 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.6'/></g><g transform='rotate(0)'><polygon points='0,-42 7,-7 0,0' fill='%233f2e1e'/><polygon points='0,-42 -7,-7 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.7'/></g><g transform='rotate(90)'><polygon points='0,-42 7,-7 0,0' fill='%233f2e1e'/><polygon points='0,-42 -7,-7 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.7'/></g><g transform='rotate(180)'><polygon points='0,-42 7,-7 0,0' fill='%233f2e1e'/><polygon points='0,-42 -7,-7 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.7'/></g><g transform='rotate(270)'><polygon points='0,-42 7,-7 0,0' fill='%233f2e1e'/><polygon points='0,-42 -7,-7 0,0' fill='%23e9d8b0' stroke='%233f2e1e' stroke-width='.7'/></g><circle r='2.4' fill='%23e9d8b0' stroke='%233f2e1e'/><text y='-47' text-anchor='middle' font-family='Georgia,serif' font-style='italic' font-weight='700' font-size='12' fill='%238f2b1c'>N</text></svg>") center / contain no-repeat;
+  transition: right 0.2s;
+}
+
+[data-theme='frontier'] .has-detail .fx::after {
+  right: 452px;
+}
+
 [data-theme='radar'] .fx {
   background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px), radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.75));
 }
@@ -2375,6 +2392,14 @@ textarea::placeholder {
 
   .sheet-up .credit {
     display: none;
+  }
+
+  [data-theme='frontier'] .fx::after,
+  [data-theme='frontier'] .has-detail .fx::after {
+    top: calc(64px + env(safe-area-inset-top));
+    right: 10px;
+    width: 64px;
+    height: 64px;
   }
 
   .has-detail .toast,

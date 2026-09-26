@@ -227,7 +227,7 @@ export const mapThemes: Record<string, MapTheme> = {
     water: '#a9b7a4', waterShore: '#6f6a52', waterHatch: '#7e8b78',
     wood: '#c7bd8e', woodMarks: '#6b6340', grass: '#d4c696', park: '#cfc38f', sand: '#e2cf9f', farm: '#d6c595',
     residential: null, commercial: '#d3bf96', industrial: '#cfbd97', institution: '#d5c197', pitch: '#cbbf8d',
-    building: '#b9a47c', buildingLine: '#5a4630', buildingShadow: null,
+    building: '#d2bf95', buildingLine: 'rgba(90, 66, 40, 0.45)', buildingShadow: null,
     casing: null,
     road: { motorway: '#4a3624', trunk: '#4a3624', primary: '#523d29', secondary: '#5a4430', tertiary: '#634c36', minor: '#6f573f', service: '#7d6549', path: '#7d6549', rail: '#3b2a1b' },
     roadWidth: 0.55, wobble: 1.4, boundary: '#8a4b32', glow: null,
