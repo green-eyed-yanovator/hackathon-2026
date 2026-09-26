@@ -2453,6 +2453,10 @@ function Palette() {
   )
 }
 
+//
+// The legend.
+//
+
 // What everything on the map means, in the current style.
 function Legend() {
   return (
