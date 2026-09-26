@@ -103,7 +103,13 @@ function ui(patch: Partial<typeof UI>) {
   changed()
 }
 
-document.documentElement.dataset.theme = UI.theme
+// The phone's status bar takes the map's colour.
+function paintChrome(id: string) {
+  document.documentElement.dataset.theme = id
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mapThemes[id].land)
+}
+
+paintChrome(UI.theme)
 
 window.addEventListener('popstate', () => {
   UI.route = readRoute()
@@ -158,7 +164,7 @@ function failed(fallback: string) {
 
 function applyTheme(id: string) {
   UI.theme = id
-  document.documentElement.dataset.theme = id
+  paintChrome(id)
   store('aroundhere.theme', id)
   if (map) setTheme(map, id)
   changed()
