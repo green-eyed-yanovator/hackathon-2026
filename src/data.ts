@@ -733,8 +733,8 @@ export async function report(postId: string, reason: 'spam' | 'unkind' | 'unsafe
   return true
 }
 
-// One write at a time per toggle: a second tap while the first is on its way is
-// let go, so an insert and a delete never race each other to the database.
+// One write at a time per toggle (and per friendship): a second tap while the first
+// is on its way is let go, so an insert and a delete never race to the database.
 const inFlight = new Set<string>()
 
 async function once(key: string, write: () => Promise<boolean>) {
@@ -878,7 +878,12 @@ export async function deleteAccount() {
   return true
 }
 
-export async function requestFriend(id: string) {
+// One change at a time per person, like the toggles below.
+export const requestFriend = (id: string) => once(`friend/${id}`, () => sendRequest(id))
+export const acceptFriend = (id: string) => once(`friend/${id}`, () => acceptRequest(id))
+export const removeFriend = (id: string) => once(`friend/${id}`, () => endFriendship(id))
+
+async function sendRequest(id: string) {
   const { data, error } = await supabase.from('friendships').insert({ addressee: id }).select().single()
   if (error) return fail("Couldn't send the request", error)
   upsert(S.friendships, data as Friendship, byId)
@@ -886,7 +891,7 @@ export async function requestFriend(id: string) {
   return true
 }
 
-export async function acceptFriend(id: string) {
+async function acceptRequest(id: string) {
   const { data, error } = await supabase.from('friendships').update({ accepted_at: new Date().toISOString() }).eq('requester', id).eq('addressee', S.userId!).select().single()
   if (error) return fail("Couldn't accept", error)
   upsert(S.friendships, data as Friendship, byId)
@@ -901,7 +906,7 @@ function readFriendRequestsFrom(id: string) {
   markNotificationsRead(S.notifications.filter((n) => n.kind === 'friend_request' && n.actor_id === id).map((n) => n.id))
 }
 
-export async function removeFriend(id: string) {
+async function endFriendship(id: string) {
   const f = friendshipWith(id)
   if (!f) return true
   const { error } = await supabase.from('friendships').delete().eq('id', f.id)
