@@ -28,11 +28,12 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseKey)
 
-// A profile photo is only ever one of ours, from the avatars bucket. The column can
-// be written directly, and a photo from someone's own server would tell them who
-// looked at it, and when.
-const avatars = `${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/public/avatars/`
-const ownPhotoOnly = (p: Profile): Profile => (p.avatar_url && !p.avatar_url.startsWith(avatars) ? { ...p, avatar_url: null } : p)
+// Photos are only ever ours, from our own storage. The columns can be written
+// directly, and a picture on someone's own server would tell them who looked at
+// it, and when: a profile photo like that isn't shown, a pin's is left out.
+const storage = `${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/public/`
+const ownPhotoOnly = (p: Profile): Profile => (p.avatar_url && !p.avatar_url.startsWith(storage + 'avatars/') ? { ...p, avatar_url: null } : p)
+const ownMedia = (m: Media) => m.url.startsWith(storage + 'post-media/')
 
 export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
 
@@ -323,7 +324,7 @@ async function loadPublic() {
   S.outdated = false
   S.posts = posts.data ?? []
   S.replies = replies.data ?? []
-  S.media = media.data ?? []
+  S.media = (media.data ?? []).filter(ownMedia)
   S.interests = interests.data ?? []
   S.likes = likes.data ?? []
   S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, ownPhotoOnly(p)]))
@@ -364,6 +365,7 @@ function subscribePublic() {
       changed()
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_media' }, ({ new: row }) => {
+      if (!ownMedia(row as Media)) return
       upsert(S.media, row as Media, byId)
       changed()
     })
