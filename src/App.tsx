@@ -591,7 +591,8 @@ function radarPlace() {
   const h = map.height
   if (narrow()) {
     if (UI.route.kind || UI.feed) return null
-    return { x: 12 + (shown() === 'metro' ? 58 * RADAR_WIDE : 58), y: h - 60 - 26 - 60, r: 58 }
+    const r = Math.min(58, Math.round(h * 0.085)) // smaller on short phones
+    return { x: 12 + (shown() === 'metro' ? r * RADAR_WIDE : r), y: h - 60 - 26 - r - 2, r }
   }
   const left = feedShowing() ? 392 : 0
   const half = shown() === 'metro' ? 76 * RADAR_WIDE : 76 // Metro's radar is a wide rectangle
