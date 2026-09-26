@@ -39,7 +39,8 @@ What you can do:
 
 ## Running it
 
-You need Node and the Supabase CLI (Docker underneath).
+You need Node (20.19 or 22.12 and up, for Vite) and the Supabase CLI (Docker
+underneath).
 
 ```sh
 npm install
