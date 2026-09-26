@@ -1173,6 +1173,14 @@ kbd {
   }
 }
 
+.report {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
 .quiet-danger {
   color: var(--muted);
   font-weight: 500;

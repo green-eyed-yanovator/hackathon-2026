@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, isOnline, locationOf, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
-  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleInterest, toggleSave, saveProfile,
+  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, report, toggleInterest, toggleSave, saveProfile,
   uploadAvatar, changeEmail, deleteAccount, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
   type Flair, type Post, type Revision, type Notification,
@@ -942,6 +942,7 @@ function PostView({ post }: { post: Post }) {
   const [starts, setStarts] = useState(post.starts_at ? toLocalInput(post.starts_at) : '')
   const [flair, setFlair] = useState<Flair>(post.flair)
   const [doomedReply, setDoomedReply] = useState<string | null>(null) // a reply of mine waiting for "really?"
+  const [reporting, setReporting] = useState(false)
   const [history, setHistory] = useState<Revision[] | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
@@ -1159,6 +1160,43 @@ function PostView({ post }: { post: Post }) {
           <button className={confirmDelete ? 'btn danger' : 'btn'} onClick={remove}>
             <Icon name="trash" size={16} /> {confirmDelete ? 'Really delete?' : 'Delete'}
           </button>
+        </div>
+      )}
+
+      {me && !mine && post.author_id && (
+        <div className="report">
+          {reporting ? (
+            <>
+              <span className="muted small">What's wrong with it?</span>
+              {(
+                [
+                  ['spam', 'Spam or ad'],
+                  ['unkind', 'Unkind or hateful'],
+                  ['unsafe', 'Unsafe or illegal'],
+                  ['other', 'Something else'],
+                ] as const
+              ).map(([reason, label]) => (
+                <button
+                  key={reason}
+                  className="btn small"
+                  onClick={async () => {
+                    setReporting(false)
+                    if (await report(post.id, reason)) toast('Thanks, someone will take a look')
+                    else failed("Couldn't send the report")
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <button className="link small" onClick={() => setReporting(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button className="link small quiet-danger" onClick={() => setReporting(true)}>
+              Report this pin
+            </button>
+          )}
         </div>
       )}
 

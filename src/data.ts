@@ -570,6 +570,13 @@ export async function reply(postId: string, content: string) {
   return true
 }
 
+export async function report(postId: string, reason: 'spam' | 'unkind' | 'unsafe' | 'other') {
+  const { error } = await supabase.from('reports').insert({ post_id: postId, reason })
+  // Reporting the same pin twice is fine: the first report stands.
+  if (error && error.code !== '23505') return fail("Couldn't send the report", error)
+  return true
+}
+
 export async function deleteReply(id: string) {
   const { error } = await supabase.from('replies').delete().eq('id', id)
   if (error) return fail("Couldn't delete the reply", error)
