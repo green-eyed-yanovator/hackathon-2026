@@ -2949,7 +2949,7 @@ button.toast {
 @media (min-width: 761px) {
   [data-theme='coast'] .toast,
   [data-theme='metro'] .toast {
-    top: 76px;
+    top: 140px; /* under the walk bar's line, when there is one */
     bottom: auto;
     left: 16px;
     transform: none;
