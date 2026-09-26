@@ -14,7 +14,7 @@ import {
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, project, center, requestFrame, nearestStreet,
-  lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE,
+  lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
 import './App.css'
@@ -316,6 +316,7 @@ function buildMarkers(posts: Post[]): Marker[] {
     if (list.some((p) => saved.has(p.id))) flags |= MARK_SAVED
     if (list.some((p) => unread.has(p.id))) flags |= MARK_NEW
     if (list.every((p) => p.resolved_at)) flags |= MARK_RESOLVED
+    if (list.some((p) => p.starts_at && !p.resolved_at && Math.abs(time(p.starts_at) - Date.now()) < 3 * 3600000)) flags |= MARK_LIVE
     if ((route.kind === 'pin' && list.some((p) => p.id === route.id)) || (route.kind === 'place' && route.id === key)) flags |= MARK_SELECTED
     markers.push({
       id: key, kind: 'pin', x: lngToX(newest.longitude), y: latToY(newest.latitude), icon: f.icon, color: f.color,

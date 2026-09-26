@@ -636,6 +636,7 @@ export const MARK_RESOLVED = 8
 export const MARK_SELECTED = 16
 export const MARK_STALE = 32 // a person whose last position is old
 export const MARK_ONLINE = 64 // a person with the app open right now
+export const MARK_LIVE = 128 // a pin happening now or within the next few hours
 
 export type Marker = {
   id: string
@@ -1783,6 +1784,19 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
   if (marker.flags & MARK_SAVED) {
     drawIcon(c, 'star', -badgeX, badgeY, 14, '#f5b50a')
   }
+  if (marker.flags & MARK_LIVE) {
+    // A ripple under the pin: something is on right now.
+    const ripple = (time % 1800) / 1800
+    c.save()
+    c.scale(1 / grow, 1 / grow)
+    c.globalAlpha = (1 - ripple) * 0.7
+    c.strokeStyle = t.blip === 'stamp' ? '#8f2b1c' : t.blip === 'ring' ? t.blipInk : '#22c55e'
+    c.lineWidth = 2.5
+    c.beginPath()
+    c.ellipse(0, 0, 8 + ripple * 26, 3 + ripple * 10, 0, 0, Math.PI * 2)
+    c.stroke()
+    c.restore()
+  }
   if (marker.flags & MARK_NEW) {
     const pulse = 0.5 + 0.5 * Math.sin(time / 180)
     c.beginPath()
@@ -2224,7 +2238,7 @@ function frame(m: MapState, time: number) {
     const hover = m.hovered?.id === marker.id || m.highlight === marker.id
     if (marker.kind === 'pin') {
       drawPin(c, t, marker, p.x, p.y, hover, time)
-      if (marker.flags & MARK_NEW || t.blip === 'ring') animated = true
+      if (marker.flags & (MARK_NEW | MARK_LIVE) || t.blip === 'ring') animated = true
     } else if (marker.kind === 'cluster') {
       drawCluster(c, t, marker, p.x, p.y, hover)
     } else if (marker.kind === 'person') {
