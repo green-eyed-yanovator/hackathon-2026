@@ -27,6 +27,7 @@ type AuthMode = 'signin' | 'signup' | 'code' | 'reset' | 'new-password'
 type Tab = 'around' | 'latest' | 'soon' | 'friends' | 'mine' | 'past'
 
 const THEMES = [
+  { id: 'auto', name: 'Sun', note: 'Day while the sun is up here, Night after' },
   { id: 'day', name: 'Day', note: 'Clean and bright' },
   { id: 'night', name: 'Night', note: 'Easy on the eyes' },
   { id: 'coast', name: 'Palm Coast', note: '2004 radar, chunky square blips' },
@@ -61,7 +62,7 @@ const narrow = () => window.matchMedia('(max-width: 760px)').matches
 
 function initialTheme() {
   const saved = stored('aroundhere.theme')
-  if (saved && mapThemes[saved]) return saved
+  if (saved && (mapThemes[saved] || saved === 'auto')) return saved
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day'
 }
 
@@ -118,7 +119,32 @@ function paintChrome(id: string) {
   document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mapThemes[id].land)
 }
 
-paintChrome(UI.theme)
+// How high the sun is over a place, in degrees, from the usual low-precision
+// solar formulas (good to a fraction of a degree, plenty for dusk).
+function sunAltitude(time: number, lat: number, lng: number) {
+  const r = Math.PI / 180
+  const d = time / 86400000 - 10957.5 // days since noon, 1 January 2000
+  const g = (357.529 + 0.98560028 * d) * r // the sun's mean anomaly
+  const q = 280.459 + 0.98564736 * d // its mean longitude, degrees
+  const l = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * r // ecliptic longitude
+  const e = (23.439 - 0.00000036 * d) * r // tilt of the earth
+  const ra = Math.atan2(Math.cos(e) * Math.sin(l), Math.cos(l))
+  const dec = Math.asin(Math.sin(e) * Math.sin(l))
+  const sidereal = ((18.697374558 + 24.06570982441908 * d) % 24) * 15 * r
+  const hourAngle = sidereal + lng * r - ra
+  return Math.asin(Math.sin(lat * r) * Math.sin(dec) + Math.cos(lat * r) * Math.cos(dec) * Math.cos(hourAngle)) / r
+}
+
+// The style actually on screen: the choice, unless it's "Sun", which is Day
+// until the sun is a few degrees under the horizon wherever you are (or are looking).
+function shown() {
+  if (UI.theme !== 'auto') return UI.theme
+  const lat = S.here?.latitude ?? UI.view.lat
+  const lng = S.here?.longitude ?? UI.view.lng
+  return sunAltitude(Date.now(), lat, lng) > -4 ? 'day' : 'night'
+}
+
+paintChrome(shown())
 
 window.addEventListener('popstate', () => {
   UI.route = readRoute()
@@ -154,7 +180,7 @@ function toast(message: string) {
 // Big moments get a full-screen banner in the game styles, a toast elsewhere.
 let bannerTimer = 0
 function celebrate(title: string, sub: string) {
-  if (UI.theme === 'day' || UI.theme === 'night') {
+  if (shown() === 'day' || shown() === 'night') {
     toast(sub)
     return
   }
@@ -173,9 +199,9 @@ function failed(fallback: string) {
 
 function applyTheme(id: string) {
   UI.theme = id
-  paintChrome(id)
+  paintChrome(shown())
   store('aroundhere.theme', id)
-  if (map) setTheme(map, id)
+  if (map) setTheme(map, shown())
   changed()
 }
 
@@ -442,7 +468,7 @@ function openArea() {
 
 // The game styles get a radar in the bottom-left corner of what's visible of the map.
 function radarPlace() {
-  if (UI.theme === 'day' || UI.theme === 'night' || !map) return null
+  if (shown() === 'day' || shown() === 'night' || !map) return null
   const h = map.height
   if (narrow()) {
     if (UI.route.kind || UI.feed) return null
@@ -1870,6 +1896,15 @@ const MUTABLE: [string, string][] = [
 ]
 
 function ThemeSwatch({ id }: { id: string }) {
+  if (id === 'auto') {
+    // Half Day, half Night.
+    return (
+      <span className="swatch sun">
+        <ThemeSwatch id="day" />
+        <ThemeSwatch id="night" />
+      </span>
+    )
+  }
   const t = mapThemes[id]
   return (
     <span className="swatch" style={{ background: t.land }}>
@@ -2668,7 +2703,7 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    const m = createMap(canvasRef.current!, UI.view.lng, UI.view.lat, UI.view.zoom, UI.theme)
+    const m = createMap(canvasRef.current!, UI.view.lng, UI.view.lat, UI.view.zoom, shown())
     map = m
     let saveTimer = 0
     let lastCenter = center(m)
@@ -2742,6 +2777,11 @@ export default function App() {
   useEffect(() => {
     if (!map) return
     map.draftMode = UI.route.kind === 'new'
+    // "Sun" turns to Night at dusk by itself (the clock redraws every minute).
+    if (map.themeName !== shown()) {
+      setTheme(map, shown())
+      paintChrome(shown())
+    }
     setMarkers(map, buildMarkers(posts))
     setRadar(map, radarPlace())
     map.canvas.style.cursor = map.draftMode ? 'crosshair' : 'grab'

@@ -79,6 +79,7 @@ Press `T` to cycle, or pick one in Settings.
 
 | Style      | Look |
 |------------|------|
+| Sun        | Day while the sun is up where you are, Night after (worked out from the sun's position, no service) |
 | Day        | Clean and bright |
 | Night      | Dark, easy on the eyes |
 | Palm Coast | Sun-bleached 2004 console radar: square blips, fat outlined caps |
