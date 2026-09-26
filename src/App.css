@@ -322,6 +322,7 @@ kbd {
 }
 
 .panel-body {
+  position: relative;
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -728,9 +729,36 @@ kbd {
   transition: background 0.1s;
 }
 
-button.row:hover,
 .row.note:hover {
   background: var(--bg2);
+}
+
+.row {
+  position: relative;
+  z-index: 1;
+}
+
+.glide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg2);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), width 0.16s, opacity 0.15s;
+}
+
+[data-theme='radar'] .glide {
+  background: var(--bg3);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+@media (hover: none) {
+  .glide {
+    display: none;
+  }
 }
 
 .row.selected {

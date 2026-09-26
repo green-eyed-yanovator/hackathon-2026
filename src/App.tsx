@@ -471,6 +471,23 @@ function Blip({ flair, size = 30 }: { flair: Flair; size?: number }) {
   )
 }
 
+// Lists get one highlight that glides to the row under the mouse, instead of
+// every row lighting up on its own. It's moved straight in the DOM; no renders.
+function glide(e: React.MouseEvent<HTMLElement>) {
+  const body = e.currentTarget
+  const bar = body.querySelector<HTMLElement>(':scope > .glide')
+  if (!bar) return
+  const row = (e.target as HTMLElement).closest<HTMLElement>('button.row')
+  if (!row || e.type === 'mouseleave') {
+    bar.style.opacity = '0'
+    return
+  }
+  bar.style.opacity = '1'
+  bar.style.width = `${row.offsetWidth}px`
+  bar.style.height = `${row.offsetHeight}px`
+  bar.style.transform = `translate(${row.offsetLeft}px, ${row.offsetTop}px)`
+}
+
 // The handle on top of a phone sheet: drag it down to dismiss, up (or tap it) to
 // pull the sheet to full height and back. It moves its parent, the sheet itself.
 function Grip({ onDismiss }: { onDismiss: () => void }) {
@@ -528,7 +545,10 @@ function Panel({ title, icon, onBack, children, foot, className = '' }: { title:
           <Icon name="close" />
         </button>
       </header>
-      <div className="panel-body">{children}</div>
+      <div className="panel-body" onMouseOver={glide} onMouseLeave={glide}>
+        <i className="glide" />
+        {children}
+      </div>
       {foot && <footer className="panel-foot">{foot}</footer>}
     </aside>
   )
@@ -753,7 +773,8 @@ function Feed() {
         </div>
       </header>
 
-      <div className="panel-body">
+      <div className="panel-body" onMouseOver={glide} onMouseLeave={glide}>
+        <i className="glide" />
         {signedOut && (
           <div className="welcome">
             <strong>What's happening around here?</strong>
