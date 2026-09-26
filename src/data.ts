@@ -596,6 +596,11 @@ export function start() {
     if (S.userId && S.sharing) withdrawNow()
     checkOutNow()
   })
+  // Back from a dropped connection: realtime missed whatever happened meanwhile.
+  window.addEventListener('online', () => {
+    loadPublic()
+    if (S.userId) loadPrivate(S.userId)
+  })
   setInterval(checkIn, 60000)
 
   // A share for a while ends by itself, even if nothing moves.
