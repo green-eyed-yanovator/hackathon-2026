@@ -2962,6 +2962,8 @@ function frame(m: MapState, time: number) {
   }
 }
 
+const OVERVIEW = 5 // levels out from the view for the stand-in of a first visit
+
 // The tiles, nearest the middle first, painting new ones within a few
 // milliseconds. Returns true while some are still missing or fading in.
 function drawTiles(m: MapState, v: View) {
@@ -2998,7 +3000,11 @@ function drawTiles(m: MapState, v: View) {
       for (let up = 1; up <= 6 && v.z - up >= 0; up++) {
         const px = w.x >> up
         const py = w.y >> up
-        const parent = m.rasters.get(`${v.z - up}/${px}/${py}`)
+        let parent = m.rasters.get(`${v.z - up}/${px}/${py}`)
+        // Nothing above it painted yet (a first visit): ask for the view from five
+        // levels out, one small tile that covers the whole screen, so a slow
+        // connection shows the lie of the land long before the detail arrives.
+        if (!parent && up === OVERVIEW && v.z >= 9) parent = tileRaster(m, v.z - up, px, py, performance.now() < budgetEnd) ?? undefined
         if (!parent) continue
         parent.used = m.frameCount
         const part = parent.canvas.width / 2 ** up
