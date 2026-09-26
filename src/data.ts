@@ -885,10 +885,12 @@ export function describeNotification(n: Notification) {
   }
 }
 
-// "Typing…" in a chat: a broadcast on a channel only these two people join. Nothing is stored.
+// "Typing…" in a chat: a broadcast on a private channel only these two people
+// may join. Nothing is stored.
 export function typingChannel(otherId: string, onTyping: () => void) {
   const me = S.userId
-  const channel = supabase.channel(`typing:${[me, otherId].sort().join(':')}`)
+  // Private: the database only lets these two people on (see the typing migration).
+  const channel = supabase.channel(`typing:${[me, otherId].sort().join(':')}`, { config: { private: true } })
   channel.on('broadcast', { event: 'typing' }, ({ payload }) => {
     if (payload?.from === otherId) onTyping()
   })
