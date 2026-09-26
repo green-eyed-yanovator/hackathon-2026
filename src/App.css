@@ -2507,7 +2507,7 @@ button.toast {
   bottom: 200px; /* over the radar's top */
   transform: translateX(-50%);
   width: max-content;
-  max-width: min(680px, calc(100vw - 32px));
+  max-width: min(420px, calc(100vw - 32px));
   text-align: center;
   font-family: var(--font-head);
   font-size: 21px;
@@ -2945,6 +2945,11 @@ button.toast {
   .has-detail.has-feed .walk,
   .has-detail.has-feed .objective {
     left: calc(50% - 222px);
+  }
+
+  /* The game styles' messages go where the feed was. */
+  :is([data-theme='coast'], [data-theme='metro'], [data-theme='frontier'], [data-theme='radar'], [data-theme='neon']) .has-detail.has-feed .toast {
+    left: 16px;
   }
 }
 

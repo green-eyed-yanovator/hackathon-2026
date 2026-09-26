@@ -30,12 +30,21 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseKey)
 
-// Photos are only ever ours, from our own storage. The columns can be written
-// directly, and a picture on someone's own server would tell them who looked at
-// it, and when: a profile photo like that isn't shown, a pin's is left out.
-const ourStorage = `${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/public/`
-const ownPhotoOnly = (p: Profile): Profile => (p.avatar_url && !p.avatar_url.startsWith(ourStorage + 'avatars/') ? { ...p, avatar_url: null } : p)
-const ownMedia = (m: Media) => m.url.startsWith(ourStorage + 'post-media/')
+// Photos only ever come from our own storage: whatever host a stored address names,
+// the picture is fetched from ours, by its path in the bucket (so a database moved
+// to another address still finds them). The columns can be written directly, and
+// a picture on someone's own server would tell them who looked at it, and when.
+const ourStorage = new URL('storage/v1/object/public/', supabaseUrl.replace(/\/?$/, '/')).href
+
+function fromOurStorage(url: string | null, bucket: string) {
+  const at = url ? url.indexOf(`/storage/v1/object/public/${bucket}/`) : -1
+  return at < 0 ? null : ourStorage + url!.slice(at + '/storage/v1/object/public/'.length)
+}
+const ownPhotoOnly = (p: Profile): Profile => ({ ...p, avatar_url: fromOurStorage(p.avatar_url, 'avatars') })
+const ownMedia = (m: Media) => {
+  const url = fromOurStorage(m.url, 'post-media')
+  return url ? { ...m, url } : null
+}
 
 export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
 
@@ -293,7 +302,15 @@ const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
 const sameInterest = (a: Interest, b: Interest) => a.user_id === b.user_id && a.post_id === b.post_id
 const sameLike = (a: Like, b: Like) => a.user_id === b.user_id && a.reply_id === b.reply_id
 
-let retrying = false // a reload is already waiting
+let retrying = false
+
+// No such table or column: the database hasn't had this version's migrations. The
+// public and the private loads each say whether their tables were behind, last time.
+const behind = { public: false, private: false }
+function markBehind(part: 'public' | 'private', error: { code?: string } | null) {
+  behind[part] = ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(error?.code ?? '')
+  S.outdated = behind.public || behind.private
+} // a reload is already waiting
 
 async function loadPublic() {
   const [posts, replies, media, interests, profiles, likes] = await Promise.all([
@@ -310,8 +327,7 @@ async function loadPublic() {
   if (failed) {
     fail('Loading pins', failed.error)
     S.offline = true
-    // No such table or column: the database hasn't had this version's migrations.
-    S.outdated = ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(failed.error?.code ?? '')
+    markBehind('public', failed.error)
     changed()
     if (!retrying) {
       retrying = true
@@ -323,10 +339,10 @@ async function loadPublic() {
     return
   }
   S.offline = false
-  S.outdated = false
+  markBehind('public', null)
   S.posts = posts.data ?? []
   S.replies = replies.data ?? []
-  S.media = (media.data ?? []).filter(ownMedia)
+  S.media = (media.data ?? []).map(ownMedia).filter((m) => m !== null)
   S.interests = interests.data ?? []
   S.likes = likes.data ?? []
   S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, ownPhotoOnly(p)]))
@@ -367,8 +383,9 @@ function subscribePublic() {
       changed()
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_media' }, ({ new: row }) => {
-      if (!ownMedia(row as Media)) return
-      upsert(S.media, row as Media, byId)
+      const media = ownMedia(row as Media)
+      if (!media) return
+      upsert(S.media, media, byId)
       changed()
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_interest' }, ({ new: row }) => {
@@ -418,12 +435,16 @@ async function loadPrivate(userId: string, attempt = 0) {
   if (S.userId !== userId) return
   // A network blip keeps what we had, rather than emptying the inbox and the
   // friends off the map, and tries again: in 5 s, then 10, 20, up to a minute.
-  if (results.some((r) => r.error)) {
+  const failed = results.find((r) => r.error)
+  if (failed) {
+    markBehind('private', failed.error)
+    changed()
     setTimeout(() => S.userId === userId && loadPrivate(userId, attempt + 1), Math.min(60000, 5000 * 2 ** attempt))
     return
   }
   const [saved, notifications, messages, settings, friendships, locations, blocks, presence] = results
   privateLoaded = true
+  markBehind('private', null)
 
   S.saved = saved.data ?? []
   // A reload keeps any older notifications already paged in.
@@ -607,6 +628,7 @@ function resetPrivate() {
   S.sharingUntil = null
   privateLoaded = false
   said = null
+  markBehind('private', null)
 }
 
 let started = false

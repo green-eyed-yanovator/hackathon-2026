@@ -15,6 +15,10 @@ declare
   ben uuid := 'd0000000-0000-4000-8000-000000000006';
   demo uuid[] := array[maya, tom, priya, lucas, hannah, ben];
 begin
+  if (select count(*) from auth.users where id = any (demo)) < 6 then
+    raise exception 'Some demo accounts are gone. Take the rest out with: delete from auth.users where email like ''%%@aroundhere.demo''; then load supabase/seed.sql again.';
+  end if;
+
   -- Friends where the seed put them, as of now. Maya herself isn't sharing:
   -- whoever demos her shares their own place.
   insert into public.locations (user_id, latitude, longitude, accuracy, heading) values
@@ -28,16 +32,33 @@ begin
   where user_id = maya;
   update public.presence set here = false where user_id = any (demo);
 
-  -- Nobody blocked, the seeded friendships back, and Lucas's request to Maya
-  -- waiting (and unread) again.
+  -- Nobody blocked.
   delete from public.blocks where blocker = any (demo) and blocked = any (demo);
+
+  -- The seeded friends. A pair that was unfriended and asked again is waiting,
+  -- so it goes; put back as friends straight away, it sends no notification.
+  delete from public.friendships f
+  using (values (maya, tom), (priya, maya), (maya, hannah), (tom, ben), (hannah, priya)) as p (a, b)
+  where least(f.requester, f.addressee) = least(p.a, p.b) and greatest(f.requester, f.addressee) = greatest(p.a, p.b)
+    and f.accepted_at is null;
   insert into public.friendships (requester, addressee, accepted_at) values
-    (maya, tom, now()), (priya, maya, now()), (maya, hannah, now()), (tom, ben, now()), (hannah, priya, now()),
-    (lucas, maya, null)
+    (maya, tom, now()), (priya, maya, now()), (maya, hannah, now()), (tom, ben, now()), (hannah, priya, now())
   on conflict do nothing;
-  update public.friendships set accepted_at = null
-  where least(requester, addressee) = least(lucas, maya) and greatest(requester, addressee) = greatest(lucas, maya);
-  update public.notifications set read_at = null where user_id = maya and kind = 'friend_request' and actor_id = lucas;
+
+  -- Lucas's request to Maya, waiting and unread. Anything else between them
+  -- (friends, or Maya asking him) goes with its notifications, and the request
+  -- is made again, which tells her once.
+  if exists (select 1 from public.friendships where requester = lucas and addressee = maya and accepted_at is null) then
+    update public.notifications set read_at = null where user_id = maya and kind = 'friend_request' and actor_id = lucas;
+  else
+    delete from public.friendships
+    where least(requester, addressee) = least(lucas, maya) and greatest(requester, addressee) = greatest(lucas, maya);
+    delete from public.notifications where user_id = maya and kind = 'friend_request' and actor_id = lucas;
+    insert into public.friendships (requester, addressee) values (lucas, maya);
+  end if;
+  -- Any other asking between the demo accounts is settled now.
+  delete from public.notifications
+  where kind = 'friend_request' and user_id = any (demo) and actor_id = any (demo) and not (user_id = maya and actor_id = lucas);
 
   -- The two messages Maya hasn't read yet.
   update public.messages set read_at = null
