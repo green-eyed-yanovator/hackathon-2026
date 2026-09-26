@@ -280,6 +280,11 @@ function readString(p: Pbf) {
   return s
 }
 
+const DRAWN_LAYERS = new Set([
+  'water', 'waterway', 'landcover', 'landuse', 'park', 'building', 'transportation', 'transportation_name',
+  'boundary', 'place', 'water_name', 'poi', 'mountain_peak',
+])
+
 // Only these properties are kept; the tiles carry dozens of translated names we never show.
 const KEPT = new Set(['class', 'subclass', 'name', 'name:latin', 'rank', 'brunnel', 'admin_level', 'maritime', 'layer', 'intermittent', 'ele'])
 
@@ -425,7 +430,9 @@ function decodeTile(buf: Uint8Array, z: number, x: number, y: number): SourceTil
       }
     }
 
+    // Layers we never draw aren't worth decoding.
     const features: Feature[] = []
+    if (!DRAWN_LAYERS.has(name)) featureRanges.length = 0
     for (let i = 0; i < featureRanges.length; i += 2) {
       p.pos = featureRanges[i]
       features.push(decodeFeature(p, featureRanges[i + 1], keys, values))
