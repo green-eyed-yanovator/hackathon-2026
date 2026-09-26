@@ -65,7 +65,7 @@ they mean.
 ## Keys
 
 `/` or `Ctrl K` search pins, people, streets and commands · `N` new pin ·
-`J` `K` next and previous pin · `L` where am I (again to follow you) ·
+`J` `K` next and previous pin · `L` where am I (follows you until you move the map) ·
 `T` next map style · `F` friends · `I` inbox · `+` `−` zoom · `Esc` close
 
 On phones: the tab bar at the bottom, sheets you can drag up to full height
