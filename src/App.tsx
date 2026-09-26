@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 
 import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
-  friendIds, friendshipWith, conversations, describeNotification, setIncomingHandler, watchHere, setSharing, enableCompass,
+  friendIds, friendshipWith, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, toggleInterest, toggleSave, saveProfile,
   requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
@@ -14,7 +14,7 @@ import {
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, project, center, requestFrame, nearestStreet,
-  lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE,
+  lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE,
   type IconName, type MapState, type Marker,
 } from './map'
 import './App.css'
@@ -295,7 +295,8 @@ function buildMarkers(posts: Post[]): Marker[] {
     const name = nameOf(userId)
     markers.push({
       id: `person:${userId}`, kind: 'person', x: lngToX(loc.longitude), y: latToY(loc.latitude), icon: 'user',
-      color: `hsl(${hue(userId)} 55% 45%)`, count: 0, flags: Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0,
+      color: `hsl(${hue(userId)} 55% 45%)`, count: 0,
+      flags: (Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0) | (S.online.has(userId) ? MARK_ONLINE : 0),
       text: initials(name), name: name.split(' ')[0],
       accuracy: loc.accuracy ?? 0, heading: loc.heading,
     })
@@ -466,7 +467,7 @@ function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
 }
 
 // A textarea that grows with its text, sends on Enter, and keeps Shift+Enter for new lines.
-function Composer({ placeholder, onSend, autoFocus = false }: { placeholder: string; onSend: (text: string) => Promise<boolean>; autoFocus?: boolean }) {
+function Composer({ placeholder, onSend, onType, autoFocus = false }: { placeholder: string; onSend: (text: string) => Promise<boolean>; onType?: () => void; autoFocus?: boolean }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -498,7 +499,10 @@ function Composer({ placeholder, onSend, autoFocus = false }: { placeholder: str
         placeholder={placeholder}
         autoFocus={autoFocus}
         maxLength={2000}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value)
+          onType?.()
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
@@ -1122,6 +1126,24 @@ async function signOut() {
 
 function ChatView({ id }: { id: string }) {
   const endRef = useRef<HTMLDivElement>(null)
+  const typing = useRef<ReturnType<typeof typingChannel> | null>(null)
+  const [typingAt, setTypingAt] = useState(0)
+  const me = S.userId
+
+  useEffect(() => {
+    if (!me || id === me) return
+    const channel = typingChannel(id, () => setTypingAt(Date.now()))
+    typing.current = channel
+    return () => channel.close()
+  }, [id, me])
+
+  // "typing…" goes away after a few quiet seconds.
+  useEffect(() => {
+    if (!typingAt) return
+    const timer = setTimeout(() => setTypingAt(0), 3000)
+    return () => clearTimeout(timer)
+  }, [typingAt])
+
   const thread = S.messages.filter((m) => (m.sender_id === id && m.recipient_id === S.userId) || (m.recipient_id === id && m.sender_id === S.userId))
   const unread = thread.some((m) => m.sender_id === id && !m.read_at)
   const loc = S.locations.get(id)
@@ -1146,7 +1168,7 @@ function ChatView({ id }: { id: string }) {
           <span>
             {nameOf(id)}
             <small className="muted">
-              {S.online.has(id) ? 'online' : 'offline'}
+              {typingAt ? <em className="typing">typing…</em> : S.online.has(id) ? 'online' : 'offline'}
               {loc && ` · ${away !== null ? awayText(away) : 'on the map'} ${since(loc.updated_at)}`}
             </small>
           </span>
@@ -1154,7 +1176,7 @@ function ChatView({ id }: { id: string }) {
       }
       onBack={() => go('inbox')}
       className="chat"
-      foot={<Composer placeholder={`Message ${firstName(id)}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} />}
+      foot={<Composer placeholder={`Message ${firstName(id)}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} onType={() => typing.current?.ping()} />}
     >
       {loc && (
         <button className="btn wide" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
@@ -1494,6 +1516,7 @@ function SettingsView() {
         {[
           ['/', 'Search and commands'],
           ['N', 'New pin'],
+          ['J K', 'Next, previous pin'],
           ['L', 'Where am I'],
           ['T', 'Next map style'],
           ['F', 'Friends'],
@@ -2127,7 +2150,13 @@ export default function App() {
       } else if (k === 'i') {
         if (!needAccount('signin')) go('inbox')
       }
-      else if ((k === '=' || k === '+') && map) zoomBy(map, 1)
+      else if (k === 'j' || k === 'k') {
+        // Step through the feed, newest or nearest first, like a list of messages.
+        const rows = sortedFeed(visiblePosts())
+        const at = rows.findIndex((r) => r.post.id === UI.route.id)
+        const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (k === 'j' ? 1 : -1)))]
+        if (next) openPin(next.post)
+      } else if ((k === '=' || k === '+') && map) zoomBy(map, 1)
       else if (k === '-' && map) zoomBy(map, -1)
       else return
       e.preventDefault()

@@ -643,6 +643,29 @@ export function describeNotification(n: Notification) {
   }
 }
 
+// "Typing…" in a chat: a broadcast on a channel only these two people join. Nothing is stored.
+export function typingChannel(otherId: string, onTyping: () => void) {
+  const me = S.userId
+  const channel = supabase.channel(`typing:${[me, otherId].sort().join(':')}`)
+  channel.on('broadcast', { event: 'typing' }, ({ payload }) => {
+    if (payload?.from === otherId) onTyping()
+  })
+  channel.subscribe()
+
+  let last = 0
+  return {
+    ping() {
+      const now = Date.now()
+      if (now - last < 1500) return
+      last = now
+      channel.send({ type: 'broadcast', event: 'typing', payload: { from: me } })
+    },
+    close() {
+      supabase.removeChannel(channel)
+    },
+  }
+}
+
 // One entry per person you've messaged, latest first.
 export function conversations() {
   const byOther = new Map<string, { other: string; last: Message; unread: number }>()

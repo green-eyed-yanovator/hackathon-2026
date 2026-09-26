@@ -642,6 +642,7 @@ export const MARK_NEW = 4
 export const MARK_RESOLVED = 8
 export const MARK_SELECTED = 16
 export const MARK_STALE = 32 // a person whose last position is old
+export const MARK_ONLINE = 64 // a person with the app open right now
 
 export type Marker = {
   id: string
@@ -700,6 +701,8 @@ export type MapState = {
   lastPointer: string // 'mouse', 'touch' or 'pen'
   samples: { x: number; y: number; t: number }[]
 
+  fade: { canvas: HTMLCanvasElement; start: number } | null // the old style, fading out after a switch
+
   tileUrl: string | null
   sources: Map<string, SourceEntry>
   rasters: Map<string, Raster>
@@ -746,7 +749,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
-    tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(),
+    fade: null, tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {},
   }
@@ -787,6 +790,14 @@ export function setTheme(m: MapState, name: string) {
   if (name === m.themeName) return
   m.themeName = name
   m.theme = mapThemes[name] ?? mapThemes.day
+
+  // Keep a picture of the old style and fade it out while the new one paints in.
+  const snapshot = document.createElement('canvas')
+  snapshot.width = m.canvas.width
+  snapshot.height = m.canvas.height
+  snapshot.getContext('2d')!.drawImage(m.canvas, 0, 0)
+  m.fade = { canvas: snapshot, start: performance.now() }
+
   m.rasters.clear()
   m.sprites.clear()
   requestFrame(m)
@@ -1809,6 +1820,16 @@ function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx
   c.fill()
   c.fillStyle = t.blip === 'ring' ? t.blipInk : '#fff'
   c.fillText(marker.name, sx, sy + r + 11.5)
+
+  if (marker.flags & MARK_ONLINE) {
+    c.beginPath()
+    c.arc(sx + r * 0.72, sy - r * 0.72, 4.5, 0, Math.PI * 2)
+    c.fillStyle = '#22c55e'
+    c.fill()
+    c.strokeStyle = '#fff'
+    c.lineWidth = 2
+    c.stroke()
+  }
   c.restore()
 }
 
@@ -2084,6 +2105,18 @@ function frame(m: MapState, time: number) {
     } else {
       drawDraft(c, t, p.x, p.y, time)
       animated = true
+    }
+  }
+
+  if (m.fade) {
+    const t = (time - m.fade.start) / 500
+    if (t >= 1) m.fade = null
+    else {
+      c.setTransform(1, 0, 0, 1, 0, 0)
+      c.globalAlpha = 1 - t * t
+      c.drawImage(m.fade.canvas, 0, 0)
+      c.globalAlpha = 1
+      keepGoing = true
     }
   }
 
