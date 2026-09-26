@@ -3342,7 +3342,8 @@ export default function App() {
         return
       }
       if (!marker) {
-        // Tapping empty map on a phone puts the map first.
+        // Tapping empty map puts the map first: the legend goes, and on a phone the sheets.
+        if (UI.legend) ui({ legend: false })
         if (narrow() && (UI.route.kind || UI.feed)) {
           ui({ feed: false })
           go('')
