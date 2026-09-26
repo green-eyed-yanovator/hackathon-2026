@@ -625,6 +625,27 @@ export function nearestStreet(m: MapState, lng: number, lat: number) {
   return best
 }
 
+// Streets, suburbs, parks and places in the tiles we've loaded whose name
+// matches: a geocoder for the neighbourhood you're looking at, with no service.
+export function findPlaces(m: MapState, query: string, limit = 6) {
+  const q = query.trim().toLowerCase()
+  const found = new Map<string, { name: string; kind: string; lng: number; lat: number; rank: number }>()
+  if (q.length < 2) return []
+
+  for (const entry of m.sources.values()) {
+    for (const label of entry.tile?.labels ?? []) {
+      if (!label.text || !label.text.toLowerCase().includes(q)) continue
+      const kind = label.kind === 'road' ? 'Street' : label.kind === 'place' ? 'Area' : label.kind === 'poi' ? 'Place' : label.kind === 'water' ? 'Water' : 'Park'
+      const key = `${kind}:${label.text}`
+      // Prefer names that start with the query, then the more important ones.
+      const rank = (label.text.toLowerCase().startsWith(q) ? 0 : 1000) + label.rank
+      const seen = found.get(key)
+      if (!seen || rank < seen.rank) found.set(key, { name: label.text, kind, lng: xToLng(label.x), lat: yToLat(label.y), rank })
+    }
+  }
+  return [...found.values()].sort((a, b) => a.rank - b.rank).slice(0, limit)
+}
+
 //
 // Map state.
 //

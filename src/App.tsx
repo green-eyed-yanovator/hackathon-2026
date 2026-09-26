@@ -13,7 +13,7 @@ import {
   type Flair, type Post, type Revision, type Notification,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, project, center, requestFrame, nearestStreet,
+  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, project, center, requestFrame, nearestStreet, findPlaces,
   lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
@@ -2105,9 +2105,17 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
         .map((p) => ({ key: p.id, icon: <Avatar id={p.id} size={22} />, label: p.display_name, hint: p.neighbourhood ?? undefined, run: () => go(`user/${p.id}`) }))
     : []
 
+  const places = q && map
+    ? findPlaces(map, q).map((p) => ({
+        key: `place:${p.kind}:${p.name}`, icon: <Icon name={p.kind === 'Street' ? 'map' : 'pin'} />, label: p.name, hint: p.kind,
+        run: () => reveal(p.lat, p.lng, p.kind === 'Area' ? 15 : 17, true),
+      }))
+    : []
+
   return [
     { group: q ? 'Pins' : 'Recent pins', items: pins },
     { group: 'People', items: people },
+    { group: 'On the map', items: places },
     { group: 'Commands', items: commands },
   ].filter((g) => g.items.length)
 }
