@@ -281,7 +281,7 @@ function readString(p: Pbf) {
 }
 
 // Only these properties are kept; the tiles carry dozens of translated names we never show.
-const KEPT = new Set(['class', 'subclass', 'name', 'name:latin', 'rank', 'brunnel', 'admin_level', 'maritime', 'layer', 'intermittent'])
+const KEPT = new Set(['class', 'subclass', 'name', 'name:latin', 'rank', 'brunnel', 'admin_level', 'maritime', 'layer', 'intermittent', 'ele'])
 
 type Props = Record<string, string | number | boolean>
 
@@ -511,6 +511,16 @@ function collectLabels(tile: SourceTile) {
       kind: 'water', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
       rank: cls === 'ocean' || cls === 'sea' ? 5 : 40, minZoom: cls === 'ocean' ? 3 : cls === 'sea' ? 6 : 13, maxZoom: 20,
       size: cls === 'ocean' || cls === 'sea' ? 15 : 12, icon: null, color: null,
+    })
+  }
+
+  for (const f of tile.layers.mountain_peak ?? []) {
+    const name = nameOf(f.props)
+    if (!name || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
+    const ele = Number(f.props.ele)
+    tile.labels.push({
+      kind: 'park', text: `▲ ${name}${ele ? ` ${Math.round(ele)} m` : ''}`, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]),
+      angle: 0, length: 0, rank: 60 + Number(f.props.rank ?? 0), minZoom: 10.5, maxZoom: 18, size: 11, icon: null, color: null,
     })
   }
 
