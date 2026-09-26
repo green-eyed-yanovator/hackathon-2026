@@ -15,6 +15,17 @@ import { useSyncExternalStore } from 'react'
 
 export const supabaseUrl: string = import.meta.env.VITE_SUPABASE_URL
 export const supabaseKey: string = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+
+// Without these two the app can't reach its database. Say so on the page, rather
+// than leaving the loading mark breathing forever.
+if (!supabaseUrl || !supabaseKey) {
+  document.getElementById('root')!.innerHTML =
+    '<p style="max-width: 520px; margin: 20vh auto; padding: 0 24px; font: 15px/1.5 system-ui, sans-serif; color: #888">' +
+    'AroundHere needs <b>VITE_SUPABASE_URL</b> and <b>VITE_SUPABASE_PUBLISHABLE_KEY</b> in <code>.env.local</code> ' +
+    '(copy <code>.env.example</code>, fill the key in from <code>supabase status</code>), then a restart of the dev server.</p>'
+  throw new Error('VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY is missing')
+}
+
 export const supabase = createClient(supabaseUrl, supabaseKey)
 
 export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
