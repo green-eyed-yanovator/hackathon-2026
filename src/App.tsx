@@ -567,6 +567,9 @@ function buildMarkers(posts: Post[]): Marker[] {
 // Camera helpers: panels cover parts of the map, so "centre" means the middle of what's visible.
 //
 
+// Is the feed on screen? Below 1180 px it steps aside while a panel is open (see App.css).
+const feedShowing = () => UI.feed && !(UI.route.kind && window.innerWidth < 1180)
+
 function openArea() {
   const w = window.innerWidth
   const h = window.innerHeight
@@ -576,8 +579,7 @@ function openArea() {
     const sheet = kind === 'pin' || kind === 'place' || kind === 'new' ? h * 0.58 : kind ? h * 0.86 : UI.feed ? h * 0.56 : 0
     return { left: 0, top: 64, right: w, bottom: h - 60 - sheet }
   }
-  // Below 1180 px the feed steps aside while something is open (see App.css).
-  const left = UI.feed && !(UI.route.kind && w < 1180) ? 392 : 0
+  const left = feedShowing() ? 392 : 0
   const right = UI.route.kind ? w - 436 : w
   return { left, top: 72, right, bottom: h }
 }
@@ -590,7 +592,7 @@ function radarPlace() {
     if (UI.route.kind || UI.feed) return null
     return { x: 12 + (shown() === 'metro' ? 58 * RADAR_WIDE : 58), y: h - 60 - 26 - 60, r: 58 }
   }
-  const left = UI.feed && !(UI.route.kind && window.innerWidth < 1180) ? 392 : 0
+  const left = feedShowing() ? 392 : 0
   const half = shown() === 'metro' ? 76 * RADAR_WIDE : 76 // Metro's radar is a wide rectangle
   return { x: left + 16 + half, y: h - 26 - 80, r: 76 }
 }
