@@ -1601,9 +1601,18 @@ function FriendsView() {
   const incoming = S.friendships.filter((f) => !f.accepted_at && f.addressee === S.userId).map((f) => f.requester)
   const outgoing = S.friendships.filter((f) => !f.accepted_at && f.requester === S.userId).map((f) => f.addressee)
   const q = query.trim().toLowerCase()
+  // Neighbours first: people whose pins are closest to you (or to the map, if we don't know where you are).
+  const from = S.here ? { lat: S.here.latitude, lng: S.here.longitude } : UI.view
+  const nearest = new Map<string, number>()
+  for (const post of S.posts) {
+    if (!post.author_id) continue
+    const d = distance(from.lat, from.lng, post.latitude, post.longitude)
+    if (d < (nearest.get(post.author_id) ?? Infinity)) nearest.set(post.author_id, d)
+  }
   const others = [...S.profiles.values()]
     .filter((p) => p.id !== S.userId && !friendshipWith(p.id))
     .filter((p) => !q || p.display_name.toLowerCase().includes(q) || (p.neighbourhood ?? '').toLowerCase().includes(q))
+    .sort((a, b) => (nearest.get(a.id) ?? Infinity) - (nearest.get(b.id) ?? Infinity))
     .slice(0, 30)
 
   return (
@@ -1686,7 +1695,7 @@ function FriendsView() {
         </>
       )}
 
-      <div className="section">Find people</div>
+      <div className="section">People around here</div>
       <input className="input" placeholder="Search by name or neighbourhood" value={query} onChange={(e) => setQuery(e.target.value)} />
       {others.map((p) => (
         <div key={p.id} className="row">
@@ -1694,7 +1703,9 @@ function FriendsView() {
             <Avatar id={p.id} size={32} dot />
             <div>
               <span>{p.display_name}</span>
-              {p.neighbourhood && <div className="muted small">{p.neighbourhood}</div>}
+              <div className="muted small">
+                {[p.neighbourhood, nearest.has(p.id) && `pins ${meters(nearest.get(p.id)!)} away`].filter(Boolean).join(' · ')}
+              </div>
             </div>
           </button>
           <FriendButton id={p.id} />
