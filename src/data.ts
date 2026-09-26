@@ -70,7 +70,7 @@ export type Notification = {
 
 export type Message = { id: string; sender_id: string; recipient_id: string; body: string; created_at: string; read_at: string | null }
 export type Friendship = { id: string; requester: string; addressee: string; created_at: string; accepted_at: string | null }
-export type Location = { user_id: string; latitude: number; longitude: number; accuracy: number | null; heading: number | null; updated_at: string }
+export type Location = { user_id: string; latitude: number; longitude: number; accuracy: number | null; heading: number | null; updated_at: string; shared: boolean }
 export type Here = { latitude: number; longitude: number; accuracy: number; heading: number | null }
 
 export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert'; color: string }> = {
@@ -366,7 +366,7 @@ async function loadPrivate(userId: string) {
   S.blocked = new Set((blocks.data ?? []).map((b: { blocked: string }) => b.blocked))
   S.seen = new Map((presence.data ?? []).map((p: { user_id: string; seen_at: string }) => [p.user_id, time(p.seen_at)]))
   checkIn()
-  S.locations = new Map((locations.data ?? []).map((l: Location) => [l.user_id, l]))
+  S.locations = new Map((locations.data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
   const remembered = remembersSharing()
   S.sharing = remembered.on
   S.sharingUntil = remembered.until
@@ -436,8 +436,10 @@ function subscribePrivate(userId: string) {
       changed()
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'locations' }, (payload) => {
-      if (payload.eventType === 'DELETE') S.locations.delete((payload.old as Location).user_id)
-      else S.locations.set((payload.new as Location).user_id, payload.new as Location)
+      // A row that stops being shared (or, for a deleted account, goes) leaves the map.
+      const row = (payload.eventType === 'DELETE' ? payload.old : payload.new) as Location
+      if (payload.eventType === 'DELETE' || !row.shared) S.locations.delete(row.user_id)
+      else S.locations.set(row.user_id, row)
       changed()
     })
     .subscribe()
@@ -454,22 +456,27 @@ function checkIn() {
 }
 
 // Signing out: off friends' lists straight away.
+// Leaving sets the time far back rather than deleting the row: deletes are
+// announced to every client, and this one would say who just left.
+const GONE = { seen_at: new Date(0).toISOString() }
+
 export async function checkOut() {
-  if (S.userId) await supabase.from('presence').delete().eq('user_id', S.userId)
+  if (S.userId) await supabase.from('presence').update(GONE).eq('user_id', S.userId)
 }
 
 function checkOutNow() {
   if (!S.userId || !S.session) return
   fetch(`${supabaseUrl}/rest/v1/presence?user_id=eq.${S.userId}`, {
-    method: 'DELETE',
+    method: 'PATCH',
     keepalive: true,
-    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}` },
+    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(GONE),
   }).catch(() => {})
 }
 
 async function refreshLocations() {
   const { data } = await supabase.from('locations').select('*')
-  S.locations = new Map((data ?? []).map((l: Location) => [l.user_id, l]))
+  S.locations = new Map((data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
   changed()
 }
 
@@ -1064,7 +1071,7 @@ function pushLocation(force: boolean) {
     if (!S.sharing || !S.userId || document.visibilityState === 'hidden') return
     const { data, error } = await supabase
       .from('locations')
-      .upsert({ latitude: here.latitude, longitude: here.longitude, accuracy: here.accuracy, heading: here.heading }, { onConflict: 'user_id' })
+      .upsert({ latitude: here.latitude, longitude: here.longitude, accuracy: here.accuracy, heading: here.heading, shared: true }, { onConflict: 'user_id' })
       .select()
       .single()
     if (error) fail("Couldn't share your location", error)
@@ -1073,13 +1080,17 @@ function pushLocation(force: boolean) {
   })
 }
 
+// Not sharing any more: the row stays (a delete would be announced to every
+// client), but it no longer says where you are.
+const UNSHARED = { shared: false, latitude: 0, longitude: 0, accuracy: null, heading: null }
+
 function withdrawLocation() {
   const userId = S.userId
   if (!userId) return
   S.locations.delete(userId)
   lastSent = { at: 0, latitude: 0, longitude: 0 }
   return queueLocationWrite(async () => {
-    const { error } = await supabase.from('locations').delete().eq('user_id', userId)
+    const { error } = await supabase.from('locations').update(UNSHARED).eq('user_id', userId)
     if (error) fail("Couldn't stop sharing", error)
   })
 }
@@ -1092,9 +1103,10 @@ function withdrawNow() {
   S.locations.delete(userId)
   lastSent = { at: 0, latitude: 0, longitude: 0 }
   fetch(`${supabaseUrl}/rest/v1/locations?user_id=eq.${userId}`, {
-    method: 'DELETE',
+    method: 'PATCH',
     keepalive: true,
-    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}` },
+    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(UNSHARED),
   }).catch(() => {})
 }
 
