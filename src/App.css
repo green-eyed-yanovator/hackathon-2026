@@ -1478,6 +1478,14 @@ textarea::placeholder {
   background: var(--line);
 }
 
+.section.since {
+  color: var(--accent);
+}
+
+.section.since::after {
+  background: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
 .reply {
   display: flex;
   gap: 10px;

@@ -95,6 +95,14 @@ const UI = {
   legend: false,
 }
 
+// When this device last had the app open, for "new since your last visit".
+// Read once at start; saved as the page goes away.
+const lastVisit = Number(stored('aroundhere.lastVisit') ?? 0)
+window.addEventListener('pagehide', () => store('aroundhere.lastVisit', String(Date.now())))
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') store('aroundhere.lastVisit', String(Date.now()))
+})
+
 let map: MapState | null = null
 let toastTimer = 0
 
@@ -887,7 +895,16 @@ function Feed() {
                     : 'No pins here yet. Be the first: press N or tap +.'}
           </Empty>
         ) : (
-          rows.map(({ post, away, active }) => <PostRow key={post.id} post={post} away={away} active={active} />)
+          rows.map(({ post, away, active }, i) => {
+            // In Latest, a line where the new stuff since your last visit ends.
+            const divide = UI.tab === 'latest' && lastVisit > 0 && active > lastVisit && (rows[i + 1]?.active ?? 0) <= lastVisit && i < rows.length - 1
+            return (
+              <div key={post.id}>
+                <PostRow post={post} away={away} active={active} />
+                {divide && <div className="section since">Since your last visit ↑</div>}
+              </div>
+            )
+          })
         )}
       </div>
       <footer className="feed-foot muted small">
