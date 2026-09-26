@@ -2534,6 +2534,7 @@ function SettingsView() {
           ['/', 'Search and commands'],
           ['?', 'These keys'],
           ['N', 'New pin'],
+          ['Right-click', 'New pin right there'],
           ['J K', 'Next, previous pin'],
           ['L', 'Where am I'],
           ['G', 'Get there on foot, or stop'],
