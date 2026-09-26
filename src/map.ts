@@ -505,6 +505,27 @@ function collectLabels(tile: SourceTile) {
     })
   }
 
+  // Rivers and creeks: their name runs along the water.
+  for (const f of tile.layers.waterway ?? []) {
+    const text = nameOf(f.props)
+    const cls = String(f.props.class)
+    if (!text || f.type !== 2 || (cls !== 'river' && cls !== 'stream' && cls !== 'canal')) continue
+    for (const ring of f.rings) {
+      const mid = ring.length >> 2 << 1
+      if (ring.length < 4 || !inside(ring[mid], ring[mid + 1])) continue
+      const path: number[] = []
+      let pathLength = 0
+      for (let i = 0; i < ring.length; i += 2) {
+        path.push(toWorldX(ring[i]), toWorldY(ring[i + 1]))
+        if (i >= 2) pathLength += Math.hypot(ring[i] - ring[i - 2], ring[i + 1] - ring[i - 1]) / scale
+      }
+      tile.labels.push({
+        kind: 'water', text, x: toWorldX(ring[mid]), y: toWorldY(ring[mid + 1]), angle: 0, length: 0, path, pathLength,
+        rank: cls === 'river' ? 45 : 65, minZoom: cls === 'river' ? 12 : 14.5, maxZoom: 20, size: 11, icon: null, color: null,
+      })
+    }
+  }
+
   for (const f of tile.layers.water_name ?? []) {
     const text = nameOf(f.props)
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
@@ -1667,10 +1688,10 @@ function labelSprite(m: MapState, label: Label) {
 }
 
 // One letter with its halo, for names that bend along a road.
-function glyphSprite(m: MapState, t: MapTheme, font: string, size: number, ch: string) {
+function glyphSprite(m: MapState, t: MapTheme, font: string, size: number, color: string, ch: string) {
   const width = advance(font, ch) + 6
   const height = size + 8
-  return sprite(m, `G${font}|${ch}`, width, height, (c) => {
+  return sprite(m, `G${font}|${color}|${ch}`, width, height, (c) => {
     c.font = font
     c.textBaseline = 'middle'
     c.textAlign = 'center'
@@ -1682,7 +1703,7 @@ function glyphSprite(m: MapState, t: MapTheme, font: string, size: number, ch: s
       c.shadowColor = t.glow
       c.shadowBlur = 6
     }
-    c.fillStyle = t.labelColor
+    c.fillStyle = color
     c.fillText(ch, width / 2, height / 2)
   })
 }
@@ -2350,9 +2371,11 @@ function frame(m: MapState, time: number) {
 
     const s = labelSprite(m, label)
 
-    if (label.kind === 'road') {
+    // Roads, and rivers that follow their own line.
+    if (label.kind === 'road' || label.path) {
       const seen = roadsPlaced.get(label.text)
-      if (seen?.some((p) => Math.hypot(p.x - sx, p.y - sy) < 220)) continue
+      const spacing = label.kind === 'water' ? 480 : 220 // a river's name needn't repeat as often as a street's
+      if (seen?.some((p) => Math.hypot(p.x - sx, p.y - sy) < spacing)) continue
 
       if (label.length * size < s.width + 12) {
         // No straight stretch long enough: bend the name along the road instead.
@@ -2382,7 +2405,7 @@ function frame(m: MapState, time: number) {
         for (let i = 0; i < glyphs.length; i++) {
           if (text[i] === ' ') continue
           const g = glyphs[i]
-          const gs = glyphSprite(m, t, font, label.size, text[i])
+          const gs = glyphSprite(m, t, font, label.size, label.kind === 'water' ? t.waterLabel : t.labelColor, text[i])
           const cos = Math.cos(g.angle)
           const sin = Math.sin(g.angle)
           c.setTransform(r * cos, r * sin, -r * sin, r * cos, r * g.x, r * g.y)
