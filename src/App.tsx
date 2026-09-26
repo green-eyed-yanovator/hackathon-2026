@@ -1297,7 +1297,12 @@ function Feed() {
           </div>
         )}
 
-        {S.offline ? (
+        {S.outdated ? (
+          <Empty icon="alert">
+            The database is older than this app. Apply the migrations (<code>supabase migration up</code>, or <code>supabase db push</code> for a hosted
+            project) and it picks up by itself.
+          </Empty>
+        ) : S.offline ? (
           <Empty icon="map">Can't reach AroundHere right now. Trying again…</Empty>
         ) : !S.ready ? (
           <div className="skeleton">{[0, 1, 2, 3].map((i) => <div key={i} />)}</div>

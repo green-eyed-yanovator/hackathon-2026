@@ -102,6 +102,7 @@ export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'n
 export const S = {
   ready: false,
   offline: false, // the server couldn't be reached; loading retries on its own
+  outdated: false, // the server answered, but its tables are older than this app: migrations to apply
   authKnown: false, // true once the stored session has been read
   session: null as Session | null,
   userId: null as string | null,
@@ -300,6 +301,8 @@ async function loadPublic() {
   if (failed) {
     fail('Loading pins', failed.error)
     S.offline = true
+    // No such table or column: the database hasn't had this version's migrations.
+    S.outdated = ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(failed.error?.code ?? '')
     changed()
     if (!retrying) {
       retrying = true
@@ -311,6 +314,7 @@ async function loadPublic() {
     return
   }
   S.offline = false
+  S.outdated = false
   S.posts = posts.data ?? []
   S.replies = replies.data ?? []
   S.media = media.data ?? []
