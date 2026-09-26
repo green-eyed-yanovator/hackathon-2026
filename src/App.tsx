@@ -2163,7 +2163,7 @@ export default function App() {
 
   return (
     <div className={`app${detail ? ' has-detail' : ''}${UI.feed ? ' has-feed' : ''}${sheetUp ? ' sheet-up' : ''}`}>
-      <canvas ref={canvasRef} className="map" />
+      <canvas ref={canvasRef} className="map" role="application" aria-label="Map of pins and friends nearby. Drag to move, scroll or pinch to zoom." />
       <div className="fx" aria-hidden />
 
       <header className="topbar">

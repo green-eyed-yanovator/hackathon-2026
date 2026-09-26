@@ -697,6 +697,7 @@ export type MapState = {
   moved: boolean
   pinchDistance: number
   lastTap: number
+  lastPointer: string // 'mouse', 'touch' or 'pen'
   samples: { x: number; y: number; t: number }[]
 
   tileUrl: string | null
@@ -744,7 +745,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     x: lngToX(lng), y: latToY(lat), zoom, theme: mapThemes[themeName] ?? mapThemes.day, themeName,
     markers: [], hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
-    pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, samples: [],
+    pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
     tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {},
@@ -867,6 +868,7 @@ function attachInput(m: MapState) {
 
   const onDown = (event: PointerEvent) => {
     canvas.setPointerCapture(event.pointerId)
+    m.lastPointer = event.pointerType
     const p = local(event)
     m.pointers.set(event.pointerId, p)
     m.fly = null
@@ -965,6 +967,8 @@ function attachInput(m: MapState) {
   }
 
   const onDoubleClick = (event: MouseEvent) => {
+    // Touch has its own double tap above; browsers also send dblclick for it.
+    if (m.lastPointer !== 'mouse') return
     const p = local(event)
     m.fly = null
     m.zoomTarget = clamp(Math.round(m.zoom) + (event.shiftKey ? -1 : 1), MIN_ZOOM, MAX_ZOOM)
@@ -1084,7 +1088,12 @@ function requestSource(m: MapState, z: number, x: number, y: number) {
       fresh.state = 'ready'
     })
     .catch(() => {
+      // Forget it after a while so a network blip doesn't leave a hole for good.
       fresh.state = 'error'
+      setTimeout(() => {
+        if (m.sources.get(key) === fresh) m.sources.delete(key)
+        requestFrame(m)
+      }, 5000)
     })
     .finally(() => requestFrame(m))
 
