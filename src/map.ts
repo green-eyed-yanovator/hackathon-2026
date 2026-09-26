@@ -1585,9 +1585,21 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
   // Roads widen with zoom, but slower past street level so they don't swallow the blocks.
   const widthOf = (rc: RoadClass) => Math.max(0.6, ROAD_BASE[rc][0] * 2 ** ((Math.min(z, 17) - 16) * 0.75 + (Math.max(z, 17) - 17) * 0.4) * t.roadWidth)
 
+  // Glowing styles: two wide, faint strokes of the glow colour under every road.
+  // Much cheaper than a blur on each stroke, and it reads the same.
   if (t.glow) {
-    ctx.shadowColor = t.glow
-    ctx.shadowBlur = 6 * px
+    ctx.strokeStyle = t.glow
+    for (const [spread, alpha] of [[9, 0.07], [4, 0.14]]) {
+      ctx.globalAlpha = alpha
+      for (const rc of DRAW_ORDER) {
+        if (!roads[rc].length || rc === 'path' || rc === 'service') continue
+        ctx.beginPath()
+        for (const f of roads[rc]) trace(f)
+        ctx.lineWidth = (widthOf(rc) + spread) * unit
+        ctx.stroke()
+      }
+    }
+    ctx.globalAlpha = 1
   }
 
   if (tunnels.length) {
@@ -1648,9 +1660,6 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
       ctx.lineCap = 'round'
     }
   }
-
-  ctx.shadowBlur = 0
-  ctx.shadowColor = 'transparent'
 
   // Country and state borders.
   ctx.beginPath()
@@ -1904,8 +1913,12 @@ function drawBadge(c: CanvasRenderingContext2D, t: MapTheme, cx: number, cy: num
       break
     }
     case 'ring': {
-      c.shadowColor = t.glow ?? 'transparent'
-      c.shadowBlur = 8
+      c.beginPath()
+      c.arc(cx, cy, r + 4, 0, Math.PI * 2)
+      c.fillStyle = t.blipInk
+      c.globalAlpha *= 0.18
+      c.fill()
+      c.globalAlpha /= 0.18
       c.beginPath()
       c.arc(cx, cy, r, 0, Math.PI * 2)
       c.fillStyle = t.land
@@ -1914,7 +1927,6 @@ function drawBadge(c: CanvasRenderingContext2D, t: MapTheme, cx: number, cy: num
       c.lineWidth = 1.5
       c.stroke()
       drawIcon(c, icon, cx, cy, r * 1.2, t.blipInk)
-      c.shadowBlur = 0
       break
     }
     default: {
@@ -2085,8 +2097,8 @@ function drawCluster(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, s
   const ink = t.blip === 'stamp' || t.blip === 'ring' ? t.blipInk : '#fff'
 
   c.save()
-  c.shadowColor = t.blip === 'ring' ? (t.glow ?? 'transparent') : 'rgba(0,0,0,0.35)'
-  c.shadowBlur = 8
+  c.shadowColor = t.blip === 'ring' ? 'transparent' : 'rgba(0,0,0,0.35)'
+  c.shadowBlur = t.blip === 'ring' ? 0 : 8
   c.beginPath()
   if (t.blip === 'square') c.rect(sx - r, sy - r, 2 * r, 2 * r)
   else c.arc(sx, sy, r, 0, Math.PI * 2)
@@ -2753,14 +2765,15 @@ function drawRadar(m: MapState, v: View, time: number) {
     c.lineWidth = 0.8
     c.stroke()
   } else if (t.blip === 'ring') {
-    c.shadowColor = t.glow ?? t.blipInk
-    c.shadowBlur = 10
     c.strokeStyle = t.blipInk
+    c.globalAlpha = 0.2
+    c.lineWidth = 8
+    c.stroke()
+    c.globalAlpha = 1
     c.lineWidth = 2
     c.stroke()
     // The sweep.
     const angle = (time / 1000) % (Math.PI * 2)
-    c.shadowBlur = 0
     c.beginPath()
     c.moveTo(cx, cy)
     c.arc(cx, cy, r, angle - 0.6, angle)
