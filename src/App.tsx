@@ -24,7 +24,7 @@ import {
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, requestFrame,
-  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, regionAt,
+  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, regionAt, snapToStreet,
   icons, mapThemes, LEGEND, poiColor,
   MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker, type Region,
@@ -3523,12 +3523,13 @@ export default function App() {
 
     m.onClick = (marker, lng, lat) => {
       if (UI.route.kind === 'new') {
-        // Drawing an area of blocks, a tap is another corner, and the pin sits in
-        // the middle of them; otherwise a tap moves the pin.
+        // Drawing an area of blocks, a tap is another corner (on the nearest street
+        // corner), and the pin sits in the middle of them; otherwise a tap moves the pin.
         const area = UI.draftArea
         if (area && 'ring' in area) {
           if (area.ring.length >= 32) return
-          const ring: [number, number][] = [...area.ring, [lng, lat]]
+          const corner = snapToStreet(m, lng, lat) // corners hold on to the streets
+          const ring: [number, number][] = [...area.ring, [corner.lng, corner.lat]]
           ui({ draftArea: { ring }, draft: ring.length >= 3 ? ringMiddle(ring) : UI.draft })
         } else ui({ draft: { latitude: lat, longitude: lng } })
         return

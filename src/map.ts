@@ -2882,6 +2882,64 @@ export function setRegions(m: MapState, regions: Region[], draft: Region | null)
   requestFrame(m)
 }
 
+// Streets an area's corners hold on to: not footpaths, tracks or railways.
+const STREETS = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service'])
+
+// Where a corner of an area goes when tapped: the street corner nearest it, if
+// one is within a thumb's reach (where a street line bends or meets another),
+// or else the nearest point on a street, so an area drawn round a few blocks
+// follows the streets the way a game's districts do. The tap itself if no
+// street is near.
+export function snapToStreet(m: MapState, lng: number, lat: number, reach = 24) {
+  const n = 2 ** SOURCE_MAX_ZOOM
+  const x = lngToX(lng) * n // in tiles of the source zoom
+  const y = latToY(lat) * n
+  const limit = (reach * n) / worldSize(m)
+  let corner = limit
+  let cx = x
+  let cy = y
+  let edge = limit / 2 // a street's side must be closer than a corner would
+  let ex = x
+  let ey = y
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const tile = m.sources.get(`${SOURCE_MAX_ZOOM}/${Math.floor(x) + dx}/${Math.floor(y) + dy}`)?.tile
+      if (!tile) continue
+      const px = (x - tile.x) * tile.extent
+      const py = (y - tile.y) * tile.extent
+      const within = limit * tile.extent
+      for (const f of tile.layers.transportation ?? []) {
+        if (f.type !== 2 || !STREETS.has(String(f.props.class))) continue
+        if (px < f.minX - within || px > f.maxX + within || py < f.minY - within || py > f.maxY + within) continue
+        for (const ring of f.rings) {
+          for (let i = 0; i < ring.length; i += 2) {
+            const d = Math.hypot(ring[i] - px, ring[i + 1] - py) / tile.extent
+            if (d < corner) {
+              corner = d
+              cx = tile.x + ring[i] / tile.extent
+              cy = tile.y + ring[i + 1] / tile.extent
+            }
+            if (i === 0) continue
+            const ax = ring[i - 2]
+            const ay = ring[i - 1]
+            const t = nearestT(px, py, ax, ay, ring[i] - ax, ring[i + 1] - ay)
+            const sx = ax + t * (ring[i] - ax)
+            const sy = ay + t * (ring[i + 1] - ay)
+            const e = Math.hypot(sx - px, sy - py) / tile.extent
+            if (e < edge) {
+              edge = e
+              ex = tile.x + sx / tile.extent
+              ey = tile.y + sy / tile.extent
+            }
+          }
+        }
+      }
+    }
+  }
+  const [bx, by] = corner < limit ? [cx, cy] : edge < limit / 2 ? [ex, ey] : [x, y]
+  return { lng: xToLng(bx / n), lat: yToLat(by / n) }
+}
+
 // The smallest area holding the spot, so a block inside a park wins over the park.
 export function regionAt(m: MapState, lng: number, lat: number) {
   const px = lngToX(lng)
