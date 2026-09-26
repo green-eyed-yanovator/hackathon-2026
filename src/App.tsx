@@ -13,7 +13,7 @@ import {
   type Flair, type Post, type Revision, type Notification,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setRadar, setTheme, flyTo, zoomBy, glideBy, project, center, requestFrame, nearestStreet, findPlaces,
+  createMap, destroyMap, setMarkers, setRadar, RADAR_WIDE, setTheme, flyTo, zoomBy, glideBy, project, center, requestFrame, nearestStreet, findPlaces,
   lngToX, latToY, icons, mapThemes, LEGEND, poiColor, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
@@ -575,10 +575,11 @@ function radarPlace() {
   const h = map.height
   if (narrow()) {
     if (UI.route.kind || UI.feed) return null
-    return { x: 70, y: h - 60 - 26 - 60, r: 58 }
+    return { x: 12 + (shown() === 'metro' ? 58 * RADAR_WIDE : 58), y: h - 60 - 26 - 60, r: 58 }
   }
   const left = UI.feed && !(UI.route.kind && window.innerWidth < 1180) ? 392 : 0
-  return { x: left + 12 + 80, y: h - 26 - 80, r: 76 }
+  const half = shown() === 'metro' ? 76 * RADAR_WIDE : 76 // Metro's radar is a wide rectangle
+  return { x: left + 16 + half, y: h - 26 - 80, r: 76 }
 }
 
 function reveal(lat: number, lng: number, zoom?: number, force = false) {

@@ -916,6 +916,9 @@ export function setTheme(m: MapState, name: string) {
   requestFrame(m)
 }
 
+// The rectangular radar is this much wider than tall (its half width over r).
+export const RADAR_WIDE = 1.35
+
 export function setRadar(m: MapState, radar: { x: number; y: number; r: number } | null) {
   const same = radar && m.radar && radar.x === m.radar.x && radar.y === m.radar.y && radar.r === m.radar.r
   if (same || (!radar && !m.radar)) return
@@ -1113,7 +1116,8 @@ function attachInput(m: MapState) {
       }
       m.lastTap = now
       const me = m.markers.find((marker) => marker.kind === 'me')
-      if (me && m.radar && Math.hypot(p.x - m.radar.x, p.y - m.radar.y) <= m.radar.r) {
+      const wide = m.theme.blip === 'round' ? RADAR_WIDE : 1
+      if (me && m.radar && Math.abs(p.x - m.radar.x) <= m.radar.r * wide && Math.abs(p.y - m.radar.y) <= m.radar.r) {
         // The radar is a button: back to where you are.
         flyTo(m, xToLng(me.x), yToLat(me.y), Math.max(m.zoom, 16))
         return
@@ -2737,28 +2741,37 @@ function drawRadar(m: MapState, v: View, time: number) {
   const size = TILE * 2 ** zoom
   const tileSize = TILE * 2 ** (zoom - v.z)
 
+  // Most radars are round; the modern sprawl's is a wide rounded rectangle.
+  const square = t.blip === 'round'
+  const hw = square ? r * RADAR_WIDE : r // half width and height
+  const hh = square ? r * 0.9 : r
+  const outline = (grow: number) => {
+    c.beginPath()
+    if (square) c.roundRect(cx - hw - grow, cy - hh - grow, 2 * (hw + grow), 2 * (hh + grow), 10 + grow)
+    else c.arc(cx, cy, r + grow, 0, Math.PI * 2)
+  }
+
   c.save()
-  c.beginPath()
-  c.arc(cx, cy, r, 0, Math.PI * 2)
+  outline(0)
   c.fillStyle = t.land
   c.fill()
   c.clip()
 
   // The tiles of the main map's level, drawn smaller, around the radar's centre.
-  const left = wx * TILE * 2 ** v.z * (tileSize / TILE) - r
-  const top = wy * TILE * 2 ** v.z * (tileSize / TILE) - r
+  const left = wx * TILE * 2 ** v.z * (tileSize / TILE) - hw
+  const top = wy * TILE * 2 ** v.z * (tileSize / TILE) - hh
   const count = 2 ** v.z
-  for (let ty = Math.floor(top / tileSize); ty <= Math.floor((top + 2 * r) / tileSize); ty++) {
-    for (let tx = Math.floor(left / tileSize); tx <= Math.floor((left + 2 * r) / tileSize); tx++) {
+  for (let ty = Math.floor(top / tileSize); ty <= Math.floor((top + 2 * hh) / tileSize); ty++) {
+    for (let tx = Math.floor(left / tileSize); tx <= Math.floor((left + 2 * hw) / tileSize); tx++) {
       if (tx < 0 || ty < 0 || tx >= count || ty >= count) continue
       const raster = tileRaster(m, v.z, tx, ty, true)
-      if (raster) c.drawImage(raster.canvas, cx - r + tx * tileSize - left, cy - r + ty * tileSize - top, tileSize + 0.5, tileSize + 0.5)
+      if (raster) c.drawImage(raster.canvas, cx - hw + tx * tileSize - left, cy - hh + ty * tileSize - top, tileSize + 0.5, tileSize + 0.5)
     }
   }
 
   // A wash of the style's colour, so the radar reads as its own thing.
   c.fillStyle = t.blip === 'stamp' ? 'rgba(120, 90, 50, 0.18)' : t.blip === 'square' ? 'rgba(0, 0, 0, 0.18)' : 'rgba(0, 0, 0, 0.3)'
-  c.fillRect(cx - r, cy - r, 2 * r, 2 * r)
+  c.fillRect(cx - hw, cy - hh, 2 * hw, 2 * hh)
   c.restore()
 
   // Blips: inside, a dot where it is; outside, a smaller one on the rim.
@@ -2767,11 +2780,12 @@ function drawRadar(m: MapState, v: View, time: number) {
     let dx = (marker.x - wx) * size
     let dy = (marker.y - wy) * size
     const d = Math.hypot(dx, dy)
-    const inside = d < r - 6
+    const inside = square ? Math.abs(dx) < hw - 6 && Math.abs(dy) < hh - 6 : d < r - 6
     if (!inside) {
       if (marker.kind === 'pin' && !(marker.flags & (MARK_LIVE | MARK_NEW))) continue // only what matters goes on the rim
-      dx = (dx / d) * (r - 5)
-      dy = (dy / d) * (r - 5)
+      const k = square ? Math.min((hw - 5) / Math.abs(dx || 1), (hh - 5) / Math.abs(dy || 1)) : (r - 5) / d
+      dx *= k
+      dy *= k
     }
     const size2 = inside ? 4.5 : 3.5
     c.beginPath()
@@ -2805,14 +2819,12 @@ function drawRadar(m: MapState, v: View, time: number) {
 
   // The rim, in each style's way, with north marked.
   c.save()
-  c.beginPath()
-  c.arc(cx, cy, r, 0, Math.PI * 2)
+  outline(0)
   if (t.blip === 'stamp') {
     c.strokeStyle = '#3f2e1e'
     c.lineWidth = 2
     c.stroke()
-    c.beginPath()
-    c.arc(cx, cy, r + 4, 0, Math.PI * 2)
+    outline(4)
     c.lineWidth = 0.8
     c.stroke()
   } else if (t.blip === 'ring') {
@@ -2841,14 +2853,14 @@ function drawRadar(m: MapState, v: View, time: number) {
   c.restore()
 
   c.beginPath()
-  c.arc(cx, cy - r, 8, 0, Math.PI * 2)
+  c.arc(cx, cy - hh, 8, 0, Math.PI * 2)
   c.fillStyle = t.blip === 'stamp' ? '#e9d8b0' : t.blip === 'ring' ? t.land : '#000'
   c.fill()
   c.fillStyle = t.blip === 'stamp' ? '#8f2b1c' : t.blip === 'ring' ? t.blipInk : '#fff'
   c.font = `800 10px ${t.blip === 'stamp' ? t.font : sans}`
   c.textAlign = 'center'
   c.textBaseline = 'middle'
-  c.fillText('N', cx, cy - r + 0.5)
+  c.fillText('N', cx, cy - hh + 0.5)
 
   return t.blip === 'ring' // the sweep turns
 }
