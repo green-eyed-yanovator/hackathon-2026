@@ -2992,6 +2992,52 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
   )
 }
 
+// Keys: the map is the main surface, so single letters drive it.
+function onKey(e: KeyboardEvent) {
+  const typing = e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]')
+  if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault()
+    ui({ palette: !UI.palette })
+    return
+  }
+  if (e.key === 'Escape') {
+    if (UI.palette) ui({ palette: false })
+    else if (UI.auth) ui({ auth: null })
+    else if (UI.legend) ui({ legend: false })
+    else if (UI.route.kind) go('')
+    return
+  }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || UI.palette || UI.auth) return
+
+  const k = e.key.toLowerCase()
+  if (k === '/') {
+    e.preventDefault()
+    ui({ palette: true })
+  } else if (k === '?') go('settings')
+  else if (k === 'n') startCompose()
+  else if (k === 'l') locate()
+  else if (k === 't') applyTheme(THEMES[(THEMES.findIndex((t) => t.id === UI.theme) + 1) % THEMES.length].id)
+  else if (k === 'f') {
+    if (!needAccount('signin')) go('friends')
+  } else if (k === 'i') {
+    if (!needAccount('signin')) go('inbox')
+  }
+  else if (k === 'j' || k === 'k') {
+    // Step through the feed, newest or nearest first, like a list of messages.
+    const rows = sortedFeed(visiblePosts())
+    const at = rows.findIndex((r) => r.post.id === UI.route.id)
+    const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (k === 'j' ? 1 : -1)))]
+    if (next) openPin(next.post)
+  } else if (k.startsWith('arrow') && map && (document.activeElement === document.body || document.activeElement === map.canvas)) {
+    // Only when nothing else has the focus: arrows still scroll a panel you're in.
+    const step = e.shiftKey ? 300 : 100
+    glideBy(map, k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0)
+  } else if ((k === '=' || k === '+') && map) zoomBy(map, 1)
+  else if (k === '-' && map) zoomBy(map, -1)
+  else return
+  e.preventDefault()
+}
+
 //
 // The app.
 //
@@ -3120,52 +3166,7 @@ export default function App() {
     revealLinked()
   })
 
-  // Keys: the map is the main surface, so single letters drive it.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const typing = e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]')
-      if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault()
-        ui({ palette: !UI.palette })
-        return
-      }
-      if (e.key === 'Escape') {
-        if (UI.palette) ui({ palette: false })
-        else if (UI.auth) ui({ auth: null })
-        else if (UI.legend) ui({ legend: false })
-        else if (UI.route.kind) go('')
-        return
-      }
-      if (typing || e.metaKey || e.ctrlKey || e.altKey || UI.palette || UI.auth) return
-
-      const k = e.key.toLowerCase()
-      if (k === '/') {
-        e.preventDefault()
-        ui({ palette: true })
-      } else if (k === '?') go('settings')
-      else if (k === 'n') startCompose()
-      else if (k === 'l') locate()
-      else if (k === 't') applyTheme(THEMES[(THEMES.findIndex((t) => t.id === UI.theme) + 1) % THEMES.length].id)
-      else if (k === 'f') {
-        if (!needAccount('signin')) go('friends')
-      } else if (k === 'i') {
-        if (!needAccount('signin')) go('inbox')
-      }
-      else if (k === 'j' || k === 'k') {
-        // Step through the feed, newest or nearest first, like a list of messages.
-        const rows = sortedFeed(visiblePosts())
-        const at = rows.findIndex((r) => r.post.id === UI.route.id)
-        const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (k === 'j' ? 1 : -1)))]
-        if (next) openPin(next.post)
-      } else if (k.startsWith('arrow') && map && (document.activeElement === document.body || document.activeElement === map.canvas)) {
-        // Only when nothing else has the focus: arrows still scroll a panel you're in.
-        const step = e.shiftKey ? 300 : 100
-        glideBy(map, k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0)
-      } else if ((k === '=' || k === '+') && map) zoomBy(map, 1)
-      else if (k === '-' && map) zoomBy(map, -1)
-      else return
-      e.preventDefault()
-    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
