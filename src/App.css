@@ -28,6 +28,11 @@
   --text-shadow: none;
   --blur: 18px;
   --scrim: rgba(12, 14, 20, 0.36);
+  --pill: 999px; /* chips, composers, round buttons; square in the game styles */
+  --field: var(--bg-solid);
+  --btn-bg: var(--bg-solid);
+  --pick: var(--bg-solid); /* the selected tab or palette row */
+  --pick-fg: var(--fg);
   color-scheme: light;
 }
 
@@ -76,6 +81,11 @@
   --text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
   --blur: 4px;
   --scrim: rgba(0, 0, 0, 0.55);
+  --pill: var(--radius-sm);
+  --field: rgba(0, 0, 0, 0.35);
+  --btn-bg: var(--bg2);
+  --pick: #fff;
+  --pick-fg: #000;
   color-scheme: dark;
 }
 
@@ -104,6 +114,11 @@
   --head-weight: 700;
   --blur: 10px;
   --scrim: rgba(0, 0, 0, 0.55);
+  --pill: var(--radius-sm);
+  --field: rgba(0, 0, 0, 0.35);
+  --btn-bg: var(--bg2);
+  --pick: #fff;
+  --pick-fg: #000;
   color-scheme: dark;
 }
 
@@ -133,6 +148,9 @@
   --head-weight: 700;
   --blur: 0px;
   --scrim: rgba(40, 25, 10, 0.4);
+  --field: rgba(255, 250, 235, 0.5);
+  --btn-bg: var(--bg2);
+  --pick: #f1e3c0;
   color-scheme: light;
 }
 
@@ -163,6 +181,11 @@
   --text-shadow: 0 0 6px rgba(88, 255, 156, 0.55);
   --blur: 3px;
   --scrim: rgba(0, 0, 0, 0.6);
+  --pill: 0px;
+  --field: rgba(0, 0, 0, 0.35);
+  --btn-bg: var(--bg2);
+  --pick: var(--accent);
+  --pick-fg: var(--accent-fg);
   color-scheme: dark;
 }
 
@@ -575,24 +598,9 @@ kbd {
 }
 
 .tab.on {
-  background: var(--bg-solid);
-  color: var(--fg);
+  background: var(--pick);
+  color: var(--pick-fg);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), var(--highlight);
-}
-
-[data-theme='metro'] .tab.on,
-[data-theme='coast'] .tab.on {
-  background: #fff;
-  color: #000;
-}
-
-[data-theme='radar'] .tab.on {
-  background: var(--accent);
-  color: var(--accent-fg);
-}
-
-[data-theme='frontier'] .tab.on {
-  background: #f1e3c0;
 }
 
 .flair-bar {
@@ -613,7 +621,7 @@ kbd {
   gap: 5px;
   flex: none;
   padding: 4px 10px 4px 7px;
-  border-radius: 999px;
+  border-radius: var(--pill);
   border: 1px solid var(--line2);
   font-size: 12px;
   color: var(--muted);
@@ -637,12 +645,6 @@ kbd {
 
 .flair-chip.on .icon {
   color: #fff;
-}
-
-[data-theme='coast'] .flair-chip,
-[data-theme='metro'] .flair-chip,
-[data-theme='radar'] .flair-chip {
-  border-radius: var(--radius-sm);
 }
 
 .welcome {
@@ -967,19 +969,12 @@ kbd {
   padding: 0 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line2);
-  background: var(--bg-solid);
+  background: var(--btn-bg);
   font-size: 13.5px;
   font-weight: 600;
   white-space: nowrap;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), var(--highlight);
   transition: background 0.1s, border-color 0.1s, transform 0.06s;
-}
-
-[data-theme='coast'] .btn,
-[data-theme='metro'] .btn,
-[data-theme='radar'] .btn,
-[data-theme='frontier'] .btn {
-  background: var(--bg2);
 }
 
 .btn:hover:not(:disabled) {
@@ -1102,20 +1097,10 @@ kbd {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line2);
-  background: var(--bg-solid);
+  background: var(--field);
   font-size: 15px;
   transition: border-color 0.12s, box-shadow 0.12s;
   resize: vertical;
-}
-
-[data-theme='coast'] .input,
-[data-theme='metro'] .input,
-[data-theme='radar'] .input {
-  background: rgba(0, 0, 0, 0.35);
-}
-
-[data-theme='frontier'] .input {
-  background: rgba(255, 250, 235, 0.5);
 }
 
 .input:focus {
@@ -1209,19 +1194,12 @@ textarea::placeholder {
   min-height: 42px;
   max-height: 160px;
   padding: 10px 14px;
-  border-radius: 21px;
+  border-radius: min(var(--pill), 21px);
   border: 1px solid var(--line2);
-  background: var(--bg-solid);
+  background: var(--field);
   resize: none;
   font-size: 15px;
   line-height: 1.35;
-}
-
-[data-theme='coast'] .composer textarea,
-[data-theme='metro'] .composer textarea,
-[data-theme='radar'] .composer textarea {
-  border-radius: var(--radius-sm);
-  background: rgba(0, 0, 0, 0.35);
 }
 
 .composer textarea:focus {
@@ -1232,19 +1210,13 @@ textarea::placeholder {
 .icon-btn.send {
   width: 42px;
   height: 42px;
-  border-radius: 50%;
+  border-radius: min(var(--pill), 50%);
   background: var(--accent);
   color: var(--accent-fg);
 }
 
 .icon-btn.send:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 85%, #000);
-}
-
-[data-theme='coast'] .icon-btn.send,
-[data-theme='metro'] .icon-btn.send,
-[data-theme='radar'] .icon-btn.send {
-  border-radius: var(--radius-sm);
 }
 
 /* Post view. */
@@ -1532,7 +1504,7 @@ textarea::placeholder {
 .bubble {
   max-width: 78%;
   padding: 8px 12px;
-  border-radius: 18px;
+  border-radius: min(var(--pill), 18px);
   font-size: 15px;
   line-height: 1.38;
   white-space: pre-wrap;
@@ -1555,12 +1527,6 @@ textarea::placeholder {
 
 .bubble.tail {
   margin-bottom: 8px;
-}
-
-[data-theme='coast'] .bubble,
-[data-theme='metro'] .bubble,
-[data-theme='radar'] .bubble {
-  border-radius: var(--radius-sm);
 }
 
 [data-theme='radar'] .bubble.in {
@@ -1945,7 +1911,7 @@ textarea::placeholder {
 
 .legend {
   position: absolute;
-  z-index: 12;
+  z-index: 13;
   right: 64px;
   bottom: 28px;
   width: 330px;
@@ -2328,15 +2294,12 @@ textarea::placeholder {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* The game styles pick rows the way their menus do: a solid bar. */
 [data-theme='metro'] .palette-item.on,
-[data-theme='coast'] .palette-item.on {
-  background: #fff;
-  color: #000;
-}
-
+[data-theme='coast'] .palette-item.on,
 [data-theme='radar'] .palette-item.on {
-  background: var(--accent);
-  color: var(--accent-fg);
+  background: var(--pick);
+  color: var(--pick-fg);
 }
 
 /* Game-screen effects over the map. */
