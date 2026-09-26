@@ -2513,20 +2513,27 @@ function viaStreet(m: MapState, r: Route) {
   return (along.get(via) ?? 0) > total * 0.25 ? via : ''
 }
 
-// Everything here is in "grid" units: tile units of the source zoom, counted
-// from the world's corner, so the same spot is the same number in every tile.
+// Everything here is in "grid" units: tile units of the source zoom, counted from
+// the corner of the first tile, so the same spot is the same number in every tile,
+// and every hash key below stays a small integer (V8 keeps those unboxed; keys the
+// size of the world are boxed doubles, several times slower to hash).
 function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | null {
   const GRID = 4096
   const scale = 2 ** SOURCE_MAX_ZOOM * GRID
-  const [bx0, by0, bx1, by1] = box.map((v) => v * scale)
+  const originX = Math.min(...tiles.map((tile) => tile.x)) * GRID
+  const originY = Math.min(...tiles.map((tile) => tile.y)) * GRID
+  const bx0 = box[0] * scale - originX
+  const by0 = box[1] * scale - originY
+  const bx1 = box[2] * scale - originX
+  const by1 = box[3] * scale - originY
 
   // Segments of walkable lines: [ax, ay, bx, by, onGround]. Each tile's lines
   // run a little past its edge, so only the part inside its own square is kept.
   const segs: number[] = []
   for (const tile of tiles) {
     const k = GRID / tile.extent
-    const ox = tile.x * GRID
-    const oy = tile.y * GRID
+    const ox = tile.x * GRID - originX
+    const oy = tile.y * GRID - originY
     if (ox > bx1 || oy > by1 || ox + GRID < bx0 || oy + GRID < by0) continue
     for (const f of tile.layers.transportation ?? []) {
       if (f.type !== 2 || !WALKABLE.has(String(f.props.class))) continue
@@ -2565,13 +2572,19 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
   const CELL = 64
   const TOLERANCE = 1.5 // grid units; about a metre
   const cells = new Map<number, number[]>()
-  const cellKey = (cx: number, cy: number) => cx * 1048576 + cy
+  const cellKey = (cx: number, cy: number) => cx * 4096 + cy // 16 tiles are 1024 cells across
+  const boxes = new Float64Array(count * 4) // each segment's bounds, grown by the tolerance
   for (let i = 0; i < count; i++) {
     const s = i * 5
-    const cx0 = Math.floor((Math.min(segs[s], segs[s + 2]) - TOLERANCE) / CELL)
-    const cx1 = Math.floor((Math.max(segs[s], segs[s + 2]) + TOLERANCE) / CELL)
-    const cy0 = Math.floor((Math.min(segs[s + 1], segs[s + 3]) - TOLERANCE) / CELL)
-    const cy1 = Math.floor((Math.max(segs[s + 1], segs[s + 3]) + TOLERANCE) / CELL)
+    const b = i * 4
+    boxes[b] = Math.min(segs[s], segs[s + 2]) - TOLERANCE
+    boxes[b + 1] = Math.min(segs[s + 1], segs[s + 3]) - TOLERANCE
+    boxes[b + 2] = Math.max(segs[s], segs[s + 2]) + TOLERANCE
+    boxes[b + 3] = Math.max(segs[s + 1], segs[s + 3]) + TOLERANCE
+    const cx0 = Math.floor(boxes[b] / CELL)
+    const cy0 = Math.floor(boxes[b + 1] / CELL)
+    const cx1 = Math.floor(boxes[b + 2] / CELL)
+    const cy1 = Math.floor(boxes[b + 3] / CELL)
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         const key = cellKey(cx, cy)
@@ -2595,7 +2608,9 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
       const x = segs[s + end]
       const y = segs[s + end + 1]
       const v = clamp(((x - segs[u]) * qx + (y - segs[u + 1]) * qy) / lengthSquared, 0, 1)
-      if (Math.hypot(segs[u] + v * qx - x, segs[u + 1] + v * qy - y) > TOLERANCE) continue
+      const ex = segs[u] + v * qx - x
+      const ey = segs[u + 1] + v * qy - y
+      if (ex * ex + ey * ey > TOLERANCE * TOLERANCE) continue
       if (v > 0 && v < 1 && segs[u + 4] !== segs[s + 4]) continue
       cuts[j].push(v)
     }
@@ -2605,13 +2620,15 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
       for (let b = a + 1; b < list.length; b++) {
         const i = list[a]
         const j = list[b]
+        const bi = i * 4
+        const bj = j * 4
+        if (boxes[bi] > boxes[bj + 2] || boxes[bj] > boxes[bi + 2] || boxes[bi + 1] > boxes[bj + 3] || boxes[bj + 1] > boxes[bi + 3]) continue
+        // A pair shares several cells; only the one holding the corner of their overlap tests it.
+        const cornerX = Math.max(boxes[bi], boxes[bj])
+        const cornerY = Math.max(boxes[bi + 1], boxes[bj + 1])
+        if (cellKey(Math.floor(cornerX / CELL), Math.floor(cornerY / CELL)) !== key) continue
         const s = i * 5
         const u = j * 5
-        // A pair shares several cells; only the one holding the corner of their
-        // (grown) overlap tests it.
-        const cornerX = Math.max(Math.min(segs[s], segs[s + 2]), Math.min(segs[u], segs[u + 2])) - TOLERANCE
-        const cornerY = Math.max(Math.min(segs[s + 1], segs[s + 3]), Math.min(segs[u + 1], segs[u + 3])) - TOLERANCE
-        if (cellKey(Math.floor(cornerX / CELL), Math.floor(cornerY / CELL)) !== key) continue
         touch(i, j)
         touch(j, i)
 
@@ -2638,25 +2655,33 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
   const nodeX: number[] = []
   const nodeY: number[] = []
   const edges: number[][] = [] // per node: neighbour, length, neighbour, length...
-  const nodesAt = new Map<number, number[]>() // by 2-unit cell
+  const nodesAt = new Map<number, number[]>() // by 4-unit cell
+  const nodeKey = (gx: number, gy: number) => gx * 32768 + gy
+  const NEAR = [0, 0, -1, 0, 1, 0, 0, -1, 0, 1, -1, -1, 1, -1, -1, 1, 1, 1] // own cell first
   const node = (x: number, y: number) => {
-    const gx = Math.round(x / 2)
-    const gy = Math.round(y / 2)
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        for (const id of nodesAt.get(cellKey(gx + dx, gy + dy)) ?? []) {
-          if (Math.abs(nodeX[id] - x) <= TOLERANCE && Math.abs(nodeY[id] - y) <= TOLERANCE) return id
+    const gx = Math.round(x / 4)
+    const gy = Math.round(y / 4)
+    let id = -1
+    for (let n = 0; n < NEAR.length && id < 0; n += 2) {
+      const list = nodesAt.get(nodeKey(gx + NEAR[n], gy + NEAR[n + 1]))
+      if (!list) continue
+      for (const other of list) {
+        if (Math.abs(nodeX[other] - x) <= TOLERANCE && Math.abs(nodeY[other] - y) <= TOLERANCE) {
+          id = other
+          break
         }
       }
     }
-    const id = nodeX.length
-    nodeX.push(x)
-    nodeY.push(y)
-    edges.push([])
-    const key = cellKey(gx, gy)
-    const list = nodesAt.get(key)
-    if (list) list.push(id)
-    else nodesAt.set(key, [id])
+    if (id < 0) {
+      id = nodeX.length
+      nodeX.push(x)
+      nodeY.push(y)
+      edges.push([])
+      const key = nodeKey(gx, gy)
+      const list = nodesAt.get(key)
+      if (list) list.push(id)
+      else nodesAt.set(key, [id])
+    }
     return id
   }
   const join = (a: number, b: number) => {
@@ -2667,7 +2692,7 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
   }
   for (let i = 0; i < count; i++) {
     const s = i * 5
-    const ts = cuts[i].sort((a, b) => a - b)
+    const ts = cuts[i].length > 2 ? cuts[i].sort((a, b) => a - b) : cuts[i]
     let previous = node(segs[s], segs[s + 1])
     for (let j = 1; j < ts.length; j++) {
       if (ts[j] === ts[j - 1]) continue
@@ -2713,6 +2738,8 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
       for (let e = 0; e < edges[a].length; e += 2) {
         const b = edges[a][e]
         if (b < a) continue
+        if (Math.min(nodeX[a], nodeX[b]) - x > best || x - Math.max(nodeX[a], nodeX[b]) > best) continue
+        if (Math.min(nodeY[a], nodeY[b]) - y > best || y - Math.max(nodeY[a], nodeY[b]) > best) continue
         const dx = nodeX[b] - nodeX[a]
         const dy = nodeY[b] - nodeY[a]
         const t = clamp(((x - nodeX[a]) * dx + (y - nodeY[a]) * dy) / (dx * dx + dy * dy || 1), 0, 1)
@@ -2734,8 +2761,8 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
     join(id, bestB)
     return id
   }
-  const start = board(r.fromX * scale, r.fromY * scale)
-  const goal = board(r.toX * scale, r.toY * scale)
+  const start = board(r.fromX * scale - originX, r.fromY * scale - originY)
+  const goal = board(r.toX * scale - originX, r.toY * scale - originY)
   if (start < 0 || goal < 0) return null
   // Both ends on the same stretch of road: they can walk straight to each other.
   if (edges[start][0] === edges[goal][0] && edges[start][2] === edges[goal][2]) join(start, goal)
@@ -2802,7 +2829,7 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
   if (cost[goal] === Infinity) return null
 
   const points = [r.toX, r.toY]
-  for (let id = goal; id >= 0; id = cameFrom[id]) points.push(nodeX[id] / scale, nodeY[id] / scale)
+  for (let id = goal; id >= 0; id = cameFrom[id]) points.push((nodeX[id] + originX) / scale, (nodeY[id] + originY) / scale)
   points.push(r.fromX, r.fromY)
   // Back to front: from you to there.
   const forward: number[] = []
