@@ -130,6 +130,7 @@ for Neon Bay…) and a tick for messages. Settings turns them off.
 `/` or `Ctrl K` search pins, people, streets and commands (fuzzy: `rndl` finds
 Rundle) · `N` new pin ·
 `J` `K` next and previous pin · `L` where am I (follows you until you move the map) ·
+`G` get there on foot (again to stop) ·
 `T` next map style · `F` friends · `I` inbox · arrows move the map · `+` `−`
 zoom · `Esc` close
 

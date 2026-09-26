@@ -679,6 +679,21 @@ function walkTarget() {
   return loc ? { lat: loc.latitude, lng: loc.longitude, name: firstName(id), person: true } : null
 }
 
+// What's open, if it can be walked to: a pin, or a friend who shares where they are.
+function walkable() {
+  const r = UI.route
+  if (r.kind === 'pin') return `pin/${r.id}`
+  if ((r.kind === 'user' || r.kind === 'chat') && locationOf(r.id)) return `user/${r.id}`
+  return null
+}
+
+// G: walk to what's open (again to stop), or stop walking when nothing is.
+function walkKey() {
+  const to = walkable()
+  if (to) walkTo(to)
+  else if (UI.walk) ui({ walk: null })
+}
+
 async function walkTo(to: string) {
   if (UI.walk === to) return ui({ walk: null })
   const here = S.here ?? (await watchHere())
@@ -2428,6 +2443,7 @@ function SettingsView() {
           ['N', 'New pin'],
           ['J K', 'Next, previous pin'],
           ['L', 'Where am I'],
+          ['G', 'Get there on foot, or stop'],
           ['T', 'Next map style'],
           ['F', 'Friends'],
           ['I', 'Inbox'],
@@ -2854,6 +2870,9 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
   const commands: Command[] = [
     { key: 'new', icon: <Icon name="plus" />, label: 'New pin', hint: 'N', run: startCompose },
     { key: 'locate', icon: <Icon name="locate" />, label: 'Where am I', hint: 'L', run: locate },
+    ...(walkable() || UI.walk
+      ? [{ key: 'walk', icon: <Icon name="arrow" />, label: walkable() && walkable() !== UI.walk ? 'Get there on foot' : 'Stop walking', hint: 'G', run: walkKey }]
+      : []),
     { key: 'friends', icon: <Icon name="users" />, label: 'Friends', hint: 'F', run: () => !needAccount('signin') && go('friends') },
     { key: 'inbox', icon: <Icon name="bell" />, label: 'Inbox', hint: 'I', run: () => !needAccount('signin') && go('inbox') },
     { key: 'settings', icon: <Icon name="sliders" />, label: 'Settings', run: () => go('settings') },
@@ -3093,6 +3112,7 @@ function onKey(e: KeyboardEvent) {
   } else if (k === '?') go('settings')
   else if (k === 'n') startCompose()
   else if (k === 'l') locate()
+  else if (k === 'g') walkKey()
   else if (k === 't') applyTheme(THEMES[(THEMES.findIndex((t) => t.id === UI.theme) + 1) % THEMES.length].id)
   else if (k === 'f') {
     if (!needAccount('signin')) go('friends')
