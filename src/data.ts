@@ -358,7 +358,7 @@ function subscribePrivate(userId: string) {
       const message = row as Message
       upsert(S.messages, message, byId)
       changed()
-      if (message.sender_id !== userId && !S.blocked.has(message.sender_id)) onIncoming(nameOf(message.sender_id), message.body, `chat/${message.sender_id}`)
+      if (message.sender_id !== userId && !S.blocked.has(message.sender_id)) onIncoming(nameOf(message.sender_id), readable(message.body), `chat/${message.sender_id}`)
     })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, ({ new: row }) => {
       upsert(S.messages, row as Message, byId)
@@ -822,6 +822,13 @@ export async function unblock(id: string) {
   S.blocked.delete(id)
   changed()
   return true
+}
+
+// A message as a line of text for previews and alerts: links to our own pins
+// don't read well as addresses, so they become words.
+export function readable(body: string) {
+  const text = body.replace(new RegExp(`${window.location.origin.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/#pin/[0-9a-f-]{36}`, 'g'), '').trim()
+  return text ? (text === body ? text : `Pin: ${text}`) : 'Sent you a pin'
 }
 
 // One entry per person you've messaged, latest first.

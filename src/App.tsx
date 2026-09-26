@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 
 import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
-  friendIds, friendshipWith, isOnline, locationOf, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
+  friendIds, friendshipWith, isOnline, locationOf, conversations, readable, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, report, toggleInterest, toggleSave, saveProfile,
   uploadAvatar, changeEmail, deleteAccount, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
@@ -765,18 +765,48 @@ function Panel({ title, icon, onBack, children, foot, className = '' }: PanelPro
 }
 
 // Text with its web addresses turned into links.
+// Text with its web addresses turned into links. A link to one of our own pins
+// becomes a little card for it that opens here, rather than a bare address.
 function Linked({ text }: { text: string }) {
   const parts = text.split(/(https?:\/\/[^\s]*[^\s.,!?;:)\]'"])/g)
-  return parts.map((part, i) =>
-    i % 2 ? (
+  return parts.map((part, i) => {
+    if (i % 2 === 0) return part
+    const pinId = pinInLink(part)
+    const post = pinId ? S.posts.find((p) => p.id === pinId) : null
+    if (post) {
+      return (
+        <button key={i} className="pin-card" onClick={() => openPin(post)}>
+          <Blip flair={post.flair} size={26} />
+          <span className="row-main">
+            <strong className="clip">{post.title}</strong>
+            <span className="small clip">{post.starts_at ? whenText(post.starts_at) : nameOf(post.author_id, post.author_name)}</span>
+          </span>
+        </button>
+      )
+    }
+    return (
       <a key={i} href={part} target="_blank" rel="noreferrer noopener">
         {part.replace(/^https?:\/\/(www\.)?/, '')}
       </a>
-    ) : (
-      part
-    ),
-  )
+    )
+  })
 }
+
+// Directions are the phone's job: Apple devices open Apple Maps, everything else
+// OpenStreetMap's route planner.
+function directions(post: Post) {
+  const at = `${post.latitude.toFixed(6)},${post.longitude.toFixed(6)}`
+  if (/iPhone|iPad|Macintosh/.test(navigator.userAgent)) return `https://maps.apple.com/?daddr=${at}`
+  return `https://www.openstreetmap.org/directions?to=${at}`
+}
+
+// The pin a link points at, if it's one of ours.
+function pinInLink(url: string) {
+  if (!url.startsWith(window.location.origin)) return null
+  return /#pin\/([0-9a-f-]{36})/.exec(url)?.[1] ?? null
+}
+
+const pinLink = (post: Post) => `${window.location.origin}/#pin/${post.id}`
 
 function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
   return (
@@ -1077,6 +1107,7 @@ function PostView({ post }: { post: Post }) {
   const [flair, setFlair] = useState<Flair>(post.flair)
   const [doomedReply, setDoomedReply] = useState<string | null>(null) // a reply of mine waiting for "really?"
   const [reporting, setReporting] = useState(false)
+  const [sending, setSending] = useState(false) // choosing a friend to send the pin to
   const [history, setHistory] = useState<Revision[] | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
@@ -1276,10 +1307,38 @@ function PostView({ post }: { post: Post }) {
             <Icon name="chat" size={16} /> Message
           </button>
         )}
+        {me && friendIds().length > 0 && (
+          <button className={sending ? 'btn on' : 'btn'} onClick={() => setSending(!sending)} title="Send to a friend">
+            <Icon name="send" size={16} />
+          </button>
+        )}
         <button className="btn" onClick={copyLink} title="Copy link">
           <Icon name="link" size={16} />
         </button>
+        <a className="btn" href={directions(post)} target="_blank" rel="noreferrer noopener" title="Directions in your maps app">
+          <Icon name="arrow" size={16} /> Get there
+        </a>
       </div>
+
+      {sending && (
+        <div className="send-to">
+          <span className="muted small">Send to</span>
+          {friendIds().map((id) => (
+            <button
+              key={id}
+              className="chip-person"
+              onClick={async () => {
+                setSending(false)
+                if (await sendMessage(id, `${post.title} ${pinLink(post)}`)) toast(`Sent to ${firstName(id)}`)
+                else failed("Couldn't send")
+              }}
+            >
+              <Avatar id={id} size={22} />
+              {firstName(id)}
+            </button>
+          ))}
+        </div>
+      )}
 
       {mine && !editing && (
         <div className="actions">
@@ -1831,7 +1890,7 @@ function InboxView() {
               </div>
               <div className="clip muted">
                 {c.last.sender_id === S.userId && 'You: '}
-                {c.last.body}
+                {readable(c.last.body)}
               </div>
             </div>
             {c.unread > 0 && <b className="count">{c.unread}</b>}
@@ -2144,6 +2203,7 @@ function SettingsView() {
       <div className="keys">
         {[
           ['/', 'Search and commands'],
+          ['?', 'These keys'],
           ['N', 'New pin'],
           ['J K', 'Next, previous pin'],
           ['L', 'Where am I'],
@@ -2920,7 +2980,8 @@ export default function App() {
       if (k === '/') {
         e.preventDefault()
         ui({ palette: true })
-      } else if (k === 'n') startCompose()
+      } else if (k === '?') go('settings')
+      else if (k === 'n') startCompose()
       else if (k === 'l') locate()
       else if (k === 't') applyTheme(THEMES[(THEMES.findIndex((t) => t.id === UI.theme) + 1) % THEMES.length].id)
       else if (k === 'f') {
