@@ -302,6 +302,8 @@ type Label = {
   y: number
   angle: number
   length: number // world units of straight road available for the text
+  path: number[] | null // roads: the whole line in world units, for names that follow a bend
+  pathLength: number
   rank: number // lower goes first
   minZoom: number
   maxZoom: number
@@ -498,7 +500,7 @@ function collectLabels(tile: SourceTile) {
     const rank = PLACE_RANK[String(f.props.class)]
     if (!text || !rank || !inside(f.rings[0][0], f.rings[0][1])) continue
     tile.labels.push({
-      kind: 'place', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
+      kind: 'place', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
       rank: rank[0] * 10 + Number(f.props.rank ?? 0) / 10, minZoom: rank[1], maxZoom: rank[2], size: rank[3], icon: null, color: null,
     })
   }
@@ -508,7 +510,7 @@ function collectLabels(tile: SourceTile) {
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
     const cls = String(f.props.class)
     tile.labels.push({
-      kind: 'water', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
+      kind: 'water', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
       rank: cls === 'ocean' || cls === 'sea' ? 5 : 40, minZoom: cls === 'ocean' ? 3 : cls === 'sea' ? 6 : 13, maxZoom: 20,
       size: cls === 'ocean' || cls === 'sea' ? 15 : 12, icon: null, color: null,
     })
@@ -520,7 +522,7 @@ function collectLabels(tile: SourceTile) {
     const ele = Number(f.props.ele)
     tile.labels.push({
       kind: 'park', text: `▲ ${name}${ele ? ` ${Math.round(ele)} m` : ''}`, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]),
-      angle: 0, length: 0, rank: 60 + Number(f.props.rank ?? 0), minZoom: 10.5, maxZoom: 18, size: 11, icon: null, color: null,
+      angle: 0, length: 0, path: null, pathLength: 0, rank: 60 + Number(f.props.rank ?? 0), minZoom: 10.5, maxZoom: 18, size: 11, icon: null, color: null,
     })
   }
 
@@ -528,7 +530,7 @@ function collectLabels(tile: SourceTile) {
     const text = nameOf(f.props)
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
     tile.labels.push({
-      kind: 'park', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
+      kind: 'park', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
       rank: 70 + Number(f.props.rank ?? 0), minZoom: 14.5, maxZoom: 20, size: 11, icon: null, color: null,
     })
   }
@@ -542,7 +544,7 @@ function collectLabels(tile: SourceTile) {
     if (!icon || subclass === 'artwork' || subclass === 'bus_stop' || subclass === 'tram_stop') continue
     const rank = Number(f.props.rank ?? 30)
     tile.labels.push({
-      kind: 'poi', text: nameOf(f.props), x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
+      kind: 'poi', text: nameOf(f.props), x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, path: null, pathLength: 0,
       rank: 100 + rank, minZoom: rank <= 4 ? 15 : rank <= 12 ? 16 : 17, maxZoom: 20, size: 11, icon, color: POI_COLORS[icon] ?? '#888888',
     })
   }
@@ -595,8 +597,15 @@ function collectLabels(tile: SourceTile) {
       if (angle > Math.PI / 2) angle -= Math.PI
       if (angle < -Math.PI / 2) angle += Math.PI
 
+      const path: number[] = []
+      let pathLength = 0
+      for (let i = 0; i < ring.length; i += 2) {
+        path.push(toWorldX(ring[i]), toWorldY(ring[i + 1]))
+        if (i >= 2) pathLength += Math.hypot(ring[i] - ring[i - 2], ring[i + 1] - ring[i - 1]) / scale
+      }
+
       tile.labels.push({
-        kind: 'road', text, x: toWorldX(mx), y: toWorldY(my), angle, length: Math.hypot(bx - ax, by - ay) / scale,
+        kind: 'road', text, x: toWorldX(mx), y: toWorldY(my), angle, length: Math.hypot(bx - ax, by - ay) / scale, path, pathLength,
         rank: 50 + rank, minZoom: rank <= 2 ? 13 : rank <= 4 ? 14.5 : 15.5, maxZoom: 20, size: 11, icon: null, color: null,
       })
     }
@@ -1657,6 +1666,82 @@ function labelSprite(m: MapState, label: Label) {
   })
 }
 
+// One letter with its halo, for names that bend along a road.
+function glyphSprite(m: MapState, t: MapTheme, font: string, size: number, ch: string) {
+  const width = advance(font, ch) + 6
+  const height = size + 8
+  return sprite(m, `G${font}|${ch}`, width, height, (c) => {
+    c.font = font
+    c.textBaseline = 'middle'
+    c.textAlign = 'center'
+    c.lineJoin = 'round'
+    c.strokeStyle = t.labelHalo
+    c.lineWidth = t.blip === 'square' ? 3.5 : 3
+    c.strokeText(ch, width / 2, height / 2)
+    if (t.glow) {
+      c.shadowColor = t.glow
+      c.shadowBlur = 6
+    }
+    c.fillStyle = t.labelColor
+    c.fillText(ch, width / 2, height / 2)
+  })
+}
+
+const advances = new Map<string, number>()
+
+function advance(font: string, ch: string) {
+  const key = `${font}|${ch}`
+  let width = advances.get(key)
+  if (width === undefined) {
+    measurer.font = font
+    width = measurer.measureText(ch).width
+    advances.set(key, width)
+  }
+  return width
+}
+
+// Where each letter of a road name goes along the road: centred on the line,
+// reading left to right. Null when the road bends too sharply to read.
+function alongPath(m: MapState, path: number[], widths: number[], total: number) {
+  const size = worldSize(m)
+  let pts: number[] = []
+  for (let i = 0; i < path.length; i += 2) pts.push((path[i] - m.x) * size + m.width / 2, (path[i + 1] - m.y) * size + m.height / 2)
+  if (pts[pts.length - 2] < pts[0]) {
+    const reversed: number[] = []
+    for (let i = pts.length - 2; i >= 0; i -= 2) reversed.push(pts[i], pts[i + 1])
+    pts = reversed
+  }
+
+  const along = [0]
+  for (let i = 2; i < pts.length; i += 2) along.push(along[along.length - 1] + Math.hypot(pts[i] - pts[i - 2], pts[i + 1] - pts[i - 1]))
+  const length = along[along.length - 1]
+  if (length < total + 24) return null
+
+  const out: { x: number; y: number; angle: number }[] = []
+  let d = (length - total) / 2
+  let seg = 0
+  let last: number | null = null
+  for (const w of widths) {
+    const mid = d + w / 2
+    while (seg < along.length - 2 && along[seg + 1] < mid) seg++
+    const x0 = pts[seg * 2]
+    const y0 = pts[seg * 2 + 1]
+    const x1 = pts[seg * 2 + 2]
+    const y1 = pts[seg * 2 + 3]
+    const t = (mid - along[seg]) / (along[seg + 1] - along[seg] || 1)
+    const angle = Math.atan2(y1 - y0, x1 - x0)
+    if (last !== null) {
+      let turn = Math.abs(angle - last)
+      if (turn > Math.PI) turn = 2 * Math.PI - turn
+      if (turn > 0.5) return null
+    }
+    last = angle
+    out.push({ x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t, angle })
+    d += w
+  }
+  return out
+}
+
 // A blip: the badge a map puts on a place. The shape depends on the theme.
 function drawBadge(c: CanvasRenderingContext2D, t: MapTheme, cx: number, cy: number, r: number, color: string, icon: IconName, emphasis: boolean) {
   switch (t.blip) {
@@ -2266,9 +2351,49 @@ function frame(m: MapState, time: number) {
     const s = labelSprite(m, label)
 
     if (label.kind === 'road') {
-      if (label.length * size < s.width + 12) continue
       const seen = roadsPlaced.get(label.text)
       if (seen?.some((p) => Math.hypot(p.x - sx, p.y - sy) < 220)) continue
+
+      if (label.length * size < s.width + 12) {
+        // No straight stretch long enough: bend the name along the road instead.
+        if (!label.path || label.pathLength * size < s.width + 24) continue
+        const font = labelFont(t, label)
+        const text = [...labelText(t, label)]
+        const spacing = t.caps ? 0.8 : 0
+        const widths = text.map((ch) => advance(font, ch) + spacing)
+        const glyphs = alongPath(m, label.path, widths, widths.reduce((a, b) => a + b, 0))
+        if (!glyphs) continue
+
+        const half = label.size / 2 + 3
+        const box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }
+        for (const g of glyphs) {
+          box.x0 = Math.min(box.x0, g.x - half)
+          box.y0 = Math.min(box.y0, g.y - half)
+          box.x1 = Math.max(box.x1, g.x + half)
+          box.y1 = Math.max(box.y1, g.y + half)
+        }
+        if (hits(box)) continue
+        placed.push(box)
+        if (seen) seen.push({ x: sx, y: sy })
+        else roadsPlaced.set(label.text, [{ x: sx, y: sy }])
+
+        fadeIn(label)
+        const r = m.ratio
+        for (let i = 0; i < glyphs.length; i++) {
+          if (text[i] === ' ') continue
+          const g = glyphs[i]
+          const gs = glyphSprite(m, t, font, label.size, text[i])
+          const cos = Math.cos(g.angle)
+          const sin = Math.sin(g.angle)
+          c.setTransform(r * cos, r * sin, -r * sin, r * cos, r * g.x, r * g.y)
+          c.drawImage(gs.canvas, -gs.width / 2, -gs.height / 2, gs.width, gs.height)
+        }
+        c.setTransform(r, 0, 0, r, 0, 0)
+        c.globalAlpha = 1
+        drawn++
+        continue
+      }
+
       const cos = Math.abs(Math.cos(label.angle))
       const sin = Math.abs(Math.sin(label.angle))
       const hw = (s.width * cos + s.height * sin) / 2
