@@ -81,6 +81,7 @@ Press `T` to cycle, or pick one in Settings.
 | Metro      | Modern pause-menu atlas: dark slate, round blips, condensed type |
 | Frontier   | Hand-inked survey map on parchment: wobbly ink, hatched water, tree marks |
 | Phosphor   | Green CRT tracking screen with glow, scanlines and a sweep |
+| Neon Bay   | Eighties beachfront nights: hot pink roads glowing over purple, a low sunset |
 
 Each style changes the map, the blips and people, the whole interface, and the
 screen effect on top. The game styles cover the map in place blips from

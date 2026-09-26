@@ -189,6 +189,84 @@
   color-scheme: dark;
 }
 
+/* Neon Bay: purple dusk glass, hot pink and cyan, italic caps. */
+[data-theme='neon'] {
+  --bg: rgba(26, 11, 46, 0.86);
+  --bg-solid: #1a0b2e;
+  --bg2: rgba(255, 90, 217, 0.1);
+  --bg3: rgba(255, 90, 217, 0.18);
+  --fg: #ffe6f8;
+  --muted: #b88fcf;
+  --line: rgba(255, 90, 217, 0.18);
+  --line2: rgba(255, 90, 217, 0.36);
+  --accent: #ff4fcf;
+  --accent-fg: #1a0b2e;
+  --ok: #5cf5d6;
+  --danger: #ff5a6e;
+  --gold: #ffd35a;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 0 0 1px rgba(255, 90, 217, 0.35), 0 0 30px rgba(255, 46, 166, 0.18), 0 14px 34px rgba(0, 0, 0, 0.45);
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --font: 'Avenir Next', 'Trebuchet MS', system-ui, sans-serif;
+  --font-head: 'Futura', 'Avenir Next', 'Trebuchet MS', sans-serif;
+  --head-case: uppercase;
+  --head-spacing: 0.06em;
+  --head-weight: 800;
+  --text-shadow: 0 0 10px rgba(255, 79, 207, 0.6);
+  --blur: 12px;
+  --scrim: rgba(10, 0, 20, 0.6);
+  --field: rgba(0, 0, 0, 0.3);
+  --btn-bg: var(--bg2);
+  --pick: linear-gradient(90deg, #ff4fcf, #8af6ff);
+  --pick-fg: #1a0b2e;
+  color-scheme: dark;
+}
+
+[data-theme='neon'] h1,
+[data-theme='neon'] h2,
+[data-theme='neon'] .brand {
+  font-style: italic;
+}
+
+[data-theme='neon'] .blip {
+  background: #1a0b2e !important;
+  color: #ff6ad5;
+  box-shadow: 0 0 0 1.5px #ff6ad5, 0 0 10px rgba(255, 79, 207, 0.55);
+}
+
+[data-theme='neon'] .avatar img {
+  filter: saturate(1.4) hue-rotate(-20deg) contrast(1.1);
+}
+
+[data-theme='neon'] .palette-item.on {
+  background: var(--pick);
+  color: var(--pick-fg);
+}
+
+[data-theme='neon'] .fx {
+  /* A sunset low on the horizon, and faint scanlines. */
+  background: linear-gradient(0deg, rgba(255, 94, 135, 0.2), transparent 30%), repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.12) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse at center, transparent 55%, rgba(20, 0, 40, 0.55));
+}
+
+[data-theme='neon'] .banner-big strong {
+  background: linear-gradient(180deg, #fff 0%, #ff9ee8 45%, #ff4fcf 55%, #8af6ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-style: italic;
+  filter: drop-shadow(0 0 12px rgba(255, 79, 207, 0.8));
+}
+
+[data-theme='neon'] .banner-big span {
+  color: #8af6ff;
+  font-style: italic;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 8px rgba(138, 246, 255, 0.7);
+}
+
 * {
   box-sizing: border-box;
 }

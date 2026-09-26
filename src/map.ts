@@ -159,6 +159,7 @@ export type MapTheme = {
   blipInk: string // outline / glyph colour for blips
   poiAlpha: number
   me: string
+  photo: string // canvas filter that gives people's photos the map's look
 }
 
 const sans = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
@@ -174,7 +175,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#ffcf73', trunk: '#ffe29a', primary: '#fff3c4', secondary: '#ffffff', tertiary: '#ffffff', minor: '#ffffff', service: '#fbfaf7', path: '#c9bfae', rail: '#b9b4ab' },
     roadWidth: 1, wobble: 0, boundary: '#b7a6c9', glow: null,
     font: sans, labelColor: '#4a4d52', labelHalo: '#f3f1ec', placeColor: '#2b2d31', waterLabel: '#4f7ea3',
-    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.85, me: '#2f7cf6',
+    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.85, me: '#2f7cf6', photo: 'none',
   },
   night: {
     land: '#16181d', texture: 'none',
@@ -186,7 +187,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#6b5a33', trunk: '#4d4636', primary: '#3b3d44', secondary: '#34363d', tertiary: '#303239', minor: '#2a2c33', service: '#25272d', path: '#34373f', rail: '#3a3d45' },
     roadWidth: 1, wobble: 0, boundary: '#5b4d72', glow: null,
     font: sans, labelColor: '#8e96a3', labelHalo: '#16181d', placeColor: '#c5ccd6', waterLabel: '#4d7394',
-    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.75, me: '#4c9bff',
+    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.75, me: '#4c9bff', photo: 'none',
   },
   // Sun-bleached radar from a certain early-2000s west coast crime saga.
   coast: {
@@ -199,7 +200,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#d8d2bd', trunk: '#d0cab4', primary: '#c8c2ab', secondary: '#bfb9a3', tertiary: '#b8b29c', minor: '#aea893', service: '#a39e8a', path: '#9c966f', rail: '#4a473f' },
     roadWidth: 1.25, wobble: 0, boundary: '#3a3830', glow: null,
     font: '"Arial Black", "Helvetica Neue", Arial, sans-serif', labelColor: '#ffffff', labelHalo: '#1b1a17', placeColor: '#f4e7b8', waterLabel: '#d6e4f2',
-    caps: true, italic: false, blip: 'square', blipInk: '#111111', poiAlpha: 1, me: '#ffffff',
+    caps: true, italic: false, blip: 'square', blipInk: '#111111', poiAlpha: 1, me: '#ffffff', photo: 'saturate(1.3) contrast(1.1)',
   },
   // Pause-menu atlas of a modern sun-soaked sprawl.
   metro: {
@@ -212,7 +213,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#c2c7cc', trunk: '#b2b7bd', primary: '#9aa0a7', secondary: '#8a9097', tertiary: '#7b8188', minor: '#636970', service: '#565c63', path: '#4f555c', rail: '#4a5057' },
     roadWidth: 0.9, wobble: 0, boundary: '#717880', glow: null,
     font: '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, sans-serif', labelColor: '#e8ebee', labelHalo: '#1b1f24', placeColor: '#ffffff', waterLabel: '#a9c6e6',
-    caps: true, italic: false, blip: 'round', blipInk: '#ffffff', poiAlpha: 1, me: '#ffffff',
+    caps: true, italic: false, blip: 'round', blipInk: '#ffffff', poiAlpha: 1, me: '#ffffff', photo: 'none',
   },
   // A hand-inked survey map of the old frontier.
   frontier: {
@@ -225,7 +226,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#4a3624', trunk: '#4a3624', primary: '#523d29', secondary: '#5a4430', tertiary: '#634c36', minor: '#6f573f', service: '#7d6549', path: '#7d6549', rail: '#3b2a1b' },
     roadWidth: 0.55, wobble: 1.4, boundary: '#8a4b32', glow: null,
     font: '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif', labelColor: '#3f2e1e', labelHalo: '#dcc9a0', placeColor: '#2e2115', waterLabel: '#3f4c43',
-    caps: false, italic: true, blip: 'stamp', blipInk: '#3f2e1e', poiAlpha: 0.9, me: '#8f2b1c',
+    caps: false, italic: true, blip: 'stamp', blipInk: '#3f2e1e', poiAlpha: 0.9, me: '#8f2b1c', photo: 'sepia(0.8) contrast(0.95)',
   },
   // Green phosphor tracking screen.
   radar: {
@@ -239,6 +240,21 @@ export const mapThemes: Record<string, MapTheme> = {
     roadWidth: 0.45, wobble: 0, boundary: '#2ca25d', glow: '#2dff88',
     font: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace', labelColor: '#6dffaa', labelHalo: '#030b06', placeColor: '#b4ffd2', waterLabel: '#3fd67c',
     caps: true, italic: false, blip: 'ring', blipInk: '#6dffaa', poiAlpha: 0.9, me: '#b4ffd2',
+    photo: 'grayscale(1) sepia(1) hue-rotate(80deg) saturate(3) brightness(0.9)',
+  },
+  // Beachfront nights in the eighties: hot pink roads glowing over a purple dusk.
+  neon: {
+    land: '#1a0b2e', texture: 'none',
+    water: '#0b2346', waterShore: '#19e3ff', waterHatch: null,
+    wood: '#1f1236', woodMarks: null, grass: '#1f1236', park: '#241342', sand: '#2b1640', farm: '#1c0f30',
+    residential: null, commercial: '#210f38', industrial: '#1f0f33', institution: '#221038', pitch: '#291549',
+    building: '#28144a', buildingLine: '#4f2479', buildingShadow: null,
+    casing: null,
+    road: { motorway: '#ff5ad9', trunk: '#ff4fd0', primary: '#ff3fa4', secondary: '#e23d9e', tertiary: '#bf3a92', minor: '#83308c', service: '#622775', path: '#4d2263', rail: '#19e3ff' },
+    roadWidth: 0.55, wobble: 0, boundary: '#19e3ff', glow: '#ff2ea6',
+    font: '"Futura", "Avenir Next", "Trebuchet MS", sans-serif', labelColor: '#ffd8f4', labelHalo: '#1a0b2e', placeColor: '#8af6ff', waterLabel: '#8af6ff',
+    caps: true, italic: true, blip: 'ring', blipInk: '#ff6ad5', poiAlpha: 0.95, me: '#8af6ff',
+    photo: 'saturate(1.4) hue-rotate(-20deg) contrast(1.1)',
   },
 }
 
@@ -1850,7 +1866,7 @@ function drawBadge(c: CanvasRenderingContext2D, t: MapTheme, cx: number, cy: num
       c.shadowBlur = 8
       c.beginPath()
       c.arc(cx, cy, r, 0, Math.PI * 2)
-      c.fillStyle = 'rgba(3,11,6,0.85)'
+      c.fillStyle = t.land
       c.fill()
       c.strokeStyle = t.blipInk
       c.lineWidth = 1.5
@@ -2008,7 +2024,7 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
 // Several pins too close to tell apart at this zoom: one badge with how many threads.
 function drawCluster(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean) {
   const r = Math.min(24, 13 + Math.sqrt(marker.count) * 3) * (hover ? 1.1 : 1)
-  const fill = t.blip === 'stamp' ? '#e9d8b0' : t.blip === 'ring' ? '#031009' : t.blip === 'square' ? '#111' : '#1d1f24'
+  const fill = t.blip === 'stamp' ? '#e9d8b0' : t.blip === 'ring' ? t.land : t.blip === 'square' ? '#111' : '#1d1f24'
   const ink = t.blip === 'stamp' || t.blip === 'ring' ? t.blipInk : '#fff'
 
   c.save()
@@ -2091,12 +2107,6 @@ function photo(m: MapState, url: string) {
   return img.complete && img.naturalWidth > 0 ? img : null
 }
 
-// Photos take on the map's look: sepia ink, green phosphor.
-const PHOTO_FILTER: Partial<Record<BlipStyle, string>> = {
-  stamp: 'sepia(0.8) contrast(0.95)',
-  ring: 'grayscale(1) sepia(1) hue-rotate(80deg) saturate(3) brightness(0.9)',
-}
-
 function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean, img: HTMLImageElement | null) {
   const r = hover ? 17 : 15
   c.save()
@@ -2106,20 +2116,20 @@ function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx
   c.beginPath()
   if (t.blip === 'square') c.rect(sx - r, sy - r, 2 * r, 2 * r)
   else c.arc(sx, sy, r, 0, Math.PI * 2)
-  c.fillStyle = t.blip === 'ring' ? '#041109' : '#fff'
+  c.fillStyle = t.blip === 'ring' ? t.land : '#fff'
   c.fill()
   c.shadowColor = 'transparent'
   c.beginPath()
   if (t.blip === 'square') c.rect(sx - r + 2.5, sy - r + 2.5, 2 * r - 5, 2 * r - 5)
   else c.arc(sx, sy, r - 2.5, 0, Math.PI * 2)
-  c.fillStyle = t.blip === 'ring' ? '#0b3a22' : marker.color
+  c.fillStyle = t.blip === 'ring' ? t.buildingLine ?? t.land : marker.color
   c.fill()
   c.textAlign = 'center'
   c.textBaseline = 'middle'
   if (img) {
     c.save()
     c.clip()
-    c.filter = PHOTO_FILTER[t.blip] ?? 'none'
+    c.filter = t.photo // photos take on the map's look: sepia ink, green phosphor
     c.drawImage(img, sx - r + 2.5, sy - r + 2.5, 2 * r - 5, 2 * r - 5)
     c.restore()
   } else {

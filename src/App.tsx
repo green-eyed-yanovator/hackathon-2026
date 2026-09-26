@@ -33,6 +33,7 @@ const THEMES = [
   { id: 'metro', name: 'Metro', note: 'Pause-menu atlas of a modern sprawl' },
   { id: 'frontier', name: 'Frontier', note: 'Hand-inked survey map on parchment' },
   { id: 'radar', name: 'Phosphor', note: 'Green CRT tracking screen' },
+  { id: 'neon', name: 'Neon Bay', note: 'Eighties beachfront nights, pink and cyan' },
 ]
 
 function readRoute() {
