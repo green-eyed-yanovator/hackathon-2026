@@ -781,6 +781,37 @@ button.row:hover,
   gap: 3px;
 }
 
+.when {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.when.now {
+  color: #16a34a;
+}
+
+.when-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: color-mix(in srgb, var(--accent) 75%, var(--fg));
+  font-size: 14px;
+}
+
+.when-line.now {
+  background: color-mix(in srgb, #16a34a 14%, transparent);
+  color: #16a34a;
+}
+
+.when-field {
+  margin: 10px 0 0;
+}
+
 .dot {
   width: 8px;
   height: 8px;

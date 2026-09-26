@@ -82,6 +82,7 @@ export const icons = {
   send: 'M2 21l21-9L2 3v7l15 2-15 2z',
   image: '!M3 4h18v16H3zM5 6v12h14V6zM6 16l4-5 3 3.5 2-2.5 3 4zM8.5 8a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z',
   pin: '!M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zM12 6.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 1 0 0-5z',
+  calendar: '!M4 5h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM5 10v9h14v-9zM7 2h2v3H7zM15 2h2v3h-2zM7 12h3v3H7z',
   list: 'M3 5h2v2H3zM7 5h14v2H7zM3 11h2v2H3zM7 11h14v2H7zM3 17h2v2H3zM7 17h14v2H7z',
   logout: 'M4 3h9v2H6v14h7v2H4zM15 7l5 5-5 5-1.4-1.4 2.6-2.6H9v-2h7.2l-2.6-2.6z',
   arrow: 'M12 2l7 19-7-4-7 4z',

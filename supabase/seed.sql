@@ -9,6 +9,17 @@
 --
 --   delete from auth.users where email like '%@aroundhere.demo';
 
+-- The next time it's this weekday and hour in Adelaide (0 is Sunday), for event times.
+create function pg_temp.next_local(dow int, hour float8) returns timestamptz
+language sql as $$
+  select case when t < now() then t + interval '7 days' else t end
+  from (
+    select (date_trunc('day', now() at time zone 'Australia/Adelaide')
+      + ((dow - extract(dow from now() at time zone 'Australia/Adelaide')::int + 7) % 7) * interval '1 day'
+      + hour * interval '1 hour') at time zone 'Australia/Adelaide' as t
+  ) next
+$$;
+
 do $$
 declare
   maya uuid := 'd0000000-0000-4000-8000-000000000001';
@@ -57,35 +68,35 @@ begin
   end loop;
 
   -- Pins. Each gets its own place, like the app does for a new spot.
-  create temporary table demo_posts (author uuid, title text, body text, flair text, lat float8, lng float8, age interval, resolved boolean) on commit drop;
+  create temporary table demo_posts (author uuid, title text, body text, flair text, lat float8, lng float8, age interval, resolved boolean, starts timestamptz) on commit drop;
   insert into demo_posts values
-    (priya, 'Dumpling night, three spare seats', 'Making way too many pork and chive dumplings tonight at 7. Bring a drink, I''ll bring the chilli oil.', 'food', -34.92905, 138.59745, '3 hours', false),
-    (maya, 'Lost: grey tabby called Miso', 'Hasn''t come home since Tuesday night. Very friendly, blue collar with a bell. Please check sheds and garages!', 'lost', -34.92231, 138.61912, '20 hours', false),
-    (hannah, 'Street clean-up, Saturday 9am', 'Meeting at the Hutt St end of the park. Gloves, bags and grabbers provided, coffee after.', 'event', -34.93615, 138.61226, '1 day', false),
-    (ben, 'Pickup soccer, Tuesday 6pm', 'Rymill Park, near the lake. We usually have 10 to 14 people, all levels. Bring a light and a dark shirt.', 'sports', -34.92352, 138.61351, '2 days', false),
-    (lucas, 'Looking for a drummer', 'Trio playing soul and funk covers, rehearsing Thursdays in Norwood. No gear needed, we have a kit.', 'music', -34.92108, 138.63118, '5 hours', false),
-    (tom, 'Did anyone else hear the fireworks?', 'Around 11pm last night, sounded like it came from the parklands. Anyone know what the occasion was?', 'general', -34.90712, 138.59522, '14 hours', false),
-    (maya, 'A bench for the corner of Rundle St?', 'Thinking of asking council for a bench under the plane tree. Tap interested if you''d use it, I''ll take the numbers along.', 'general', -34.92248, 138.60772, '2 days', false),
-    (hannah, 'Farmers market this Sunday', 'The Wayville market is on from 8. Best sourdough in town at the stall by the gate, get there early.', 'food', -34.94335, 138.58583, '9 hours', false),
-    (tom, 'Outdoor cinema in the park, Friday', 'Bring a blanket. It''s an 80s classic this week, starts when it gets dark.', 'event', -34.92478, 138.61702, '6 hours', false),
-    (ben, 'Found: keys on a red lanyard', 'Picked them up outside the Mall''s Balls. Message me with what''s on the keyring.', 'lost', -34.92265, 138.60101, '4 hours', false),
-    (tom, 'Morning run club, 6:30', 'Meet at the university footbridge, 5k along the river at an easy pace. No one gets left behind.', 'sports', -34.91719, 138.60368, '3 days', false),
-    (priya, 'The busker on Rundle Mall is incredible', 'Cellist near the Beehive Corner playing Radiohead. Go now if you can.', 'music', -34.92226, 138.60449, '40 minutes', false),
-    (hannah, 'Power out on Hutt St?', 'Whole block just went dark, anyone else?', 'general', -34.93123, 138.61022, '1 day', true),
-    (maya, 'Too many zucchinis, come grab some', 'Box on the front fence. Free, take as many as you want, seriously.', 'food', -34.91955, 138.62245, '7 hours', false),
-    (lucas, 'Garage sale, everything must go', 'Moving house! Records, a couch, plants, a slightly haunted lamp. Saturday 8 to 2.', 'event', -34.91842, 138.63512, '1 day', false),
-    (priya, 'New cafe opening on King William', 'Soft opening tomorrow, free coffee for the first 50. The pastries looked unreal.', 'food', -34.92765, 138.59992, '2 hours', false),
-    (ben, 'Anyone up for tennis this weekend?', 'Booked a court at the North Adelaide courts for Sunday 10am, need a doubles partner.', 'sports', -34.90998, 138.59263, '11 hours', false),
-    (lucas, 'Open mic at the pub, Wednesday', 'First one in ages. Sign-up sheet at the bar from 7, bring your songs.', 'music', -34.92311, 138.62642, '1 day', false);
+    (priya, 'Dumpling night, three spare seats', 'Making way too many pork and chive dumplings tonight at 7. Bring a drink, I''ll bring the chilli oil.', 'food', -34.92905, 138.59745, '3 hours', false, pg_temp.next_local(extract(dow from now() at time zone 'Australia/Adelaide')::int, 19)),
+    (maya, 'Lost: grey tabby called Miso', 'Hasn''t come home since Tuesday night. Very friendly, blue collar with a bell. Please check sheds and garages!', 'lost', -34.92231, 138.61912, '20 hours', false, null),
+    (hannah, 'Street clean-up, Saturday 9am', 'Meeting at the Hutt St end of the park. Gloves, bags and grabbers provided, coffee after.', 'event', -34.93615, 138.61226, '1 day', false, pg_temp.next_local(6, 9)),
+    (ben, 'Pickup soccer, Tuesday 6pm', 'Rymill Park, near the lake. We usually have 10 to 14 people, all levels. Bring a light and a dark shirt.', 'sports', -34.92352, 138.61351, '2 days', false, pg_temp.next_local(2, 18)),
+    (lucas, 'Looking for a drummer', 'Trio playing soul and funk covers, rehearsing Thursdays in Norwood. No gear needed, we have a kit.', 'music', -34.92108, 138.63118, '5 hours', false, pg_temp.next_local(4, 19)),
+    (tom, 'Did anyone else hear the fireworks?', 'Around 11pm last night, sounded like it came from the parklands. Anyone know what the occasion was?', 'general', -34.90712, 138.59522, '14 hours', false, null),
+    (maya, 'A bench for the corner of Rundle St?', 'Thinking of asking council for a bench under the plane tree. Tap interested if you''d use it, I''ll take the numbers along.', 'general', -34.92248, 138.60772, '2 days', false, null),
+    (hannah, 'Farmers market this Sunday', 'The Wayville market is on from 8. Best sourdough in town at the stall by the gate, get there early.', 'food', -34.94335, 138.58583, '9 hours', false, pg_temp.next_local(0, 8)),
+    (tom, 'Outdoor cinema in the park, Friday', 'Bring a blanket. It''s an 80s classic this week, starts when it gets dark.', 'event', -34.92478, 138.61702, '6 hours', false, pg_temp.next_local(5, 19.5)),
+    (ben, 'Found: keys on a red lanyard', 'Picked them up outside the Mall''s Balls. Message me with what''s on the keyring.', 'lost', -34.92265, 138.60101, '4 hours', false, null),
+    (tom, 'Morning run club, 6:30', 'Meet at the university footbridge, 5k along the river at an easy pace. No one gets left behind.', 'sports', -34.91719, 138.60368, '3 days', false, pg_temp.next_local(6, 6.5)),
+    (priya, 'The busker on Rundle Mall is incredible', 'Cellist near the Beehive Corner playing Radiohead. Go now if you can.', 'music', -34.92226, 138.60449, '40 minutes', false, null),
+    (hannah, 'Power out on Hutt St?', 'Whole block just went dark, anyone else?', 'general', -34.93123, 138.61022, '1 day', true, null),
+    (maya, 'Too many zucchinis, come grab some', 'Box on the front fence. Free, take as many as you want, seriously.', 'food', -34.91955, 138.62245, '7 hours', false, null),
+    (lucas, 'Garage sale, everything must go', 'Moving house! Records, a couch, plants, a slightly haunted lamp. Saturday 8 to 2.', 'event', -34.91842, 138.63512, '1 day', false, pg_temp.next_local(6, 8)),
+    (priya, 'New cafe opening on King William', 'Soft opening tomorrow, free coffee for the first 50. The pastries looked unreal.', 'food', -34.92765, 138.59992, '2 hours', false, null),
+    (ben, 'Anyone up for tennis this weekend?', 'Booked a court at the North Adelaide courts for Sunday 10am, need a doubles partner.', 'sports', -34.90998, 138.59263, '11 hours', false, pg_temp.next_local(0, 10)),
+    (lucas, 'Open mic at the pub, Wednesday', 'First one in ages. Sign-up sheet at the bar from 7, bring your songs.', 'music', -34.92311, 138.62642, '1 day', false, pg_temp.next_local(3, 19));
 
   for p in select * from demo_posts loop
     with place as (
       insert into public.places (latitude, longitude, created_at) values (p.lat, p.lng, now() - p.age) returning id
     )
-    insert into public.posts (place_id, title, description, latitude, longitude, flair, author_id, author_name, created_at, resolved_at)
+    insert into public.posts (place_id, title, description, latitude, longitude, flair, author_id, author_name, created_at, resolved_at, starts_at)
     select place.id, p.title, p.body, p.lat, p.lng, p.flair, p.author,
       (select display_name from public.profiles where id = p.author), now() - p.age,
-      case when p.resolved then now() - p.age + interval '2 hours' end
+      case when p.resolved then now() - p.age + interval '2 hours' end, p.starts
     from place;
   end loop;
 

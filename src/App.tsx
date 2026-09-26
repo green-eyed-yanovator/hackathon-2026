@@ -194,6 +194,37 @@ function meters(m: number) {
   return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`
 }
 
+// "Today, 7:00 pm", "Tomorrow, 9:00 am", "Saturday, 9:00 am", or a date further out.
+function whenText(iso: string) {
+  const d = new Date(iso)
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((startOfDay(d) - startOfDay(new Date())) / 86400000)
+  const day =
+    days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days === -1 ? 'Yesterday'
+    : days > 1 && days < 7 ? d.toLocaleDateString(undefined, { weekday: 'long' })
+    : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+  return `${day}, ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+}
+
+// The short version for lists: "now", "in 40m", "in 3h", then the day. Null once it's long over.
+function soonText(iso: string) {
+  const minutes = (time(iso) - Date.now()) / 60000
+  if (minutes < -180) return null
+  if (minutes < 0) return 'now'
+  if (minutes < 60) return `in ${Math.max(1, Math.round(minutes))}m`
+  if (minutes < 12 * 60) return `in ${Math.round(minutes / 60)}h`
+  const d = new Date(iso)
+  if (minutes < 6 * 24 * 60) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric' })}`
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+// datetime-local inputs speak local time without a zone; these convert both ways.
+const toLocalInput = (iso: string) => {
+  const d = new Date(iso)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+const fromLocalInput = (value: string) => (value ? new Date(value).toISOString() : null)
+
 const awayText = (m: number) => (m < 50 ? 'right here' : `${meters(m)} away`)
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
@@ -575,6 +606,7 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
   const replies = st.replies.get(post.id) ?? 0
   const interested = st.interested.get(post.id) ?? 0
   const unread = st.unread.has(post.id)
+  const soon = post.starts_at && !post.resolved_at ? soonText(post.starts_at) : null
   const key = placeKey(post)
 
   return (
@@ -614,6 +646,11 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
             </span>
           )}
           <span className="nowrap">{meters(away)}</span>
+          {soon && (
+            <span className={soon === 'now' ? 'when now' : 'when'}>
+              <Icon name="calendar" size={12} /> {soon}
+            </span>
+          )}
           {unread && <i className="dot" title="New activity" />}
         </div>
       </div>
@@ -751,6 +788,7 @@ function PostView({ post }: { post: Post }) {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(post.title)
   const [body, setBody] = useState(post.description)
+  const [starts, setStarts] = useState(post.starts_at ? toLocalInput(post.starts_at) : '')
   const [history, setHistory] = useState<Revision[] | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
@@ -767,6 +805,7 @@ function PostView({ post }: { post: Post }) {
   const f = flairs[post.flair] ?? flairs.general
   const street = map ? nearestStreet(map, post.longitude, post.latitude) : ''
   const away = S.here ? distance(S.here.latitude, S.here.longitude, post.latitude, post.longitude) : null
+  const soon = post.starts_at ? soonText(post.starts_at) : null
 
   // Opening a pin reads its notifications.
   const unread = S.notifications.filter((n) => n.post_id === post.id && !n.read_at).map((n) => n.id).join(',')
@@ -776,7 +815,7 @@ function PostView({ post }: { post: Post }) {
 
   async function save() {
     if (!title.trim()) return
-    if (await updatePost(post.id, { title: title.trim(), description: body.trim() })) {
+    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), starts_at: fromLocalInput(starts) })) {
       setEditing(false)
       setHistory(null)
     } else failed("Couldn't save")
@@ -856,6 +895,10 @@ function PostView({ post }: { post: Post }) {
         <div className="stack">
           <input className="input title-input" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} autoFocus />
           <textarea className="input" rows={5} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
+          <label className="field when-field">
+            <span>When</span>
+            <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+          </label>
           <div className="btn-row">
             <button className="btn" onClick={() => setEditing(false)}>
               Cancel
@@ -868,6 +911,15 @@ function PostView({ post }: { post: Post }) {
       ) : (
         <>
           <h1 className="post-title">{post.title}</h1>
+          {post.starts_at && (
+            <div className={soon === 'now' ? 'when-line now' : 'when-line'}>
+              <Icon name="calendar" size={16} />
+              <strong>{whenText(post.starts_at)}</strong>
+              {soon === null && <span className="muted">· over</span>}
+              {soon === 'now' && <span>· happening now</span>}
+              {soon?.startsWith('in ') && <span className="muted">· {soon}</span>}
+            </div>
+          )}
           {post.description && (
             <p className="post-body">
               <Linked text={post.description} />
@@ -1651,6 +1703,7 @@ function ComposeView() {
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [flair, setFlair] = useState<Flair>('general')
+  const [starts, setStarts] = useState('')
   const [attached, setAttached] = useState<{ file: File; url: string }[]>([])
   const [busy, setBusy] = useState(false)
 
@@ -1678,7 +1731,7 @@ function ComposeView() {
   async function submit() {
     if (!title.trim() || busy) return
     setBusy(true)
-    const post = await createPost({ title: title.trim(), description: body.trim(), flair, latitude: draft.latitude, longitude: draft.longitude, files: attached.map((a) => a.file) })
+    const post = await createPost({ title: title.trim(), description: body.trim(), flair, startsAt: fromLocalInput(starts), latitude: draft.latitude, longitude: draft.longitude, files: attached.map((a) => a.file) })
     setBusy(false)
     if (!post) {
       failed("Couldn't post")
@@ -1730,7 +1783,13 @@ function ComposeView() {
       </div>
 
       <input className="input title-input" placeholder="What's happening?" value={title} maxLength={120} autoFocus={!narrow()} onChange={(e) => setTitle(e.target.value)} />
-      <textarea className="input" rows={5} placeholder="Details: when, where exactly, who should come…" value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
+      <textarea className="input" rows={5} placeholder="Details: where exactly, who should come, what to bring…" value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
+      <label className="field when-field">
+        <span>
+          When <em className="muted">· optional, for things that happen at a time</em>
+        </span>
+        <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+      </label>
 
       <label className="drop">
         <input type="file" accept="image/*,video/*" multiple onChange={(e) => attach(e.target.files)} />

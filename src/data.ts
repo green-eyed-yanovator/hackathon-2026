@@ -27,6 +27,7 @@ export type Post = {
   resolved_at: string | null
   place_id: string | null // posts within ~30 m share a place and one marker
   flair: Flair
+  starts_at: string | null // when it happens, for events and meetups
 }
 
 export type Reply = {
@@ -426,7 +427,7 @@ function forgetPost(postId: string) {
   changed()
 }
 
-export type Draft = { title: string; description: string; flair: Flair; latitude: number; longitude: number; files: File[] }
+export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; latitude: number; longitude: number; files: File[] }
 
 export async function createPost(draft: Draft) {
   // Posts within 30 m of an existing place join it and share its marker.
@@ -452,7 +453,7 @@ export async function createPost(draft: Draft) {
 
   const { data: post, error } = await supabase
     .from('posts')
-    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair })
+    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt })
     .select()
     .single()
   if (error) {
@@ -485,7 +486,7 @@ export async function createPost(draft: Draft) {
   return post as Post
 }
 
-export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at'>>) {
+export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at'>>) {
   const { data, error } = await supabase.from('posts').update(patch).eq('id', id).select().single()
   if (error) return fail("Couldn't save the change", error)
   upsert(S.posts, data as Post, byId, true)
