@@ -311,6 +311,7 @@ type Label = {
   length: number // world units of straight road available for the text
   rank: number // lower goes first
   minZoom: number
+  maxZoom: number
   size: number
   icon: IconName | null
   color: string | null
@@ -473,11 +474,11 @@ function nameOf(props: Props) {
   return typeof name === 'string' ? name : ''
 }
 
-const PLACE_RANK: Record<string, [number, number, number]> = {
-  // class: [priority, min zoom, font size]
-  country: [0, 3, 14], state: [1, 5, 13], city: [2, 6, 17], town: [3, 9, 15],
-  village: [5, 11, 13], suburb: [4, 12, 13], quarter: [6, 14, 12], neighbourhood: [7, 14.5, 12],
-  hamlet: [8, 13, 12], island: [6, 10, 12], locality: [9, 15, 11], isolated_dwelling: [10, 16, 11],
+const PLACE_RANK: Record<string, [number, number, number, number]> = {
+  // class: [priority, min zoom, max zoom, font size]
+  country: [0, 3, 8, 14], state: [1, 5, 10, 13], city: [2, 6, 16.5, 17], town: [3, 9, 17, 15],
+  village: [5, 11, 18, 13], suburb: [4, 12, 18, 13], quarter: [6, 14, 19, 12], neighbourhood: [7, 14.5, 19, 12],
+  hamlet: [8, 13, 19, 12], island: [6, 10, 20, 12], locality: [9, 15, 20, 11], isolated_dwelling: [10, 16, 20, 11],
 }
 
 const ROAD_RANK: Record<string, number> = { motorway: 0, trunk: 1, primary: 2, secondary: 3, tertiary: 4, minor: 5, service: 7, path: 8 }
@@ -494,7 +495,7 @@ function collectLabels(tile: SourceTile) {
     if (!text || !rank || !inside(f.rings[0][0], f.rings[0][1])) continue
     tile.labels.push({
       kind: 'place', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
-      rank: rank[0] * 10 + Number(f.props.rank ?? 0) / 10, minZoom: rank[1], size: rank[2], icon: null, color: null,
+      rank: rank[0] * 10 + Number(f.props.rank ?? 0) / 10, minZoom: rank[1], maxZoom: rank[2], size: rank[3], icon: null, color: null,
     })
   }
 
@@ -504,7 +505,7 @@ function collectLabels(tile: SourceTile) {
     const cls = String(f.props.class)
     tile.labels.push({
       kind: 'water', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
-      rank: cls === 'ocean' || cls === 'sea' ? 5 : 40, minZoom: cls === 'ocean' ? 3 : cls === 'sea' ? 6 : 13,
+      rank: cls === 'ocean' || cls === 'sea' ? 5 : 40, minZoom: cls === 'ocean' ? 3 : cls === 'sea' ? 6 : 13, maxZoom: 20,
       size: cls === 'ocean' || cls === 'sea' ? 15 : 12, icon: null, color: null,
     })
   }
@@ -514,7 +515,7 @@ function collectLabels(tile: SourceTile) {
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
     tile.labels.push({
       kind: 'park', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
-      rank: 70 + Number(f.props.rank ?? 0), minZoom: 14.5, size: 11, icon: null, color: null,
+      rank: 70 + Number(f.props.rank ?? 0), minZoom: 14.5, maxZoom: 20, size: 11, icon: null, color: null,
     })
   }
 
@@ -528,7 +529,7 @@ function collectLabels(tile: SourceTile) {
     const rank = Number(f.props.rank ?? 30)
     tile.labels.push({
       kind: 'poi', text: nameOf(f.props), x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0,
-      rank: 100 + rank, minZoom: rank <= 4 ? 15 : rank <= 12 ? 16 : 17, size: 11, icon, color: POI_COLORS[icon] ?? '#888888',
+      rank: 100 + rank, minZoom: rank <= 4 ? 15 : rank <= 12 ? 16 : 17, maxZoom: 20, size: 11, icon, color: POI_COLORS[icon] ?? '#888888',
     })
   }
 
@@ -582,7 +583,7 @@ function collectLabels(tile: SourceTile) {
 
       tile.labels.push({
         kind: 'road', text, x: toWorldX(mx), y: toWorldY(my), angle, length: Math.hypot(bx - ax, by - ay) / scale,
-        rank: 50 + rank, minZoom: rank <= 2 ? 13 : rank <= 4 ? 14.5 : 15.5, size: 11, icon: null, color: null,
+        rank: 50 + rank, minZoom: rank <= 2 ? 13 : rank <= 4 ? 14.5 : 15.5, maxZoom: 20, size: 11, icon: null, color: null,
       })
     }
   }
@@ -1418,7 +1419,8 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
     else roads[rc].push(f)
   }
 
-  const widthOf = (rc: RoadClass) => Math.max(0.6, ROAD_BASE[rc][0] * 2 ** ((z - 16) * 0.75) * t.roadWidth)
+  // Roads widen with zoom, but slower past street level so they don't swallow the blocks.
+  const widthOf = (rc: RoadClass) => Math.max(0.6, ROAD_BASE[rc][0] * 2 ** ((Math.min(z, 17) - 16) * 0.75 + (Math.max(z, 17) - 17) * 0.4) * t.roadWidth)
 
   if (t.glow) {
     ctx.shadowColor = t.glow
@@ -2027,7 +2029,7 @@ function frame(m: MapState, time: number) {
 
   for (const label of labels) {
     if (drawn > 140) break
-    if (m.zoom < label.minZoom) continue
+    if (m.zoom < label.minZoom || m.zoom > label.maxZoom) continue
     if (label.kind === 'poi' && !showPoi) continue
     const sx = (label.x - m.x) * size + m.width / 2
     const sy = (label.y - m.y) * size + m.height / 2
