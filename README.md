@@ -208,5 +208,8 @@ Where people are and when they're around is the sensitive part, so:
 - **"Typing…" uses a private realtime channel** that only the two people in
   the chat may join (policies on `realtime.messages`).
 - Blocks are private to the blocker, and `notify` stops at them.
+- **Profile photos only come from the project's own storage.** The column can
+  be written directly, and a photo on someone's own server would tell them who
+  looked at it; the app shows initials instead.
 
 Map data © OpenStreetMap contributors, tiles by OpenFreeMap.

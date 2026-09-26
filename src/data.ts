@@ -28,6 +28,12 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseKey)
 
+// A profile photo is only ever one of ours, from the avatars bucket. The column can
+// be written directly, and a photo from someone's own server would tell them who
+// looked at it, and when.
+const avatars = `${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/public/avatars/`
+const ownPhotoOnly = (p: Profile): Profile => (p.avatar_url && !p.avatar_url.startsWith(avatars) ? { ...p, avatar_url: null } : p)
+
 export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
 
 export type Post = {
@@ -320,7 +326,7 @@ async function loadPublic() {
   S.media = media.data ?? []
   S.interests = interests.data ?? []
   S.likes = likes.data ?? []
-  S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, p]))
+  S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, ownPhotoOnly(p)]))
   S.ready = true
   changed()
   remindSoon()
@@ -379,7 +385,7 @@ function subscribePublic() {
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
       if (payload.eventType === 'DELETE') S.profiles.delete((payload.old as Profile).id)
-      else S.profiles.set((payload.new as Profile).id, payload.new as Profile)
+      else S.profiles.set((payload.new as Profile).id, ownPhotoOnly(payload.new as Profile))
       changed()
     })
     .subscribe()
@@ -850,7 +856,7 @@ export async function saveProfile(patch: Partial<Pick<Profile, 'display_name' | 
   const { data, error } = await supabase.from('profiles').update(patch).eq('id', S.userId!).select().single()
   if (error) return fail("Couldn't save your profile", error)
   const profile = data as Profile
-  S.profiles.set(profile.id, profile)
+  S.profiles.set(profile.id, ownPhotoOnly(profile))
   // The database renames old posts and replies too; mirror that here.
   for (const post of S.posts) if (post.author_id === profile.id) post.author_name = profile.display_name
   for (const r of S.replies) if (r.author_id === profile.id) r.author_name = profile.display_name
