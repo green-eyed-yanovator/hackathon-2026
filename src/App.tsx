@@ -1704,7 +1704,7 @@ function FriendsView() {
             <div>
               <span>{p.display_name}</span>
               <div className="muted small">
-                {[p.neighbourhood, nearest.has(p.id) && `pins ${meters(nearest.get(p.id)!)} away`].filter(Boolean).join(' · ')}
+                {[p.neighbourhood, nearest.has(p.id) && `pins ${awayText(nearest.get(p.id)!)}`].filter(Boolean).join(' · ')}
               </div>
             </div>
           </button>
