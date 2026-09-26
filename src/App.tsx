@@ -705,6 +705,7 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
   const interested = st.interested.get(post.id) ?? 0
   const unread = st.unread.has(post.id)
   const soon = post.starts_at && !post.resolved_at ? soonText(post.starts_at) : null
+  const photo = S.media.find((m) => m.post_id === post.id && m.media_type === 'image')
   const key = placeKey(post)
 
   return (
@@ -752,6 +753,7 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
           {unread && <i className="dot" title="New activity" />}
         </div>
       </div>
+      {photo && <img className="row-thumb" src={photo.url} alt="" loading="lazy" />}
     </button>
   )
 }
@@ -2403,6 +2405,7 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
   if (!posts.length || (UI.route.kind === 'pin' && posts.some((p) => p.id === UI.route.id))) return null
   const post = posts[0]
   const replies = stats().replies.get(post.id) ?? 0
+  const photo = S.media.find((m) => m.post_id === post.id && m.media_type === 'image')
 
   return (
     <div className="hover-card" ref={cardRef}>
@@ -2413,6 +2416,7 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
         {nameOf(post.author_id, post.author_name)} · {ago(post.created_at)}
         {replies > 0 && ` · ${plural(replies, 'reply', 'replies')}`}
       </div>
+      {photo && <img className="hover-photo" src={photo.url} alt="" />}
       {post.description && <div className="hover-body">{post.description}</div>}
       {posts.length > 1 && <div className="muted small">+ {plural(posts.length - 1, 'more thread')} here</div>}
     </div>

@@ -2070,6 +2070,25 @@ textarea::placeholder {
   max-width: 260px;
 }
 
+.row-thumb {
+  flex: none;
+  align-self: center;
+  width: 52px;
+  height: 52px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  object-fit: cover;
+  background: var(--bg2);
+}
+
+.hover-photo {
+  display: block;
+  width: 100%;
+  height: 120px;
+  margin-top: 8px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  object-fit: cover;
+}
+
 .hover-body {
   margin-top: 6px;
   font-size: 13px;
