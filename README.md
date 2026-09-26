@@ -158,7 +158,8 @@ Rundle; `walk rundle mall` walks you there) · `N` new pin ·
 zoom · `Esc` close
 
 On phones: the tab bar at the bottom, sheets you can drag up to full height
-or down to close, pinch and double-tap to zoom. It installs to the home
+or down to close, pinch and double-tap to zoom, and press and hold the map to
+pin something right there (right-click does the same with a mouse). It installs to the home
 screen like an app.
 
 ## How it's built

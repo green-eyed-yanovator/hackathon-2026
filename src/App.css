@@ -376,6 +376,8 @@ kbd {
   height: 100%;
   display: block;
   touch-action: none;
+  -webkit-touch-callout: none; /* a long press pins something; no system menu */
+  user-select: none;
   cursor: grab;
 }
 

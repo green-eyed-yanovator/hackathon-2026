@@ -3369,6 +3369,13 @@ export default function App() {
       }, 300)
     }
     m.onRoute = changed
+    // Press and hold the map (right-click with a mouse) to pin something right there.
+    m.onLongPress = (lng, lat) => {
+      if (needAccount()) return
+      navigator.vibrate?.(12)
+      UI.draft = { latitude: lat, longitude: lng }
+      go('new')
+    }
     m.onUserMove = () => {
       if (UI.follow) ui({ follow: false })
     }

@@ -821,6 +821,7 @@ export type MapState = {
   onFrame: () => void
   onUserMove: () => void // the person moved the map themselves
   onTile: () => void // a source tile arrived: street names nearby are now known
+  onLongPress: (lng: number, lat: number) => void // held still on the map, or a right-click
   route: Route | null // walking directions, drawn under the names
   onRoute: () => void // the route was worked out, or couldn't be
 }
@@ -858,7 +859,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     pointers: new Map(), downX: 0, downY: 0, moved: false, lastTap: 0, lastPointer: 'mouse', samples: [],
     fade: null, radar: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
-    onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
+    onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {}, onLongPress: () => {},
     route: null, onRoute: () => {},
   }
 
@@ -1029,8 +1030,19 @@ function attachInput(m: MapState) {
     return { distance: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
   }
 
+  // Held still for a moment: the long press, which a tap or a drag cancels.
+  let pressTimer = 0
+  let pressed = false
+  const longPress = (p: { x: number; y: number }) => {
+    const world = unproject(m, p.x, p.y)
+    m.onLongPress(xToLng(world.x), yToLat(world.y))
+  }
+
   const onDown = (event: PointerEvent) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return // right-click has its own handler below
     canvas.setPointerCapture(event.pointerId)
+    window.clearTimeout(pressTimer)
+    pressed = false
     m.lastPointer = event.pointerType
     const p = local(event)
     m.pointers.set(event.pointerId, p)
@@ -1043,6 +1055,13 @@ function attachInput(m: MapState) {
       m.downY = p.y
       m.moved = false
       m.samples = [{ x: p.x, y: p.y, t: performance.now() }]
+      if (event.pointerType !== 'mouse') {
+        pressTimer = window.setTimeout(() => {
+          if (m.pointers.size !== 1 || m.moved) return
+          pressed = true
+          longPress(p)
+        }, 550)
+      }
     } else if (m.pointers.size === 2) {
       m.moved = true
       m.onUserMove()
@@ -1069,6 +1088,7 @@ function attachInput(m: MapState) {
 
     if (m.pointers.size === 1) {
       if (!m.moved && Math.hypot(p.x - m.downX, p.y - m.downY) < 4) return
+      window.clearTimeout(pressTimer)
       if (!m.moved) m.onUserMove()
       m.moved = true
       canvas.style.cursor = 'grabbing'
@@ -1087,6 +1107,7 @@ function attachInput(m: MapState) {
   }
 
   const onUp = (event: PointerEvent) => {
+    window.clearTimeout(pressTimer)
     if (!m.pointers.has(event.pointerId)) return
     const p = local(event)
     const wasPinch = m.pointers.size > 1
@@ -1101,6 +1122,11 @@ function attachInput(m: MapState) {
     }
 
     const now = performance.now()
+    if (pressed) {
+      // The long press was the whole gesture.
+      pressed = false
+      return
+    }
     if (!m.moved) {
       if (now - m.lastTap < 300 && event.pointerType !== 'mouse') {
         // Double tap zooms in.
@@ -1181,7 +1207,15 @@ function attachInput(m: MapState) {
   canvas.addEventListener('pointerup', onUp)
   canvas.addEventListener('pointercancel', onUp)
   canvas.addEventListener('pointerleave', onLeave)
+  // A right-click is the mouse's long press. On touch the browser's own menu is
+  // kept away; the timer above has it.
+  const onContextMenu = (event: MouseEvent) => {
+    event.preventDefault()
+    if (m.lastPointer === 'mouse') longPress(local(event))
+  }
+
   canvas.addEventListener('dblclick', onDoubleClick)
+  canvas.addEventListener('contextmenu', onContextMenu)
   canvas.addEventListener('wheel', onWheel, { passive: false })
 
   return () => {
@@ -1191,6 +1225,7 @@ function attachInput(m: MapState) {
     canvas.removeEventListener('pointercancel', onUp)
     canvas.removeEventListener('pointerleave', onLeave)
     canvas.removeEventListener('dblclick', onDoubleClick)
+    canvas.removeEventListener('contextmenu', onContextMenu)
     canvas.removeEventListener('wheel', onWheel)
   }
 }
