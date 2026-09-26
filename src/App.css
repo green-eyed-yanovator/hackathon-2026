@@ -2323,17 +2323,20 @@ textarea::placeholder {
 }
 
 .has-feed .fab,
-.has-feed .walk {
+.has-feed .walk,
+.has-feed .objective {
   left: calc(50% + 190px);
 }
 
 .has-detail .fab,
-.has-detail .walk {
+.has-detail .walk,
+.has-detail .objective {
   left: calc(50% - 222px);
 }
 
 .has-feed.has-detail .fab,
-.has-feed.has-detail .walk {
+.has-feed.has-detail .walk,
+.has-feed.has-detail .objective {
   left: calc(50% - 32px);
 }
 
@@ -2501,7 +2504,7 @@ button.toast {
   position: absolute;
   z-index: 60;
   left: 50%;
-  bottom: 100px;
+  bottom: 200px; /* over the radar's top */
   transform: translateX(-50%);
   width: max-content;
   max-width: min(680px, calc(100vw - 32px));
@@ -2939,7 +2942,8 @@ button.toast {
   }
 
   .has-detail.has-feed .fab,
-  .has-detail.has-feed .walk {
+  .has-detail.has-feed .walk,
+  .has-detail.has-feed .objective {
     left: calc(50% - 222px);
   }
 }
@@ -3144,6 +3148,7 @@ button.toast {
   }
 
   .objective {
+    left: 50% !important; /* phones: over the map, whatever's open */
     bottom: 230px; /* above the radar, clear of the map buttons */
     max-width: calc(100vw - 150px);
     font-size: 18px;
