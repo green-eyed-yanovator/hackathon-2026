@@ -186,6 +186,8 @@ export function describeNotification(notification: NotificationRow) {
       return { icon: '🔔', text: `replied to ${title}, a pin you saved` }
     case 'save':
       return { icon: '⭐', text: `saved your pin ${title}` }
+    case 'interest':
+      return { icon: '👍', text: `is interested in your pin ${title}` }
   }
 }
 

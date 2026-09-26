@@ -1,8 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import {
+  LngLatBounds,
   Map,
   Marker,
   NavigationControl,
+  Popup,
   setWorkerUrl,
 } from 'maplibre-gl'
 
@@ -12,11 +20,14 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 import type { Session } from '@supabase/supabase-js'
 import AuthPanel from './AuthPanel'
-import { useInbox } from './inbox'
+import { useInbox, useNames } from './inbox'
 import ProfilePanel from './ProfilePanel'
+import SearchBox from './SearchBox'
 import { supabase } from './lib/supabase'
 import type {
   AuthMode,
+  Interest,
+  MapFilter,
   NotificationRow,
   Post,
   Profile,
@@ -31,18 +42,50 @@ type Location = {
   longitude: number
 }
 
+// The open panel lives in the URL (#pin/<id>, #user/<id>, #chat/<id>), so the
+// back button closes it and any pin, profile or chat can be shared as a link.
+function readRoute() {
+  const [kind = '', id = ''] = window.location.hash.replace(/^#\/?/, '').split('/')
+  return { kind, id }
+}
+
+// "You", "You and Sam", "You, Sam and 3 others" ... are interested.
+function describeInterested(names: string[]) {
+  const verb = names.length === 1 && names[0] !== 'You' ? 'is' : 'are'
+
+  if (names.length <= 2) return `${names.join(' and ')} ${verb} interested`
+
+  return `${names.slice(0, 2).join(', ')} and ${names.length - 2} ${names.length === 3 ? 'other' : 'others'} are interested`
+}
+
+const filterLabels: Record<Exclude<MapFilter['kind'], 'author'>, string> = {
+  mine: 'Your pins',
+  saved: 'Saved pins',
+  replied: "Pins you've replied to",
+  others: "Neighbours' pins",
+  new: 'Pins with new activity',
+}
+
 function App() {
   const mapContainer = useRef<HTMLDivElement>(null)
   const map = useRef<Map | null>(null)
 
   const markers = useRef<Marker[]>([])
+  const pinElements = useRef(new globalThis.Map<string, HTMLElement>())
   const locationMarker = useRef<Marker | null>(null)
+  const searchInput = useRef<HTMLInputElement>(null)
+  const toastTimer = useRef<number | undefined>(undefined)
 
   const [posts, setPosts] = useState<Post[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null)
 const [replies, setReplies] = useState<Reply[]>([])
 const [replyText, setReplyText] = useState('')
+  const [interests, setInterests] = useState<Interest[]>([])
+  const [route, setRoute] = useState(readRoute)
+  const [mapFilter, setMapFilter] = useState<MapFilter | null>(null)
+  const [search, setSearch] = useState('')
+  const [hoveredPostId, setHoveredPostId] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
 
 
   const [title, setTitle] = useState('')
@@ -60,15 +103,45 @@ const [replyText, setReplyText] = useState('')
   const [session, setSession] = useState<Session | null>(null)
   const [myProfile, setMyProfile] = useState<Profile | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode | null>(null)
-  const [profileId, setProfileId] = useState<string | null>(null)
-  // The conversation open in your menu, if any.
-  const [chatWith, setChatWith] = useState<string | null>(null)
   const [saved, setSaved] = useState<{ owner: string | null; ids: string[] }>({
     owner: null,
     ids: [],
   })
 
   const userId = session?.user.id ?? null
+
+  // Derived from the URL; the post object always comes from the live list.
+  const selectedPost =
+    route.kind === 'pin'
+      ? (posts.find((post) => post.id === route.id) ?? null)
+      : null
+  const profileId =
+    route.kind === 'user' ? route.id : route.kind === 'chat' ? userId : null
+  const chatWith = route.kind === 'chat' ? route.id : null
+
+  function go(path: string) {
+    const url = path
+      ? `#${path}`
+      : window.location.pathname + window.location.search
+
+    if (window.location.hash !== (path ? `#${path}` : '')) {
+      window.history.pushState(null, '', url)
+    }
+
+    setRoute(readRoute())
+  }
+
+  useEffect(() => {
+    const onPop = () => setRoute(readRoute())
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  function showToast(message: string) {
+    setToast(message)
+    window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2500)
+  }
   // Ignore a profile or saved pins left over from a previous session.
   const me = myProfile?.id === userId ? myProfile : null
   const savedIds = useMemo(
@@ -190,8 +263,22 @@ const [replyText, setReplyText] = useState('')
       setReplies(data ?? [])
     }
 
+    async function loadInterests() {
+      const { data, error } = await supabase
+        .from('post_interest')
+        .select('user_id, post_id')
+
+      if (error) {
+        console.error('Failed to load interest:', error)
+        return
+      }
+
+      setInterests(data ?? [])
+    }
+
     loadPosts()
     loadReplies()
+    loadInterests()
 
     if (!mapContainer.current || map.current) {
       return
@@ -256,6 +343,37 @@ const [replyText, setReplyText] = useState('')
 }, [])
 
   useEffect(() => {
+    const same = (a: Interest, b: Interest) =>
+      a.user_id === b.user_id && a.post_id === b.post_id
+
+    const channel = supabase
+      .channel('interest-realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'post_interest' },
+        (payload) => {
+          const row = payload.new as Interest
+          setInterests((current) =>
+            current.some((existing) => same(existing, row)) ? current : [...current, row],
+          )
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'post_interest' },
+        (payload) => {
+          const row = payload.old as Interest
+          setInterests((current) => current.filter((existing) => !same(existing, row)))
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
+
+  useEffect(() => {
   const channel = supabase
     .channel('replies-realtime')
     .on(
@@ -290,46 +408,206 @@ const [replyText, setReplyText] = useState('')
   }
 }, [])
 
+  const replyCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const reply of replies) counts[reply.post_id] = (counts[reply.post_id] ?? 0) + 1
+    return counts
+  }, [replies])
+
+  const interestCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const interest of interests) counts[interest.post_id] = (counts[interest.post_id] ?? 0) + 1
+    return counts
+  }, [interests])
+
+  const repliedByMe = useMemo(
+    () =>
+      new Set(
+        replies
+          .filter((reply) => userId && reply.author_id === userId)
+          .map((reply) => reply.post_id),
+      ),
+    [replies, userId],
+  )
+
+  function matchesFilter(post: Post, filter: MapFilter | null) {
+    switch (filter?.kind) {
+      case undefined:
+        return true
+      case 'mine':
+        return post.author_id === userId
+      case 'saved':
+        return savedIds.includes(post.id)
+      case 'replied':
+        return repliedByMe.has(post.id)
+      case 'others':
+        return post.author_id !== userId
+      case 'new':
+        return newActivityIds.has(post.id)
+      case 'author':
+        return post.author_id === filter.authorId
+    }
+  }
+
+  const query = search.trim().toLowerCase()
+  const visiblePosts = posts.filter(
+    (post) =>
+      matchesFilter(post, mapFilter) &&
+      (!query ||
+        [post.title, post.description, post.author_name ?? ''].some((text) =>
+          text.toLowerCase().includes(query),
+        )),
+  )
+  const visibleKey = visiblePosts.map((post) => post.id).join(',')
+
+  // Called from marker listeners, so it always sees the latest go().
+  const openPin = useEffectEvent((postId: string) => go(`pin/${postId}`))
+
   useEffect(() => {
     if (!map.current) {
       return
     }
 
     markers.current.forEach((marker) => marker.remove())
+    pinElements.current.clear()
 
-    const replyCounts: Record<string, number> = {}
-    for (const reply of replies) {
-      replyCounts[reply.post_id] = (replyCounts[reply.post_id] ?? 0) + 1
-    }
+    const visible = new Set(visibleKey.split(','))
 
     // Your pins are black, saved pins gold, the rest blue; a red dot means
     // unread activity. The number is the reply count.
-    markers.current = posts.map((post) => {
-      const element = document.createElement('div')
-      element.className = [
-        'pin',
-        userId && post.author_id === userId && 'mine',
-        savedIds.includes(post.id) && 'saved',
-        newActivityIds.has(post.id) && 'new',
-      ]
-        .filter(Boolean)
-        .join(' ')
-      element.title = post.title
-      element.innerHTML = '<div class="pin-head"><span></span></div>'
-      element.querySelector('span')!.textContent = replyCounts[post.id]
-        ? String(replyCounts[post.id])
-        : ''
+    markers.current = posts
+      .filter((post) => visible.has(post.id))
+      .map((post) => {
+        const element = document.createElement('div')
+        element.className = [
+          'pin',
+          userId && post.author_id === userId && 'mine',
+          savedIds.includes(post.id) && 'saved',
+          newActivityIds.has(post.id) && 'new',
+        ]
+          .filter(Boolean)
+          .join(' ')
+        element.setAttribute('aria-label', post.title)
+        element.innerHTML = '<div class="pin-head"><span></span></div>'
+        element.querySelector('span')!.textContent = replyCounts[post.id]
+          ? String(replyCounts[post.id])
+          : ''
 
-      element.addEventListener('click', () => {
-        setProfileId(null)
-        setSelectedPost(post)
+        element.addEventListener('click', () => openPin(post.id))
+        element.addEventListener('mouseenter', () => setHoveredPostId(post.id))
+        element.addEventListener('mouseleave', () => setHoveredPostId(null))
+
+        pinElements.current.set(post.id, element)
+
+        return new Marker({ element, anchor: 'bottom' })
+          .setLngLat([post.longitude, post.latitude])
+          .addTo(map.current!)
       })
+  }, [posts, visibleKey, replyCounts, savedIds, newActivityIds, userId])
 
-      return new Marker({ element, anchor: 'bottom' })
-        .setLngLat([post.longitude, post.latitude])
-        .addTo(map.current!)
+  // Hover and "open" states just toggle classes; no need to rebuild markers.
+  const selectedPostId = selectedPost?.id ?? null
+
+  useEffect(() => {
+    for (const [id, element] of pinElements.current) {
+      element.classList.toggle('hover', id === hoveredPostId)
+      element.classList.toggle('active', id === selectedPostId)
+    }
+  }, [hoveredPostId, selectedPostId, posts, visibleKey, replyCounts, savedIds, newActivityIds, userId])
+
+  // A quick look at a pin without opening it: hover it on the map, or hover
+  // its row in a list.
+  useEffect(() => {
+    const post = posts.find((candidate) => candidate.id === hoveredPostId)
+
+    if (!map.current || !post || post.id === selectedPostId) {
+      return
+    }
+
+    const card = document.createElement('div')
+    card.className = 'pin-preview'
+    const title = document.createElement('strong')
+    title.textContent = post.title
+    const meta = document.createElement('div')
+    meta.className = 'pin-preview-meta'
+    meta.textContent = [
+      post.author_name ?? 'Anonymous',
+      ago(post.created_at),
+      `💬 ${replyCounts[post.id] ?? 0}`,
+      interestCounts[post.id] ? `👍 ${interestCounts[post.id]}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const description = document.createElement('div')
+    description.className = 'pin-preview-description'
+    description.textContent = post.description
+    card.append(title, meta, description)
+
+    const popup = new Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: [0, -42],
+      className: 'pin-popup',
+      maxWidth: '260px',
     })
-  }, [posts, replies, savedIds, newActivityIds, userId])
+      .setLngLat([post.longitude, post.latitude])
+      .setDOMContent(card)
+      .addTo(map.current)
+
+    return () => {
+      popup.remove()
+    }
+  }, [hoveredPostId, selectedPostId, posts, replyCounts, interestCounts])
+
+  // Bring the open pin into view if it's off-screen or hidden behind the panel.
+  const revealSelected = useEffectEvent(() => {
+    const current = map.current
+
+    if (!current || !selectedPost) {
+      return
+    }
+
+    const center: [number, number] = [selectedPost.longitude, selectedPost.latitude]
+    const point = current.project(center)
+    const { width, height } = current.getContainer().getBoundingClientRect()
+
+    if (point.x < 40 || point.x > width - 420 || point.y < 100 || point.y > height - 40) {
+      current.flyTo({
+        center,
+        zoom: Math.max(current.getZoom(), 14),
+        padding: { top: 0, bottom: 0, left: 0, right: 380 },
+        duration: 700,
+      })
+    }
+  })
+
+  useEffect(() => {
+    revealSelected()
+  }, [selectedPostId, posts.length])
+
+  // Narrow the map and zoom to fit what's left.
+  function applyFilter(filter: MapFilter | null) {
+    setMapFilter(filter)
+
+    const matching = posts.filter((post) => matchesFilter(post, filter))
+
+    if (!filter || !map.current || matching.length === 0) {
+      return
+    }
+
+    const bounds = new LngLatBounds()
+    for (const post of matching) bounds.extend([post.longitude, post.latitude])
+
+    map.current.fitBounds(bounds, {
+      padding: { top: 110, bottom: 80, left: 80, right: profileId || selectedPost ? 420 : 80 },
+      maxZoom: 15,
+      duration: 700,
+    })
+  }
+
+  function toggleFilter(filter: MapFilter) {
+    applyFilter(mapFilter?.kind === filter.kind ? null : filter)
+  }
 
 async function handleCreateReply() {
   if (!selectedPost || !replyText.trim()) {
@@ -456,11 +734,17 @@ async function handleCreateReply() {
     return
   }
 
-  // Immediately show the new marker
-  setPosts((currentPosts) => [data, ...currentPosts])
+  // Immediately show the new marker; realtime may have added it already.
+  setPosts((currentPosts) =>
+    currentPosts.some((post) => post.id === data.id)
+      ? currentPosts
+      : [data, ...currentPosts],
+  )
 
-  // Close and reset the form
+  // Close the form and open the new pin, so you see what neighbours see.
   handleCloseForm()
+  go(`pin/${data.id}`)
+  showToast('Pinned! Neighbours can see it now')
 }
 
   function handleCloseForm() {
@@ -478,24 +762,19 @@ async function handleCreateReply() {
   async function handleSignOut() {
     await supabase.auth.signOut()
     handleCloseForm()
-    setProfileId(null)
+    setMapFilter(null)
+    go('')
   }
 
   function openProfile(id: string) {
-    setSelectedPost(null)
-    setProfileId(id)
-    setChatWith(null)
+    go(`user/${id}`)
   }
 
   // Your own profile is the menu; pass someone's id to open your chat with them.
   function openMenu(withUser: string | null = null) {
-    if (!userId) {
-      return
+    if (userId) {
+      go(withUser ? `chat/${withUser}` : `user/${userId}`)
     }
-
-    setSelectedPost(null)
-    setProfileId(userId)
-    setChatWith(withUser)
   }
 
   function openNotification(notification: NotificationRow) {
@@ -517,6 +796,7 @@ async function handleCreateReply() {
 
     if (error) {
       console.error('Failed to update saved pins:', error)
+      showToast("Couldn't update your saved pins")
       return
     }
 
@@ -526,17 +806,90 @@ async function handleCreateReply() {
         ? savedIds.filter((id) => id !== postId)
         : [...savedIds, postId],
     })
+    showToast(isSaved ? 'Removed from your saved pins' : 'Saved to your pins ★')
+  }
+
+  async function toggleInterest(postId: string) {
+    if (!userId) {
+      setAuthMode('signup')
+      return
+    }
+
+    const mine = (interest: Interest) =>
+      interest.post_id === postId && interest.user_id === userId
+    const wasInterested = interests.some(mine)
+
+    // Show it straight away; the database catches up.
+    setInterests((current) =>
+      wasInterested
+        ? current.filter((interest) => !mine(interest))
+        : [...current, { user_id: userId, post_id: postId }],
+    )
+
+    const { error } = wasInterested
+      ? await supabase.from('post_interest').delete().eq('post_id', postId).eq('user_id', userId)
+      : await supabase.from('post_interest').insert({ post_id: postId })
+
+    if (error) {
+      console.error('Failed to update interest:', error)
+      setInterests((current) =>
+        wasInterested
+          ? [...current, { user_id: userId, post_id: postId }]
+          : current.filter((interest) => !mine(interest)),
+      )
+      showToast("Couldn't update, try again")
+    }
+  }
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      showToast('Link copied')
+    } catch {
+      showToast(window.location.href)
+    }
   }
 
   function openPostFromProfile(post: Post) {
-    setProfileId(null)
-    setSelectedPost(post)
-
-    map.current?.flyTo({
-      center: [post.longitude, post.latitude],
-      zoom: 15,
-    })
+    go(`pin/${post.id}`)
   }
+
+  // Esc closes whatever is on top; / searches; N drops a new pin.
+  const handleKey = useEffectEvent((event: KeyboardEvent) => {
+    const typing =
+      event.target instanceof HTMLElement &&
+      event.target.closest('input, textarea') !== null
+
+    if (event.key === 'Escape') {
+      if (authMode) setAuthMode(null)
+      else if (chatWith) go(`user/${userId}`)
+      else if (route.kind) go('')
+      else if (showAddForm) handleCloseForm()
+      else if (mapFilter) setMapFilter(null)
+      else return
+
+      event.preventDefault()
+      return
+    }
+
+    if (typing || event.metaKey || event.ctrlKey || event.altKey) {
+      return
+    }
+
+    if (event.key === '/') {
+      event.preventDefault()
+      searchInput.current?.focus()
+    } else if (event.key === 'n' || event.key === 'N') {
+      event.preventDefault()
+      handleOpenForm()
+    }
+  })
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => handleKey(event)
+    window.addEventListener('keydown', listener)
+    return () => window.removeEventListener('keydown', listener)
+  }, [])
 
   // The database renames old posts and replies too; mirror that locally.
   function handleProfileSaved(profile: Profile) {
@@ -586,6 +939,14 @@ async function handleCreateReply() {
     }
   }, [isChoosingLocation])
 
+  const interestedIds = selectedPost
+    ? interests
+        .filter((interest) => interest.post_id === selectedPost.id)
+        .map((interest) => interest.user_id)
+    : []
+  const interestedHere = userId !== null && interestedIds.includes(userId)
+  const interestedNames = useNames(interestedIds)
+
   const threadReplies = selectedPost
     ? replies.filter((reply) => reply.post_id === selectedPost.id)
     : []
@@ -629,6 +990,14 @@ async function handleCreateReply() {
           >
             AroundHere
           </h1>
+
+          <SearchBox
+            query={search}
+            onQuery={setSearch}
+            results={visiblePosts}
+            onOpen={(post) => go(`pin/${post.id}`)}
+            inputRef={searchInput}
+          />
 
           {session && (
             <button
@@ -678,11 +1047,53 @@ async function handleCreateReply() {
       </header>
 
       {session && (
-        <div className="legend">
-          <span><i style={{ background: '#111' }} />Yours</span>
-          <span><i style={{ background: '#f59e0b' }} />Saved</span>
-          <span><i style={{ background: '#2563eb' }} />Neighbours</span>
-          <span><i style={{ background: '#dc2626' }} />New activity</span>
+        <div className="legend" role="group" aria-label="Show only">
+          {(
+            [
+              ['mine', 'Yours', '#111'],
+              ['saved', 'Saved', '#f59e0b'],
+              ['others', 'Neighbours', '#2563eb'],
+              ['new', 'New activity', '#dc2626'],
+            ] as const
+          ).map(([kind, label, color]) => (
+            <button
+              key={kind}
+              className={mapFilter?.kind === kind ? 'active' : ''}
+              aria-pressed={mapFilter?.kind === kind}
+              title={mapFilter?.kind === kind ? 'Show all pins' : `Show only ${label.toLowerCase()}`}
+              onClick={() => toggleFilter({ kind })}
+            >
+              <i style={{ background: color }} />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {(mapFilter || query) && (
+        <div className="filter-chip">
+          {mapFilter
+            ? mapFilter.kind === 'author'
+              ? `${mapFilter.name}'s pins`
+              : filterLabels[mapFilter.kind]
+            : `“${search.trim()}”`}
+          {mapFilter && query && ` matching “${search.trim()}”`}
+          <span className="filter-count">{visiblePosts.length}</span>
+          <button
+            aria-label="Show all pins"
+            onClick={() => {
+              setMapFilter(null)
+              setSearch('')
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {toast && (
+        <div className="toast" role="status">
+          {toast}
         </div>
       )}
 
@@ -713,7 +1124,7 @@ async function handleCreateReply() {
 {selectedPost && (
   <aside className="menu" style={rightPanelStyle}>
     <button
-      onClick={() => setSelectedPost(null)}
+      onClick={() => go('')}
       aria-label="Close"
       style={{
         float: 'right',
@@ -762,37 +1173,49 @@ async function handleCreateReply() {
       {selectedPost.description}
     </p>
 
-    {session && (
-      <div style={{ display: 'flex', gap: '8px' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+      <button
+        className={interestedHere ? 'pill on-blue' : 'pill'}
+        aria-pressed={interestedHere}
+        onClick={() => toggleInterest(selectedPost.id)}
+        title={session ? undefined : 'Sign up to show interest'}
+      >
+        👍 Interested{interestedIds.length > 0 && ` · ${interestedIds.length}`}
+      </button>
+
+      {session && (
         <button
+          className={savedIds.includes(selectedPost.id) ? 'pill on-gold' : 'pill'}
+          aria-pressed={savedIds.includes(selectedPost.id)}
           onClick={() => toggleSave(selectedPost.id)}
-          style={{
-            padding: '7px 14px',
-            border: '1px solid #ddd',
-            borderRadius: '999px',
-            background: savedIds.includes(selectedPost.id) ? '#fef3c7' : 'white',
-            fontSize: '14px',
-            cursor: 'pointer',
-          }}
         >
           {savedIds.includes(selectedPost.id) ? '★ Saved' : '☆ Save'}
         </button>
+      )}
 
-        {selectedPost.author_id && selectedPost.author_id !== userId && (
-          <button
-            onClick={() => openMenu(selectedPost.author_id)}
-            style={{
-              padding: '7px 14px',
-              border: '1px solid #ddd',
-              borderRadius: '999px',
-              background: 'white',
-              fontSize: '14px',
-              cursor: 'pointer',
-            }}
-          >
-            ✉️ Message
-          </button>
-        )}
+      {session && selectedPost.author_id && selectedPost.author_id !== userId && (
+        <button className="pill" onClick={() => openMenu(selectedPost.author_id)}>
+          ✉️ Message
+        </button>
+      )}
+
+      <button className="pill" onClick={copyLink} title="Copy a link to this pin">
+        🔗 Copy link
+      </button>
+    </div>
+
+    {interestedIds.length > 0 && (
+      <div className="row-meta" style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ display: 'flex' }}>
+          {interestedIds.slice(0, 4).map((id, index) => (
+            <span key={id} style={{ marginLeft: index ? '-8px' : 0, borderRadius: '50%', boxShadow: '0 0 0 2px white' }}>
+              {avatar(id, interestedNames[id] ?? null, 22)}
+            </span>
+          ))}
+        </span>
+        <span>
+          {describeInterested(interestedIds.map((id) => (id === userId ? 'You' : (interestedNames[id] ?? '…'))))}
+        </span>
       </div>
     )}
 
@@ -864,6 +1287,13 @@ async function handleCreateReply() {
             value={replyText}
             onChange={(event) => setReplyText(event.target.value)}
             placeholder="Write a reply..."
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault()
+                handleCreateReply()
+              }
+            }}
+            title="Ctrl+Enter to send"
             rows={2}
             style={{
               flex: 1,
@@ -1142,7 +1572,8 @@ async function handleCreateReply() {
                   email: session?.user.email ?? '',
                   inbox,
                   chatWith,
-                  onChat: setChatWith,
+                  onChat: (otherId) =>
+                    go(otherId ? `chat/${otherId}` : `user/${userId}`),
                   onOpenNotification: openNotification,
                   onOpenProfile: openProfile,
                   onChangePassword: () => setAuthMode('new-password'),
@@ -1152,15 +1583,18 @@ async function handleCreateReply() {
           }
           posts={posts}
           replies={replies}
+          interests={interests}
           savedIds={savedIds}
           onOpenPost={openPostFromProfile}
+          onHoverPost={setHoveredPostId}
+          onFilter={applyFilter}
           onSaved={handleProfileSaved}
           onMessage={
             userId && profileId !== userId
               ? () => openMenu(profileId)
               : null
           }
-          onClose={() => setProfileId(null)}
+          onClose={() => go('')}
         />
       )}
 

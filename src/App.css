@@ -134,3 +134,83 @@
   cursor: pointer;
 }
 .bio-empty:hover { border-color: #9ca3af; background: #f9fafb; color: #333; }
+
+/* Pin states */
+.pin.hover, .pin.active { z-index: 3; }
+.pin.hover .pin-head { transform: rotate(-45deg) scale(1.2); }
+.pin.active .pin-head { transform: rotate(-45deg) scale(1.25); box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.35), 0 3px 8px rgba(0, 0, 0, 0.35); }
+
+/* Hover preview card */
+.pin-popup { pointer-events: none; }
+.pin-popup .maplibregl-popup-content { padding: 10px 12px; border-radius: 12px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2); font: 13px Arial, sans-serif; }
+.pin-preview strong { display: block; font-size: 14px; color: #111; }
+.pin-preview-meta { margin-top: 2px; font-size: 12px; color: #777; }
+.pin-preview-description { margin-top: 6px; color: #444; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* Legend doubles as a filter */
+.legend button { display: inline-flex; align-items: center; padding: 3px 8px; border: none; border-radius: 999px; background: transparent; color: #444; font: inherit; cursor: pointer; }
+.legend button:hover { background: #f3f4f6; }
+.legend button.active { background: #111; color: white; }
+.legend button i { margin-right: 5px; }
+
+.filter-chip {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 15;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 999px;
+  background: #111;
+  color: white;
+  font: 600 13px Arial, sans-serif;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.filter-count { padding: 1px 7px; border-radius: 999px; background: rgba(255, 255, 255, 0.2); font-size: 12px; }
+.filter-chip button { width: 22px; height: 22px; border: none; border-radius: 50%; background: rgba(255, 255, 255, 0.2); color: white; font-size: 15px; line-height: 1; cursor: pointer; }
+.filter-chip button:hover { background: rgba(255, 255, 255, 0.35); }
+
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  z-index: 40;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  padding: 10px 16px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #111;
+  color: white;
+  font: 14px Arial, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  animation: toast-in 0.18s ease-out;
+}
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* Search */
+.search { width: 190px; padding: 8px 30px 8px 12px; border: 1px solid #e5e7eb; border-radius: 999px; background: #f7f7f8; font: 14px Arial, sans-serif; outline: none; transition: width 0.15s; }
+.search:focus { width: 260px; border-color: #2563eb; background: white; }
+.search-key { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); padding: 0 5px; border: 1px solid #ddd; border-radius: 4px; color: #999; font: 11px monospace; pointer-events: none; }
+.search-results { position: absolute; top: calc(100% + 8px); left: 0; width: 320px; padding: 6px; border-radius: 14px; background: white; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2); }
+
+/* Action pills on a pin */
+.pill { padding: 7px 14px; border: 1px solid #ddd; border-radius: 999px; background: white; color: #222; font: 14px Arial, sans-serif; cursor: pointer; }
+.pill:hover { background: #f7f7f8; }
+.pill.on-blue { border-color: #bfdbfe; background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+.pill.on-gold { border-color: #fde68a; background: #fef3c7; color: #92400e; font-weight: 600; }
+
+/* Profile */
+.stat { flex: 1; padding: 10px 4px; border: none; border-radius: 12px; background: #f7f7f8; text-align: center; font: inherit; cursor: pointer; }
+.stat:hover { background: #eef2ff; }
+.editable { position: relative; margin: 0 -6px; padding: 0 6px; border-radius: 8px; cursor: text; }
+.editable:hover { background: #f3f4f6; }
+.editable:hover::after { content: '✏️'; position: absolute; top: 50%; right: 6px; transform: translateY(-50%); font-size: 12px; }
+
+/* Off-screen pins overflow the map; never let focus or scrollIntoView scroll it. */
+.maplibregl-map { overflow: clip; }

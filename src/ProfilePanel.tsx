@@ -6,20 +6,11 @@ import {
   useNames,
   type InboxApi,
 } from './inbox'
+import InlineEdit from './InlineEdit'
 import { supabase } from './lib/supabase'
 import Chat, { ConversationList } from './Messages'
-import type { NotificationRow, Post, Profile, Reply } from './types'
-import {
-  ago,
-  avatar,
-  inputStyle,
-  labelStyle,
-  linkButtonStyle,
-  noticeStyle,
-  primaryButtonStyle,
-  rightPanelStyle,
-  secondaryButtonStyle,
-} from './ui'
+import type { Interest, MapFilter, NotificationRow, Post, Profile, Reply } from './types'
+import { ago, avatar, linkButtonStyle, primaryButtonStyle, rightPanelStyle } from './ui'
 
 // Present only on the signed-in user's own profile.
 export type OwnMenu = {
@@ -41,8 +32,12 @@ type Props = {
   // Everything below is already in memory for the map; lists are derived from it.
   posts: Post[]
   replies: Reply[]
+  interests: Interest[]
   savedIds: string[]
   onOpenPost: (post: Post) => void
+  // Hovering a row lights up its pin on the map.
+  onHoverPost: (postId: string | null) => void
+  onFilter: (filter: MapFilter) => void
   onSaved: (profile: Profile) => void
   onMessage: (() => void) | null
   onClose: () => void
@@ -54,8 +49,11 @@ type FeedRow = {
   icon: ReactNode
   text: ReactNode
   meta: string | null
+  postId: string | null
   onClick: () => void
 }
+
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`
 
 export default function ProfilePanel({
   profileId,
@@ -63,17 +61,17 @@ export default function ProfilePanel({
   own,
   posts,
   replies,
+  interests,
   savedIds,
   onOpenPost,
+  onHoverPost,
+  onFilter,
   onSaved,
   onMessage,
   onClose,
 }: Props) {
   const [profile, setProfile] = useState<Profile | null>(seed)
-  const [draft, setDraft] = useState<Profile | null>(null)
   const [error, setError] = useState('')
-  // Non-null while the bio is being edited in place.
-  const [bioDraft, setBioDraft] = useState<string | null>(null)
 
   useEffect(() => {
     let ignore = false
@@ -107,10 +105,14 @@ export default function ProfilePanel({
     ...(own?.chatWith ? [own.chatWith] : []),
   ])
 
-  // Reply counts and latest activity per pin, from replies already loaded for the map.
+  // Reply and interest counts per pin, from data already loaded for the map.
   const repliesByPost = new Map<string, Reply[]>()
   for (const reply of replies) {
     repliesByPost.set(reply.post_id, [...(repliesByPost.get(reply.post_id) ?? []), reply])
+  }
+  const interestCount: Record<string, number> = {}
+  for (const interest of interests) {
+    interestCount[interest.post_id] = (interestCount[interest.post_id] ?? 0) + 1
   }
   const lastActivity = (post: Post) =>
     repliesByPost.get(post.id)?.at(-1)?.created_at ?? post.created_at
@@ -129,49 +131,30 @@ export default function ProfilePanel({
     )
     .sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)))
 
-  async function save() {
-    if (!draft) {
-      return
-    }
-
+  async function saveField(patch: Partial<Pick<Profile, 'display_name' | 'neighbourhood' | 'bio'>>) {
     const { data, error } = await supabase
       .from('profiles')
-      .update({
-        display_name: draft.display_name.trim(),
-        neighbourhood: draft.neighbourhood?.trim() || null,
-        bio: draft.bio?.trim() || null,
-      })
+      .update(patch)
       .eq('id', profileId)
       .select()
       .single()
 
     if (error) {
       setError(error.message)
-      return
+      return false
     }
 
+    setError('')
     setProfile(data)
-    setDraft(null)
     onSaved(data)
+    return true
   }
 
-  async function saveBio() {
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({ bio: bioDraft?.trim() || null })
-      .eq('id', profileId)
-      .select()
-      .single()
-
-    if (error) {
-      setError(error.message)
-      return
-    }
-
-    setProfile(data)
-    setBioDraft(null)
-    onSaved(data)
-  }
+  // Rows that point at a pin light it up on the map while hovered.
+  const hoverProps = (postId: string | null) => ({
+    onMouseEnter: () => onHoverPost(postId),
+    onMouseLeave: () => onHoverPost(null),
+  })
 
   function renderContent() {
     if (own?.chatWith) {
@@ -193,70 +176,19 @@ export default function ProfilePanel({
       return <p className="empty">{error || 'Loading...'}</p>
     }
 
-    if (draft) {
-      return (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            save()
-          }}
-        >
-          <h2 style={{ margin: '0 0 24px', fontSize: '24px', color: '#111' }}>Edit profile</h2>
-
-          <label style={labelStyle}>Name</label>
-          <input
-            value={draft.display_name}
-            onChange={(event) => setDraft({ ...draft, display_name: event.target.value })}
-            maxLength={50}
-            style={inputStyle}
-          />
-
-          <label style={labelStyle}>Neighbourhood</label>
-          <input
-            value={draft.neighbourhood ?? ''}
-            onChange={(event) => setDraft({ ...draft, neighbourhood: event.target.value })}
-            placeholder="e.g. Kent Town"
-            maxLength={80}
-            style={inputStyle}
-          />
-
-          <label style={labelStyle}>About you</label>
-          <textarea
-            value={draft.bio ?? ''}
-            onChange={(event) => setDraft({ ...draft, bio: event.target.value })}
-            placeholder="What should neighbours know about you?"
-            rows={4}
-            maxLength={500}
-            style={{ ...inputStyle, resize: 'vertical' }}
-          />
-
-          {error && (
-            <p role="alert" style={noticeStyle}>
-              {error}
-            </p>
-          )}
-
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <button type="button" onClick={() => setDraft(null)} style={secondaryButtonStyle}>
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!draft.display_name.trim()}
-              style={primaryButtonStyle(draft.display_name.trim() !== '')}
-            >
-              Save
-            </button>
-          </div>
-        </form>
-      )
-    }
-
-    const stats: [number, string][] = [
-      [authoredCount, authoredCount === 1 ? 'pin' : 'pins'],
-      [repliedIds.size, 'replied to'],
-      ...(own ? ([[savedIds.length, 'saved']] as [number, string][]) : []),
-    ]
+    // Each stat narrows the map to exactly those pins.
+    const stats: [string, MapFilter][] = own
+      ? [
+          [plural(authoredCount, 'pin', 'pins'), { kind: 'mine' }],
+          [plural(repliedIds.size, 'replied to', 'replied to'), { kind: 'replied' }],
+          [plural(savedIds.length, 'saved', 'saved'), { kind: 'saved' }],
+        ]
+      : [
+          [
+            plural(authoredCount, 'pin', 'pins'),
+            { kind: 'author', authorId: profileId, name: profile.display_name },
+          ],
+        ]
 
     // Unread notifications and unread conversations, newest first.
     const feed: FeedRow[] = own
@@ -276,6 +208,7 @@ export default function ProfilePanel({
                   </>
                 ),
                 meta: notification.preview,
+                postId: notification.post_id,
                 onClick: () => own.onOpenNotification(notification),
               }
             }),
@@ -292,6 +225,7 @@ export default function ProfilePanel({
                 </>
               ),
               meta: conversation.last.body,
+              postId: null,
               onClick: () => own.onChat(conversation.other),
             })),
         ].sort((a, b) => b.time.localeCompare(a.time))
@@ -306,9 +240,17 @@ export default function ProfilePanel({
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           {avatar(profile.id, profile.display_name, 56)}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ margin: 0, fontSize: '22px', color: '#111' }}>{profile.display_name}</h2>
+            <InlineEdit
+              value={profile.display_name}
+              editable={!!own}
+              prompt=""
+              required
+              maxLength={50}
+              onSave={(value) => saveField({ display_name: value ?? '' })}
+            >
+              <h2 style={{ margin: 0, fontSize: '22px', color: '#111' }}>{profile.display_name}</h2>
+            </InlineEdit>
             <div className="row-meta">
-              {profile.neighbourhood && `📍 ${profile.neighbourhood} · `}
               Neighbour since{' '}
               {new Date(profile.created_at).toLocaleDateString(undefined, {
                 month: 'short',
@@ -318,92 +260,59 @@ export default function ProfilePanel({
           </div>
         </div>
 
-        {bioDraft !== null ? (
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              saveBio()
-            }}
-            style={{ marginTop: '14px' }}
-          >
-            <textarea
-              autoFocus
-              value={bioDraft}
-              onChange={(event) => setBioDraft(event.target.value)}
-              placeholder="What should neighbours know about you? Hobbies, how long you've lived here, what you can help with..."
-              rows={4}
-              maxLength={500}
-              style={{ ...inputStyle, marginBottom: '4px', fontSize: '14px', resize: 'vertical' }}
-            />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span className="row-meta" style={{ flex: 1, margin: 0 }}>
-                {bioDraft.length}/500
-              </span>
-              <button type="button" onClick={() => setBioDraft(null)} style={{ ...linkButtonStyle, fontSize: '13px' }}>
-                Cancel
-              </button>
-              <button
-                type="submit"
-                style={{ ...primaryButtonStyle(true), flex: 'none', padding: '8px 16px', fontSize: '14px' }}
-              >
-                Save bio
-              </button>
-            </div>
-          </form>
-        ) : profile.bio ? (
-          <div style={{ marginTop: '14px' }}>
-            <p style={{ margin: 0, lineHeight: 1.5, color: '#333', whiteSpace: 'pre-wrap' }}>
-              {profile.bio}
-            </p>
-            {own && (
-              <button
-                onClick={() => setBioDraft(profile.bio ?? '')}
-                style={{ ...linkButtonStyle, marginTop: '4px', fontSize: '12px', color: '#888' }}
-              >
-                Edit bio
-              </button>
-            )}
+        <InlineEdit
+          value={profile.neighbourhood}
+          editable={!!own}
+          prompt="📍 Add your neighbourhood"
+          placeholder="e.g. Kent Town"
+          maxLength={80}
+          onSave={(value) => saveField({ neighbourhood: value })}
+        >
+          <div style={{ marginTop: '12px', fontSize: '15px', color: '#333' }}>
+            📍 {profile.neighbourhood}
           </div>
-        ) : (
-          own && (
-            <button className="bio-empty" onClick={() => setBioDraft('')}>
-              ✏️ Add a bio so neighbours know who you are
-            </button>
-          )
-        )}
+        </InlineEdit>
+
+        <InlineEdit
+          value={profile.bio}
+          editable={!!own}
+          prompt="✏️ Add a bio so neighbours know who you are"
+          placeholder="What should neighbours know about you? Hobbies, how long you've lived here, what you can help with..."
+          maxLength={500}
+          multiline
+          onSave={(value) => saveField({ bio: value })}
+        >
+          <p style={{ margin: '12px 0 0', lineHeight: 1.5, color: '#333', whiteSpace: 'pre-wrap' }}>
+            {profile.bio}
+          </p>
+        </InlineEdit>
+
+        {error && <p className="empty" role="alert">{error}</p>}
 
         <div style={{ display: 'flex', gap: '8px', margin: '16px 0' }}>
-          {stats.map(([count, label]) => (
-            <div
-              key={label}
-              style={{
-                flex: 1,
-                padding: '10px 4px',
-                borderRadius: '12px',
-                background: '#f7f7f8',
-                textAlign: 'center',
-              }}
-            >
-              <div style={{ fontSize: '20px', fontWeight: 700, color: '#111' }}>{count}</div>
-              <div style={{ fontSize: '12px', color: '#777' }}>{label}</div>
-            </div>
-          ))}
+          {stats.map(([label, filter]) => {
+            const [count, ...words] = label.split(' ')
+
+            return (
+              <button
+                key={label}
+                className="stat"
+                title="Show these on the map"
+                onClick={() => onFilter(filter)}
+              >
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#111' }}>{count}</div>
+                <div style={{ fontSize: '12px', color: '#777' }}>{words.join(' ')}</div>
+              </button>
+            )
+          })}
         </div>
 
-        {own ? (
+        {onMessage && (
           <div style={{ display: 'flex' }}>
-            <button onClick={() => setDraft(profile)} style={secondaryButtonStyle}>
-              Edit profile
+            <button onClick={onMessage} style={primaryButtonStyle(true)}>
+              Message {profile.display_name}
             </button>
           </div>
-        ) : (
-          onMessage && (
-            <div style={{ display: 'flex' }}>
-              <button onClick={onMessage} style={primaryButtonStyle(true)}>
-                Message {profile.display_name}
-              </button>
-            </div>
-          )
         )}
 
         {own && (
@@ -428,7 +337,7 @@ export default function ProfilePanel({
               <p className="empty">You're all caught up ✓</p>
             ) : (
               feed.map((row) => (
-                <button key={row.key} className="row unread" onClick={row.onClick}>
+                <button key={row.key} className="row unread" onClick={row.onClick} {...hoverProps(row.postId)}>
                   {row.icon}
                   <div className="row-main">
                     <div style={{ lineHeight: 1.35 }}>{row.text}</div>
@@ -452,9 +361,10 @@ export default function ProfilePanel({
         ) : (
           pins.map((post) => {
             const count = repliesByPost.get(post.id)?.length ?? 0
+            const interested = interestCount[post.id] ?? 0
 
             return (
-              <button key={post.id} className="row" onClick={() => onOpenPost(post)}>
+              <button key={post.id} className="row" onClick={() => onOpenPost(post)} {...hoverProps(post.id)}>
                 <span className="row-icon">📍</span>
                 <div className="row-main">
                   <div className="row-title" style={{ fontWeight: 600 }}>{post.title}</div>
@@ -464,7 +374,8 @@ export default function ProfilePanel({
                     {own && post.author_id !== profileId && repliedIds.has(post.id) && (
                       <span className="chip replied">Replied</span>
                     )}
-                    {count === 0 ? 'No replies' : count === 1 ? '1 reply' : `${count} replies`}
+                    {count === 0 ? 'No replies' : plural(count, 'reply', 'replies')}
+                    {interested > 0 && ` · 👍 ${interested}`}
                   </div>
                 </div>
                 <span className="row-time">{ago(lastActivity(post))}</span>
@@ -498,6 +409,7 @@ export default function ProfilePanel({
                       key={notification.id}
                       className="row"
                       onClick={() => own.onOpenNotification(notification)}
+                      {...hoverProps(notification.post_id)}
                     >
                       <span className="row-icon">{icon}</span>
                       <div className="row-main" style={{ color: '#555', lineHeight: 1.35 }}>

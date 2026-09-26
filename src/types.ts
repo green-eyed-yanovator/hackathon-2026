@@ -35,7 +35,7 @@ export type AuthMode =
 
 export type NotificationRow = {
   id: string
-  kind: 'reply' | 'saved_reply' | 'save'
+  kind: 'reply' | 'saved_reply' | 'save' | 'interest'
   actor_id: string | null
   actor_name: string | null
   post_id: string | null
@@ -53,3 +53,13 @@ export type Message = {
   created_at: string
   read_at: string | null
 }
+
+export type Interest = {
+  user_id: string
+  post_id: string
+}
+
+// What the map is narrowed to, set from the legend or a profile's stats.
+export type MapFilter =
+  | { kind: 'mine' | 'saved' | 'replied' | 'others' | 'new' }
+  | { kind: 'author'; authorId: string; name: string }
