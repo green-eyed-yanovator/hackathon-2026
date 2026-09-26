@@ -1224,6 +1224,7 @@ function attachInput(m: MapState) {
     canvas.removeEventListener('pointerup', onUp)
     canvas.removeEventListener('pointercancel', onUp)
     canvas.removeEventListener('pointerleave', onLeave)
+    window.clearTimeout(pressTimer)
     canvas.removeEventListener('dblclick', onDoubleClick)
     canvas.removeEventListener('contextmenu', onContextMenu)
     canvas.removeEventListener('wheel', onWheel)
