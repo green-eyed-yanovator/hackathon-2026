@@ -3553,7 +3553,8 @@ export default function App() {
       <HoverCard cardRef={cardRef} />
       {UI.objective && (
         <div className="objective" key={UI.objective.place}>
-          {UI.objective.verb} <b>{UI.objective.place}</b>.
+          {UI.objective.verb} <b>{UI.objective.place}</b>
+          {/[.!?]$/.test(UI.objective.place) ? '' : '.'}
         </div>
       )}
       {UI.banner && (
