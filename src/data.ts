@@ -568,6 +568,8 @@ function resetPrivate() {
   S.seen = new Map()
   S.sharing = false
   S.sharingUntil = null
+  saidNearby.clear()
+  reminded = null
 }
 
 let started = false
@@ -1155,12 +1157,13 @@ function noticeNearby() {
 }
 
 // Something you're in on starts within the hour: a word about it, once, on this device.
-let reminded: Set<string> | null = null
+let reminded: Set<string> | null = null // pins already mentioned, for whoever's signed in
+const remindedKey = () => `aroundhere.reminded.${S.userId}`
 
 function remindSoon() {
   if (!S.userId || !S.ready || muted('starting_soon')) return
   try {
-    reminded ??= new Set(JSON.parse(localStorage.getItem('aroundhere.reminded') ?? '[]') as string[])
+    reminded ??= new Set(JSON.parse(localStorage.getItem(remindedKey()) ?? '[]') as string[])
   } catch {
     reminded ??= new Set()
   }
@@ -1171,7 +1174,7 @@ function remindSoon() {
     if (!post || left <= 0 || left > 3600000) continue
     reminded.add(post.id)
     try {
-      localStorage.setItem('aroundhere.reminded', JSON.stringify([...reminded].slice(-50)))
+      localStorage.setItem(remindedKey(), JSON.stringify([...reminded].slice(-50)))
     } catch {
       // Private browsing: it may say it twice. No harm.
     }
