@@ -1869,8 +1869,19 @@ function InboxView() {
   const unreadCount = notifications.filter((n) => !n.read_at).length
   const convos = conversations()
 
-  function open(n: Notification) {
-    markNotificationsRead([n.id])
+  // The same thing happening on the same pin on the same day is one row:
+  // "Tom, Priya and 1 other replied to your pin".
+  const groups: Notification[][] = []
+  for (const n of notifications) {
+    const last = groups.at(-1)?.[0]
+    const alike = last && n.post_id && last.post_id === n.post_id && last.kind === n.kind && dayLabel(last.created_at) === dayLabel(n.created_at)
+    if (alike) groups.at(-1)!.push(n)
+    else groups.push([n])
+  }
+
+  function open(group: Notification[]) {
+    const n = group[0]
+    markNotificationsRead(group.map((g) => g.id))
     if (n.post_id) {
       const post = S.posts.find((p) => p.id === n.post_id)
       if (post) openPin(post)
@@ -1897,23 +1908,32 @@ function InboxView() {
             </button>
           )}
           {notifications.length === 0 && <Empty icon="bell">Replies, saves and friend requests land here.</Empty>}
-          {notifications.map((n, i) => {
+          {groups.map((group, i) => {
+            const n = group[0]
             const day = dayLabel(n.created_at)
-            const showDay = i === 0 || day !== dayLabel(notifications[i - 1].created_at)
+            const showDay = i === 0 || day !== dayLabel(groups[i - 1][0].created_at)
             const pending = n.kind === 'friend_request' && n.actor_id && friendshipWith(n.actor_id) && !friendshipWith(n.actor_id)!.accepted_at
+            const actors = [...new Set(group.map((g) => g.actor_id))]
+            const names = actors.map((id) => (id ? nameOf(id, group.find((g) => g.actor_id === id)?.actor_name ?? null) : 'Someone'))
+            const who = names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${plural(names.length - 2, 'other')}`
             return (
               <div key={n.id}>
                 {showDay && <div className="section">{day}</div>}
-                <div className={n.read_at ? 'row note' : 'row note unread'}>
-                  <button className="plain" onClick={() => n.actor_id && go(`user/${n.actor_id}`)}>
-                    <Avatar id={n.actor_id} size={34} />
+                <div className={group.every((g) => g.read_at) ? 'row note' : 'row note unread'}>
+                  <button className="plain facestack" onClick={() => n.actor_id && go(`user/${n.actor_id}`)}>
+                    {actors.slice(0, 2).map((id, j) => (
+                      <Avatar key={id ?? j} id={id} size={actors.length > 1 ? 26 : 34} />
+                    ))}
                   </button>
-                  <button className="row-main" onClick={() => open(n)}>
+                  <button className="row-main" onClick={() => open(group)}>
                     <div>
-                      <strong>{n.actor_id ? nameOf(n.actor_id, n.actor_name) : 'Someone'}</strong> {describeNotification(n)}
+                      <strong>{who}</strong> {describeNotification(n)}
                     </div>
                     {n.preview && <div className="muted clip">“{n.preview}”</div>}
-                    <div className="muted small">{ago(n.created_at)}</div>
+                    <div className="muted small">
+                      {ago(n.created_at)}
+                      {group.length > 1 && ` · ${group.length} times`}
+                    </div>
                   </button>
                   {pending && (
                     <div className="stack tight">

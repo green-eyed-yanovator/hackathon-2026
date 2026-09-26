@@ -1551,6 +1551,17 @@ textarea::placeholder {
   border-radius: 6px;
 }
 
+.facestack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.facestack .avatar + .avatar {
+  margin: -12px 0 0 12px;
+  box-shadow: 0 0 0 2px var(--bg-solid);
+}
+
 .facepile {
   display: flex;
   align-items: center;
