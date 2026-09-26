@@ -497,13 +497,24 @@ function subscribePrivate(userId: string) {
 // Saying "I'm here" to friends: a row per device, which the server stamps with
 // its own time. Refreshed every minute while the app is in view; leaving sets
 // here = false (never a delete: realtime would announce it to everyone).
+// crypto.randomUUID only exists on secure pages (https, localhost). A phone trying
+// the dev server over the LAN gets the same shape of id from getRandomValues.
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40 // version 4
+  b[8] = (b[8] & 0x3f) | 0x80 // variant 1
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
 const device = (() => {
   try {
     let id = localStorage.getItem('aroundhere.device')
-    if (!id) localStorage.setItem('aroundhere.device', (id = crypto.randomUUID()))
+    if (!id) localStorage.setItem('aroundhere.device', (id = uuid()))
     return id
   } catch {
-    return crypto.randomUUID()
+    return uuid()
   }
 })()
 
@@ -688,7 +699,7 @@ export async function createPost(draft: Draft) {
   // Photos and videos go into storage, one folder per post.
   for (const file of draft.files) {
     const extension = file.name.split('.').pop() ?? 'bin'
-    const path = `${post.id}/${crypto.randomUUID()}.${extension}`
+    const path = `${post.id}/${uuid()}.${extension}`
     const upload = await supabase.storage.from('post-media').upload(path, file)
     if (upload.error) {
       fail(`Couldn't upload ${file.name}`, upload.error)
@@ -845,7 +856,7 @@ export async function uploadAvatar(file: File) {
   if (!blob) return fail("Couldn't read that photo", null)
 
   const previous = storagePath(S.profiles.get(S.userId!)?.avatar_url, 'avatars')
-  const path = `${S.userId}/${crypto.randomUUID()}.jpg`
+  const path = `${S.userId}/${uuid()}.jpg`
   const { error } = await supabase.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg' })
   if (error) return fail("Couldn't upload the photo", error)
   const saved = await saveProfile({ avatar_url: supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl })
