@@ -1211,7 +1211,9 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
   const baseY = src.y * src.extent
   const wobble = t.wobble * unit
 
-  const trace = (f: Feature, closed: boolean) => {
+  // Rings come back from the decoder already closed (first point repeated), so there's
+  // no closePath() here: Chrome makes it slow on paths with thousands of subpaths.
+  const trace = (f: Feature) => {
     for (const ring of f.rings) {
       if (wobble > 0) {
         ctx.moveTo(ring[0] + jitter(baseX + ring[0], baseY + ring[1]) * wobble, ring[1] + jitter(baseY + ring[1], baseX + ring[0]) * wobble)
@@ -1224,7 +1226,6 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
         ctx.moveTo(ring[0], ring[1])
         for (let i = 2; i < ring.length; i += 2) ctx.lineTo(ring[i], ring[i + 1])
       }
-      if (closed) ctx.closePath()
     }
   }
 
@@ -1234,7 +1235,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
     let any = false
     for (const f of src.layers[layer] ?? []) {
       if (f.type === 3 && visible(f) && test(f)) {
-        trace(f, true)
+        trace(f)
         any = true
       }
     }
@@ -1281,7 +1282,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
     if (marks.length) {
       ctx.save()
       ctx.beginPath()
-      for (const f of marks) trace(f, true)
+      for (const f of marks) trace(f)
       ctx.clip('evenodd')
       ctx.fillStyle = t.woodMarks
       const step = 14 * unit
@@ -1297,7 +1298,6 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
           ctx.moveTo(cu, cv - h)
           ctx.lineTo(cu + h * 0.7, cv + h * 0.6)
           ctx.lineTo(cu - h * 0.7, cv + h * 0.6)
-          ctx.closePath()
         }
       }
       ctx.globalAlpha = 0.55
@@ -1311,7 +1311,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
   const water = (src.layers.water ?? []).filter((f) => f.type === 3 && visible(f) && cls(f) !== 'swimming_pool')
   if (water.length) {
     ctx.beginPath()
-    for (const f of water) trace(f, true)
+    for (const f of water) trace(f)
 
     if (t.waterShore) {
       ctx.strokeStyle = t.waterShore
@@ -1351,7 +1351,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
   let anyWaterway = false
   for (const f of src.layers.waterway ?? []) {
     if (f.type === 2 && visible(f) && (z >= 13 || cls(f) === 'river')) {
-      trace(f, false)
+      trace(f)
       anyWaterway = true
     }
   }
@@ -1369,13 +1369,13 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
         ctx.save()
         ctx.translate(1.5 * unit, 1.5 * unit)
         ctx.beginPath()
-        for (const f of buildings) trace(f, true)
+        for (const f of buildings) trace(f)
         ctx.fillStyle = t.buildingShadow
         ctx.fill('evenodd')
         ctx.restore()
       }
       ctx.beginPath()
-      for (const f of buildings) trace(f, true)
+      for (const f of buildings) trace(f)
       ctx.fillStyle = t.building
       ctx.fill('evenodd')
       if (t.buildingLine) {
@@ -1409,7 +1409,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
     for (const f of tunnels) {
       const rc = roadClass(f.props)!
       ctx.beginPath()
-      trace(f, false)
+      trace(f)
       ctx.strokeStyle = t.road[rc]
       ctx.lineWidth = widthOf(rc) * unit
       ctx.stroke()
@@ -1421,7 +1421,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
     for (const rc of DRAW_ORDER) {
       if (!roads[rc].length || rc === 'path') continue
       ctx.beginPath()
-      for (const f of roads[rc]) trace(f, false)
+      for (const f of roads[rc]) trace(f)
       ctx.strokeStyle = t.casing
       ctx.lineWidth = (widthOf(rc) + (z >= 15 ? 2 : 1.2)) * unit
       ctx.stroke()
@@ -1431,7 +1431,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
   for (const rc of DRAW_ORDER) {
     if (!roads[rc].length) continue
     ctx.beginPath()
-    for (const f of roads[rc]) trace(f, false)
+    for (const f of roads[rc]) trace(f)
     ctx.strokeStyle = t.road[rc]
     ctx.lineWidth = widthOf(rc) * unit
     if (rc === 'path') ctx.setLineDash([2 * unit, 2.5 * unit])
@@ -1448,7 +1448,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
 
   if (roads.rail.length) {
     ctx.beginPath()
-    for (const f of roads.rail) trace(f, false)
+    for (const f of roads.rail) trace(f)
     ctx.strokeStyle = t.road.rail
     ctx.lineWidth = widthOf('rail') * unit
     ctx.stroke()
@@ -1471,7 +1471,7 @@ function paintTile(m: MapState, ctx: CanvasRenderingContext2D, size: number, src
   let anyBoundary = false
   for (const f of src.layers.boundary ?? []) {
     if (f.type === 2 && visible(f) && Number(f.props.admin_level) <= 4 && !f.props.maritime) {
-      trace(f, false)
+      trace(f)
       anyBoundary = true
     }
   }
