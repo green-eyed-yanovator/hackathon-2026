@@ -502,14 +502,14 @@ function buildMarkers(posts: Post[]): Marker[] {
   const route = UI.route
 
   // The open pin stays on the map even when the filter would hide it.
-  const shown = [...posts]
+  const onMap = [...posts]
   if (route.kind === 'pin') {
     const open = S.posts.find((p) => p.id === route.id)
-    if (open && !shown.includes(open)) shown.push(open)
+    if (open && !onMap.includes(open)) onMap.push(open)
   }
 
   const places = new Map<string, Post[]>()
-  for (const post of shown) {
+  for (const post of onMap) {
     const key = placeKey(post)
     const list = places.get(key)
     if (list) list.push(post)
