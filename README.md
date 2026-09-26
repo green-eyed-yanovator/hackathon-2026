@@ -24,7 +24,8 @@ What you can do:
   tap tells them you're on your way. Your own maps app is one tap away.
 - **Friends.** People around here suggests neighbours whose pins are close.
   Friends can share their location (until they stop, or just for an hour) and
-  see each other on the map with their photos, only while the app is open.
+  see each other on the map with their photos, only while the app is open;
+  when one is a street away, you get a word about it.
 - **Messages.** Tap a friend on the map to talk; you'll see when they're
   typing and when they've read it. Send a pin and it shows as a card.
 - **Looking after each other.** Block someone (they can't message or add

@@ -419,6 +419,7 @@ async function loadPrivate(userId: string, attempt = 0) {
   S.sharingUntil = remembered.until
   changed()
   remindSoon()
+  noticeNearby()
   // Sharing from last time on this device picks up again. A row without it may
   // be another device of yours sharing right now, so it's left alone, unless
   // it's this device's own hour that ran out while the app was closed.
@@ -486,6 +487,7 @@ function subscribePrivate(userId: string) {
       if (payload.eventType === 'DELETE' || !row.shared) S.locations.delete(row.user_id)
       else S.locations.set(row.user_id, row)
       changed()
+      noticeNearby()
     })
     .subscribe()
 
@@ -550,6 +552,7 @@ async function refreshLocations() {
   if (error) return // keep who we had; a blip shouldn't take friends off the map
   S.locations = new Map((data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
   changed()
+  noticeNearby()
 }
 
 function resetPrivate() {
@@ -1089,6 +1092,7 @@ export function watchHere(): Promise<Here | null> {
         changed()
         answerWaiting(S.here)
         if (S.sharing) pushLocation(false)
+        noticeNearby()
       },
       () => {
         // Denied, or no fix at all: give up so the next ask starts fresh. A
@@ -1127,6 +1131,23 @@ export async function enableCompass() {
     changed()
   }
   window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onTurn as EventListener)
+}
+
+// A friend who shares where they are comes within a couple of streets of you: a
+// word about it, at most every two hours each. Worked out here, from what we see.
+const saidNearby = new Map<string, number>()
+
+function noticeNearby() {
+  const here = S.here
+  if (!here || !S.userId) return
+  for (const id of S.locations.keys()) {
+    const loc = locationOf(id)
+    if (!loc || id === S.userId || S.blocked.has(id)) continue
+    const d = distance(here.latitude, here.longitude, loc.latitude, loc.longitude)
+    if (d > 200 || Date.now() - (saidNearby.get(id) ?? 0) < 2 * 3600000) continue
+    saidNearby.set(id, Date.now())
+    onIncoming(`${nameOf(id)} is nearby`, `${Math.max(10, Math.round(d / 10) * 10)} m away`, `user/${id}`)
+  }
 }
 
 // Something you're in on starts within the hour: a word about it, once, on this device.
