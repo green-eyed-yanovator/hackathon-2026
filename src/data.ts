@@ -537,7 +537,7 @@ export async function createPost(draft: Draft) {
   return post as Post
 }
 
-export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at'>>) {
+export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair'>>) {
   const { data, error } = await supabase.from('posts').update(patch).eq('id', id).select().single()
   if (error) return fail("Couldn't save the change", error)
   upsert(S.posts, data as Post, byId, true)
@@ -561,6 +561,14 @@ export async function reply(postId: string, content: string) {
   const { data, error } = await supabase.from('replies').insert({ post_id: postId, content }).select().single()
   if (error) return fail("Couldn't send the reply", error)
   upsert(S.replies, data as Reply, byId)
+  changed()
+  return true
+}
+
+export async function deleteReply(id: string) {
+  const { error } = await supabase.from('replies').delete().eq('id', id)
+  if (error) return fail("Couldn't delete the reply", error)
+  S.replies = S.replies.filter((r) => r.id !== id)
   changed()
   return true
 }

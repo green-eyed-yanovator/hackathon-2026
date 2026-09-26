@@ -1155,6 +1155,30 @@ kbd {
   text-decoration: underline;
 }
 
+.link.quiet {
+  margin-left: 8px;
+  color: var(--muted);
+  font-weight: 500;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.reply:hover .link.quiet,
+.link.quiet:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .link.quiet {
+    opacity: 1;
+  }
+}
+
+.danger-link {
+  margin-left: 8px;
+  color: var(--danger);
+}
+
 .link.right {
   display: block;
   margin: 0 0 8px auto;

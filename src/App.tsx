@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, isOnline, locationOf, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
-  createPost, updatePost, deletePost, loadRevisions, reply, toggleInterest, toggleSave, saveProfile,
+  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleInterest, toggleSave, saveProfile,
   uploadAvatar, changeEmail, deleteAccount, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
   type Flair, type Post, type Revision, type Notification,
@@ -898,6 +898,19 @@ function Feed() {
   )
 }
 
+function FlairPick({ value, onPick }: { value: Flair; onPick: (flair: Flair) => void }) {
+  return (
+    <div className="flair-pick" role="radiogroup" aria-label="Kind of pin">
+      {(Object.keys(flairs) as Flair[]).map((f) => (
+        <button key={f} role="radio" aria-checked={value === f} className={value === f ? 'on' : ''} style={{ '--c': flairs[f].color } as React.CSSProperties} onClick={() => onPick(f)}>
+          <Blip flair={f} size={26} />
+          <span>{flairs[f].label}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
 //
 // A pin and its thread.
 //
@@ -907,6 +920,8 @@ function PostView({ post }: { post: Post }) {
   const [title, setTitle] = useState(post.title)
   const [body, setBody] = useState(post.description)
   const [starts, setStarts] = useState(post.starts_at ? toLocalInput(post.starts_at) : '')
+  const [flair, setFlair] = useState<Flair>(post.flair)
+  const [doomedReply, setDoomedReply] = useState<string | null>(null) // a reply of mine waiting for "really?"
   const [history, setHistory] = useState<Revision[] | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
@@ -933,7 +948,7 @@ function PostView({ post }: { post: Post }) {
 
   async function save() {
     if (!title.trim()) return
-    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), starts_at: fromLocalInput(starts) })) {
+    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), starts_at: fromLocalInput(starts), flair })) {
       setEditing(false)
       setHistory(null)
     } else failed("Couldn't save")
@@ -1016,6 +1031,7 @@ function PostView({ post }: { post: Post }) {
 
       {editing ? (
         <div className="stack">
+          <FlairPick value={flair} onPick={setFlair} />
           <input className="input title-input" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} autoFocus />
           <textarea className="input" rows={5} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
           <label className="field when-field">
@@ -1155,6 +1171,18 @@ function PostView({ post }: { post: Post }) {
               </button>
               {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
               <span className="muted"> · {ago(r.created_at)}</span>
+              {me && r.author_id === me && (
+                <button
+                  className={doomedReply === r.id ? 'link danger-link' : 'link quiet'}
+                  onClick={async () => {
+                    if (doomedReply !== r.id) return setDoomedReply(r.id)
+                    if (!(await deleteReply(r.id))) failed("Couldn't delete")
+                  }}
+                  onBlur={() => setDoomedReply(null)}
+                >
+                  {doomedReply === r.id ? 'really delete?' : 'delete'}
+                </button>
+              )}
             </div>
             <div className="reply-text">
               <Linked text={r.content} />
@@ -1975,14 +2003,7 @@ function ComposeView() {
         </button>
       </div>
 
-      <div className="flair-pick" role="radiogroup" aria-label="Kind of pin">
-        {(Object.keys(flairs) as Flair[]).map((f) => (
-          <button key={f} role="radio" aria-checked={flair === f} className={flair === f ? 'on' : ''} style={{ '--c': flairs[f].color } as React.CSSProperties} onClick={() => setFlair(f)}>
-            <Blip flair={f} size={26} />
-            <span>{flairs[f].label}</span>
-          </button>
-        ))}
-      </div>
+      <FlairPick value={flair} onPick={setFlair} />
 
       <input className="input title-input" placeholder="What's happening?" value={title} maxLength={120} autoFocus={!narrow()} onChange={(e) => setTitle(e.target.value)} />
       <textarea className="input" rows={5} placeholder="Details: where exactly, who should come, what to bring…" value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
