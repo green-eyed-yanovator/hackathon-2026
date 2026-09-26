@@ -798,6 +798,11 @@ export type MapState = {
   fade: { canvas: HTMLCanvasElement; start: number } | null // the old style, fading out after a switch
   radar: { x: number; y: number; r: number } | null // the corner minimap, in css px; null when hidden
 
+  // The settled map (land, tiles, labels) kept as one bitmap, so frames that only
+  // animate pins, the radar sweep or pulses just blit it and draw those on top.
+  base: HTMLCanvasElement
+  baseDirty: boolean
+
   tileUrl: string | null
   sources: Map<string, SourceEntry>
   queue: { key: string; z: number; x: number; y: number; entry: SourceEntry }[] // tiles waiting to download
@@ -850,7 +855,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, radar: null, tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
+    fade: null, radar: null, base: document.createElement('canvas'), baseDirty: true, tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
   }
@@ -868,6 +873,9 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     m.height = rect.height
     canvas.width = Math.round(rect.width * m.ratio)
     canvas.height = Math.round(rect.height * m.ratio)
+    m.base.width = canvas.width
+    m.base.height = canvas.height
+    m.baseDirty = true
     requestFrame(m)
   }
   const observer = new ResizeObserver(resize)
@@ -901,6 +909,7 @@ export function setTheme(m: MapState, name: string) {
 
   m.rasters.clear()
   m.sprites.clear()
+  m.baseDirty = true
   requestFrame(m)
 }
 
@@ -919,6 +928,7 @@ export function setMarkers(m: MapState, markers: Marker[]) {
     if (marker.kind === 'pin' && !m.born.has(marker.id)) m.born.set(marker.id, first ? 0 : now)
   }
   m.markers = markers
+  m.baseDirty = true // markers claim label space, so the labels move with them
   if (m.hovered) m.hovered = markers.find((marker) => marker.id === m.hovered!.id) ?? null
   requestFrame(m)
 }
@@ -1257,6 +1267,7 @@ function pumpFetches(m: MapState) {
       .then((buffer) => {
         job.entry.tile = decodeTile(new Uint8Array(buffer), job.z, job.x, job.y)
         job.entry.state = 'ready'
+        m.baseDirty = true
         m.onTile()
       })
       .catch(() => {
@@ -2371,34 +2382,51 @@ function frame(m: MapState, time: number) {
 
   const dt = Math.min(time - (m.lastTime || time), 50)
   let keepGoing = stepCamera(m, time)
+  if (keepGoing) m.baseDirty = true
   const view = viewOf(m)
   const c = m.ctx
 
-  c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
-  c.fillStyle = m.theme.land
-  c.fillRect(0, 0, m.width, m.height)
+  if (m.baseDirty) {
+    c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
+    c.fillStyle = m.theme.land
+    c.fillRect(0, 0, m.width, m.height)
 
-  if (drawTiles(m, view)) keepGoing = true
+    let unsettled = drawTiles(m, view)
 
-  // Markers claim their space first so labels never cover them.
-  m.visible = cluster(m)
-  const placed: Box[] = []
-  for (const marker of m.visible) {
-    const p = project(m, marker.x, marker.y)
-    const lift = marker.kind === 'pin' && m.theme.blip === 'pin' ? 22 : 0
-    placed.push({ x0: p.x - 16, y0: p.y - 16 - lift, x1: p.x + 16, y1: p.y + 16 - lift + (marker.kind === 'person' ? 20 : 0) })
+    // Markers claim their space first so labels never cover them.
+    m.visible = cluster(m)
+    const placed: Box[] = []
+    for (const marker of m.visible) {
+      const p = project(m, marker.x, marker.y)
+      const lift = marker.kind === 'pin' && m.theme.blip === 'pin' ? 22 : 0
+      placed.push({ x0: p.x - 16, y0: p.y - 16 - lift, x1: p.x + 16, y1: p.y + 16 - lift + (marker.kind === 'person' ? 20 : 0) })
+    }
+
+    if (drawLabels(m, view, placed, dt)) unsettled = true
+
+    // Once nothing is moving, loading or fading, keep this picture.
+    if (unsettled || keepGoing) keepGoing = true
+    else {
+      const b = m.base.getContext('2d')!
+      b.setTransform(1, 0, 0, 1, 0, 0)
+      b.drawImage(m.canvas, 0, 0)
+      m.baseDirty = false
+    }
+  } else {
+    c.setTransform(1, 0, 0, 1, 0, 0)
+    c.drawImage(m.base, 0, 0)
+    c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
   }
 
-  if (drawLabels(m, view, placed, dt)) keepGoing = true
   const animated = drawMarkers(m, view, time)
-  if (m.radar) drawRadar(m, view, time)
+  const sweeping = m.radar ? drawRadar(m, view, time) : false
   if (drawFade(m, time)) keepGoing = true
 
   m.onFrame()
 
   if (keepGoing) requestFrame(m)
-  else if (animated) {
-    // Pulses don't need 60 fps; let the battery breathe.
+  else if (animated || sweeping) {
+    // Pulses and sweeps don't need 60 fps; let the battery breathe.
     setTimeout(() => requestFrame(m), 33)
   }
 }
@@ -2799,7 +2827,7 @@ function drawRadar(m: MapState, v: View, time: number) {
   c.textBaseline = 'middle'
   c.fillText('N', cx, cy - r + 0.5)
 
-  if (t.blip === 'ring') requestFrame(m) // the sweep turns
+  return t.blip === 'ring' // the sweep turns
 }
 
 // After a style switch, the old picture fades out over the new one.
