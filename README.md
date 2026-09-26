@@ -7,24 +7,23 @@ pin on what's going on:
 - Someone dumping rubbish on your street? Lost cat? Local gossip?
 - Want to see if the neighbours would back a bench in the park?
 
-Pins are threads: people reply, say they're in, save them, and message each
-other. Pins can have a time, so tonight's BBQ counts down in the feed, shows
-under Soon, and ripples on the map while it's on. Add friends (People around
-here suggests neighbours whose pins are close), share your location with
-them, until you stop or just for an hour, and see each other on the map with
-your photos. Tap a friend to talk; you'll see when they're typing. Your dot
-only shows while you have the app open. Mention people in replies with `@`,
-send a pin to a friend (it shows in your chat as a card), and get directions
-to any pin in your own maps app.
+What you can do:
 
-Looking after each other: block someone (they can't message or add you,
-and their pins and replies disappear for you), or report a pin; reports
-land in the `reports` table for whoever runs the neighbourhood.
-
-Accounts: sign up with email and password, sign in with a password or an
-emailed code, reset a forgotten password by code, change email or password,
-pick a profile photo, delete your account. New accounts get a short
-getting-started list.
+- **Pins are threads.** Reply (mention people with `@`), say you're in, save,
+  share, or get directions in your own maps app. Give a pin a time and it
+  counts down in the feed, shows under Soon, and ripples on the map while it's on.
+- **Friends.** People around here suggests neighbours whose pins are close.
+  Friends can share their location (until they stop, or just for an hour) and
+  see each other on the map with their photos, only while the app is open.
+- **Messages.** Tap a friend on the map to talk; you'll see when they're
+  typing and when they've read it. Send a pin and it shows as a card.
+- **Looking after each other.** Block someone (they can't message or add
+  you, and their pins and replies disappear for you) or report a pin; reports
+  land in the `reports` table for whoever runs the neighbourhood.
+- **Accounts.** Sign up with email and password, sign in with a password or
+  an emailed code, reset a forgotten password by code, change email or
+  password, pick a profile photo, delete your account. New accounts get a
+  short getting-started list.
 
 ## Running it
 
