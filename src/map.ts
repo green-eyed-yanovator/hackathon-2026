@@ -2405,7 +2405,8 @@ export function setRoute(m: MapState, from: { lng: number; lat: number } | null,
   const metre = 1 / metersPerWorld(fromY)
   const old = m.route
   const sameEnd = !!old && Math.hypot(old.toX - toX, old.toY - toY) < 20 * metre
-  if (sameEnd && Math.hypot(old.fromX - fromX, old.fromY - fromY) < 3 * metre) return
+  // A few metres is GPS jitter; with no way found, only a real move is worth another try.
+  if (sameEnd && Math.hypot(old.fromX - fromX, old.fromY - fromY) < (old.state === 'ready' ? 3 : 20) * metre) return
 
   if (sameEnd && old.state === 'ready' && old.points.length) {
     // The closest point on the line to where you are now.

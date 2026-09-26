@@ -683,7 +683,7 @@ function walkTarget() {
 function walkable() {
   const r = UI.route
   if (r.kind === 'pin') return `pin/${r.id}`
-  if ((r.kind === 'user' || r.kind === 'chat') && locationOf(r.id)) return `user/${r.id}`
+  if ((r.kind === 'user' || r.kind === 'chat') && r.id !== S.userId && locationOf(r.id)) return `user/${r.id}`
   return null
 }
 
