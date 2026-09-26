@@ -20,8 +20,9 @@ What you can do:
 - **Get there.** A walking route along the streets, drawn on the map (a GPS
   line in the game styles, on the radar too) with the minutes it takes and
   the street most of it is on. It shortens as you walk, finds a new way if
-  you stray, and works for a friend too, following them as they move; one
-  tap tells them you're on your way. Your own maps app is one tap away.
+  you stray, and works for a friend too, following them as they move (one
+  tap tells them you're on your way), or any street search finds. Your own
+  maps app is one tap away.
 - **Friends.** People around here suggests neighbours whose pins are close.
   Friends can share their location (until they stop, or just for an hour) and
   see each other on the map with their photos, only while the app is open;
