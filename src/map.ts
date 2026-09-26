@@ -2961,10 +2961,11 @@ function drawTiles(m: MapState, v: View) {
         const px = w.x >> up
         const py = w.y >> up
         let parent = m.rasters.get(`${v.z - up}/${px}/${py}`)
-        // Nothing above it painted yet (a first visit): ask for the view from five
-        // levels out, one small tile that covers the whole screen, so a slow
-        // connection shows the lie of the land long before the detail arrives.
-        if (!parent && up === OVERVIEW && v.z >= 9) parent = tileRaster(m, v.z - up, px, py, performance.now() < budgetEnd) ?? undefined
+        // Nothing above it painted yet (a first visit, or new ground): ask for the
+        // view from five levels out, one small tile that covers the whole screen, so
+        // a slow connection shows the lie of the land long before the detail
+        // arrives. Only zoomed in, where that tile is a neighbourhood, not a country.
+        if (!parent && !raster && up === OVERVIEW && v.z >= 12) parent = tileRaster(m, v.z - up, px, py, performance.now() < budgetEnd) ?? undefined
         if (!parent) continue
         parent.used = m.frameCount
         const part = parent.canvas.width / 2 ** up

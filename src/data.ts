@@ -392,12 +392,13 @@ async function loadPrivate(userId: string, attempt = 0) {
   ] as const)
   if (S.userId !== userId) return
   // A network blip keeps what we had, rather than emptying the inbox and the
-  // friends off the map, and tries again in a bit.
+  // friends off the map, and tries again: in 5 s, then 10, 20, up to a minute.
   if (results.some((r) => r.error)) {
-    if (attempt < 3) setTimeout(() => S.userId === userId && loadPrivate(userId, attempt + 1), 5000)
+    setTimeout(() => S.userId === userId && loadPrivate(userId, attempt + 1), Math.min(60000, 5000 * 2 ** attempt))
     return
   }
   const [saved, notifications, messages, settings, friendships, locations, blocks, presence] = results
+  privateLoaded = true
 
   S.saved = saved.data ?? []
   // A reload keeps any older notifications already paged in.
@@ -568,8 +569,8 @@ function resetPrivate() {
   S.seen = new Map()
   S.sharing = false
   S.sharingUntil = null
-  saidNearby.clear()
-  reminded = null
+  privateLoaded = false
+  said = null
 }
 
 let started = false
@@ -743,16 +744,14 @@ export async function report(postId: string, reason: 'spam' | 'unkind' | 'unsafe
 
 // One write at a time per toggle (and per friendship): a second tap while the first
 // is on its way is let go, so an insert and a delete never race to the database.
-const inFlight = new Set<string>()
+const inFlight = new Map<string, Promise<boolean>>()
 
-async function once(key: string, write: () => Promise<boolean>) {
-  if (inFlight.has(key)) return true
-  inFlight.add(key)
-  try {
-    return await write()
-  } finally {
-    inFlight.delete(key)
-  }
+function once(key: string, write: () => Promise<boolean>) {
+  const pending = inFlight.get(key)
+  if (pending) return pending // the second tap gets the first one's answer
+  const promise = write().finally(() => inFlight.delete(key))
+  inFlight.set(key, promise)
+  return promise
 }
 
 export const toggleLike = (replyId: string) => once(`like/${replyId}`, () => flipLike(replyId))
@@ -1020,7 +1019,10 @@ export async function block(id: string) {
   const { error } = await supabase.from('blocks').insert({ blocked: id })
   if (error) return fail("Couldn't block", error)
   S.blocked.add(id)
-  if (friendshipWith(id)) await removeFriend(id)
+  // A request or accept still on its way lands first; then the friendship ends
+  // whatever it was, rather than being let go as a second tap.
+  await inFlight.get(`friend/${id}`)
+  if (friendshipWith(id)) await endFriendship(id)
   changed()
   return true
 }
@@ -1137,47 +1139,64 @@ export async function enableCompass() {
 
 // The words worked out on this device can be turned off in Settings like the
 // server's notifications; their kinds sit in the same list, which the server ignores.
-const muted = (kind: string) => S.mutedKinds.includes(kind)
+// Signed in, nothing is said until that list (and who's blocked) has loaded.
+let privateLoaded = false
+const muted = (kind: string) => (S.userId !== null && !privateLoaded) || S.mutedKinds.includes(kind)
+
+// What's been said already, per person on this device: 'soon/<pin>' and 'near/<friend>',
+// with when. Entries older than a week go, so it never grows.
+let said: Record<string, number> | null = null
+
+function saidAt(key: string) {
+  if (!said) {
+    try {
+      said = JSON.parse(localStorage.getItem(`aroundhere.said.${S.userId}`) ?? '{}') as Record<string, number>
+    } catch {
+      said = {}
+    }
+  }
+  return said[key] ?? 0
+}
+
+function sayOnce(key: string) {
+  saidAt(key)
+  const now = Date.now()
+  said![key] = now
+  for (const k in said) if (now - said[k] > 7 * 86400000) delete said[k]
+  try {
+    localStorage.setItem(`aroundhere.said.${S.userId}`, JSON.stringify(said))
+  } catch {
+    // Private browsing: it may say something twice. No harm.
+  }
+}
 
 // A friend who shares where they are comes within a couple of streets of you: a
-// word about it, at most every two hours each. Worked out here, from what we see.
-const saidNearby = new Map<string, number>()
-
+// word about it, at most every two hours each. Worked out here, from what we see:
+// only from where they are now (the last ten minutes), and a fix of mine good to 100 m.
 function noticeNearby() {
   const here = S.here
-  if (!here || !S.userId || muted('friend_nearby')) return
+  if (!here || here.accuracy > 100 || !S.userId || muted('friend_nearby')) return
   for (const id of S.locations.keys()) {
     const loc = locationOf(id)
-    if (!loc || id === S.userId || S.blocked.has(id)) continue
+    if (!loc || id === S.userId || S.blocked.has(id) || Date.now() - time(loc.updated_at) > 600000) continue
     const d = distance(here.latitude, here.longitude, loc.latitude, loc.longitude)
-    if (d > 200 || Date.now() - (saidNearby.get(id) ?? 0) < 2 * 3600000) continue
-    saidNearby.set(id, Date.now())
+    if (d > 200 || Date.now() - saidAt(`near/${id}`) < 2 * 3600000) continue
+    sayOnce(`near/${id}`)
     onIncoming(`${nameOf(id)} is nearby`, `${Math.max(10, Math.round(d / 10) * 10)} m away`, `user/${id}`)
   }
 }
 
-// Something you're in on starts within the hour: a word about it, once, on this device.
-let reminded: Set<string> | null = null // pins already mentioned, for whoever's signed in
-const remindedKey = () => `aroundhere.reminded.${S.userId}`
-
+// Something you're in on starts within the hour: a word about it, once. Saying
+// you're in when it's that close already is reminder enough.
 function remindSoon() {
   if (!S.userId || !S.ready || muted('starting_soon')) return
-  try {
-    reminded ??= new Set(JSON.parse(localStorage.getItem(remindedKey()) ?? '[]') as string[])
-  } catch {
-    reminded ??= new Set()
-  }
   for (const i of S.interests) {
-    if (i.user_id !== S.userId || reminded.has(i.post_id)) continue
+    if (i.user_id !== S.userId || saidAt(`soon/${i.post_id}`)) continue
     const post = S.posts.find((p) => p.id === i.post_id)
     const left = post?.starts_at && !post.resolved_at ? time(post.starts_at) - Date.now() : -1
     if (!post || left <= 0 || left > 3600000) continue
-    reminded.add(post.id)
-    try {
-      localStorage.setItem(remindedKey(), JSON.stringify([...reminded].slice(-50)))
-    } catch {
-      // Private browsing: it may say it twice. No harm.
-    }
+    sayOnce(`soon/${post.id}`)
+    if (time(i.created_at) > time(post.starts_at!) - 3600000) continue
     onIncoming('Starting soon', `${post.title}, in ${Math.max(1, Math.round(left / 60000))} min`, `pin/${post.id}`)
   }
 }

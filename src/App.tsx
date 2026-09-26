@@ -936,8 +936,24 @@ function addToCalendar(post: Post, street: string) {
     `GEO:${post.latitude.toFixed(6)};${post.longitude.toFixed(6)}`,
     'END:VEVENT', 'END:VCALENDAR',
   ]
-  // Lines longer than 75 characters fold onto the next, which starts with a space.
-  const folded = lines.map((line) => line.match(/.{1,74}/g)!.join('\r\n ')).join('\r\n')
+  // Lines longer than 75 bytes fold onto the next, which starts with a space;
+  // by whole characters, so an accent or an emoji is never cut in half.
+  const bytes = new TextEncoder()
+  const fold = (line: string) => {
+    let out = ''
+    let used = 0
+    for (const ch of line) {
+      const size = bytes.encode(ch).length
+      if (used + size > 74) {
+        out += '\r\n '
+        used = 1
+      }
+      out += ch
+      used += size
+    }
+    return out
+  }
+  const folded = lines.map(fold).join('\r\n')
   const url = URL.createObjectURL(new Blob([folded + '\r\n'], { type: 'text/calendar' }))
   const link = document.createElement('a')
   link.href = url
