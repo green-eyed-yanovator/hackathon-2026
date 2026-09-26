@@ -59,6 +59,21 @@ back before a demo:
 docker exec supabase_db_hackathon-2026 psql -U postgres -c "update locations set updated_at = now() where user_id::text like 'd0000000%'"
 ```
 
+## Putting it online
+
+The frontend is a static build (`npm run build`, then serve `dist/`). For a
+hosted Supabase project:
+
+```sh
+supabase link --project-ref <your project>
+supabase db push                    # applies supabase/migrations
+```
+
+Then, in the dashboard: set the Site URL to where the frontend lives, and
+copy the two email templates in `supabase/templates/` (sign-in code and
+password reset) into Authentication → Email Templates, so emails carry a
+6-digit code the app asks for. Don't run `seed.sql` there; it's demo data.
+
 ## Demo in two minutes
 
 1. Open the app signed out: the map of Adelaide with pins, the feed beside it.
