@@ -33,6 +33,7 @@ export const inputStyle: CSSProperties = {
   border: '1px solid #ccc',
   borderRadius: '10px',
   fontSize: '16px',
+  fontFamily: 'inherit',
 }
 
 export function primaryButtonStyle(enabled: boolean): CSSProperties {

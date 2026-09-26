@@ -72,6 +72,8 @@ export default function ProfilePanel({
   const [profile, setProfile] = useState<Profile | null>(seed)
   const [draft, setDraft] = useState<Profile | null>(null)
   const [error, setError] = useState('')
+  // Non-null while the bio is being edited in place.
+  const [bioDraft, setBioDraft] = useState<string | null>(null)
 
   useEffect(() => {
     let ignore = false
@@ -150,6 +152,24 @@ export default function ProfilePanel({
 
     setProfile(data)
     setDraft(null)
+    onSaved(data)
+  }
+
+  async function saveBio() {
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ bio: bioDraft?.trim() || null })
+      .eq('id', profileId)
+      .select()
+      .single()
+
+    if (error) {
+      setError(error.message)
+      return
+    }
+
+    setProfile(data)
+    setBioDraft(null)
     onSaved(data)
   }
 
@@ -298,10 +318,58 @@ export default function ProfilePanel({
           </div>
         </div>
 
-        {profile.bio && (
-          <p style={{ margin: '14px 0 0', lineHeight: 1.5, color: '#333', whiteSpace: 'pre-wrap' }}>
-            {profile.bio}
-          </p>
+        {bioDraft !== null ? (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              saveBio()
+            }}
+            style={{ marginTop: '14px' }}
+          >
+            <textarea
+              autoFocus
+              value={bioDraft}
+              onChange={(event) => setBioDraft(event.target.value)}
+              placeholder="What should neighbours know about you? Hobbies, how long you've lived here, what you can help with..."
+              rows={4}
+              maxLength={500}
+              style={{ ...inputStyle, marginBottom: '4px', fontSize: '14px', resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="row-meta" style={{ flex: 1, margin: 0 }}>
+                {bioDraft.length}/500
+              </span>
+              <button type="button" onClick={() => setBioDraft(null)} style={{ ...linkButtonStyle, fontSize: '13px' }}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                style={{ ...primaryButtonStyle(true), flex: 'none', padding: '8px 16px', fontSize: '14px' }}
+              >
+                Save bio
+              </button>
+            </div>
+          </form>
+        ) : profile.bio ? (
+          <div style={{ marginTop: '14px' }}>
+            <p style={{ margin: 0, lineHeight: 1.5, color: '#333', whiteSpace: 'pre-wrap' }}>
+              {profile.bio}
+            </p>
+            {own && (
+              <button
+                onClick={() => setBioDraft(profile.bio ?? '')}
+                style={{ ...linkButtonStyle, marginTop: '4px', fontSize: '12px', color: '#888' }}
+              >
+                Edit bio
+              </button>
+            )}
+          </div>
+        ) : (
+          own && (
+            <button className="bio-empty" onClick={() => setBioDraft('')}>
+              ✏️ Add a bio so neighbours know who you are
+            </button>
+          )
         )}
 
         <div style={{ display: 'flex', gap: '8px', margin: '16px 0' }}>

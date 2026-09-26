@@ -121,3 +121,16 @@
 .footer-links { display: flex; align-items: center; gap: 14px; margin-top: 28px; padding-top: 16px; border-top: 1px solid #eee; }
 .footer-links button { white-space: nowrap; }
 .footer-links .row-meta { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bio-empty {
+  width: 100%;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1.5px dashed #d1d5db;
+  border-radius: 12px;
+  background: transparent;
+  color: #666;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.bio-empty:hover { border-color: #9ca3af; background: #f9fafb; color: #333; }
