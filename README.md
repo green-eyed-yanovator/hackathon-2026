@@ -154,4 +154,24 @@ The database is in `supabase/migrations`. Row level security does the
 privacy work: messages, inbox and saved pins are private, and a location is
 only readable by accepted friends while its owner shares it.
 
+### Privacy, and how not to break it
+
+Where people are and when they're around is the sensitive part, so:
+
+- **Locations and online status are friends-only.** Row security on
+  `locations` and `presence` lets only accepted friends read them. Your dot is
+  withdrawn when the app goes out of view, and positions older than 12 hours
+  are ignored.
+- **Those rows are never deleted, only updated.** Supabase realtime sends
+  every DELETE to every client, whatever the row security, with the row's key,
+  which for these tables is a person. Stopping sharing sets `shared = false`;
+  leaving sets `seen_at` far in the past.
+- **Helper functions live in the `private` schema**, which the API doesn't
+  expose. In `public`, `are_friends` or `has_blocked` would tell anyone who's
+  friends with or blocked whom, and `notify` would let anyone send
+  notifications as anyone.
+- **"Typing…" uses a private realtime channel** that only the two people in
+  the chat may join (policies on `realtime.messages`).
+- Blocks are private to the blocker, and `notify` stops at them.
+
 Map data © OpenStreetMap contributors, tiles by OpenFreeMap.
