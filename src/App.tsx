@@ -1677,19 +1677,20 @@ function ProfileView({ id }: { id: string }) {
         )
       )}
 
+      {/* On your own profile the numbers are a way into the feed's Mine tab. */}
       <div className="stats">
-        <div>
-          <b>{posts.length}</b>
-          <span>pins</span>
-        </div>
-        <div>
-          <b>{replyCount}</b>
-          <span>replies</span>
-        </div>
-        <div>
-          <b>{joinedCount}</b>
-          <span>joined</span>
-        </div>
+        {(
+          [
+            [posts.length, 'pins'],
+            [replyCount, 'replies'],
+            [joinedCount, 'joined'],
+          ] as const
+        ).map(([count, label]) => (
+          <button key={label} disabled={!own} onClick={() => { ui({ tab: 'mine', feed: true }); go('') }} title={own ? 'Show them in the feed' : undefined}>
+            <b>{count}</b>
+            <span>{label}</span>
+          </button>
+        ))}
       </div>
 
       <div className="actions">
