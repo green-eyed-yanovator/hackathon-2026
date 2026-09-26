@@ -2448,6 +2448,7 @@ function drawTiles(m: MapState, v: View) {
   const budgetEnd = performance.now() + 7
   let unfinished = false
   let blank = 0 // tiles with nothing at all to show yet
+  let broken = 0 // ...of which the download failed
 
   for (const w of wanted) {
     const sx = w.x * v.tileSize - v.left
@@ -2457,8 +2458,12 @@ function drawTiles(m: MapState, v: View) {
 
     if (fading < 1) {
       // Stand-in: the nearest ancestor we already painted, cropped and scaled up.
-      // A fresh tile fades in over it rather than popping.
-      unfinished = true
+      // A fresh tile fades in over it rather than popping. A tile whose download
+      // failed doesn't keep frames coming: its retry asks for one when it's time.
+      const shift = v.z - sourceFor(v.z)
+      const failed = !raster && m.sources.get(`${sourceFor(v.z)}/${w.x >> shift}/${w.y >> shift}`)?.state === 'error'
+      if (!failed) unfinished = true
+      else broken++
       let stoodIn = false
       for (let up = 1; up <= 6 && v.z - up >= 0; up++) {
         const px = w.x >> up
@@ -2489,7 +2494,7 @@ function drawTiles(m: MapState, v: View) {
 
   // On a slow connection, say so rather than showing an empty map.
   if (blank > 0) {
-    const text = 'Loading map…'
+    const text = broken === blank ? "Can't reach the map right now. Trying again…" : 'Loading map…'
     c.font = `600 12px ${sans}`
     const w = c.measureText(text).width + 24
     c.fillStyle = 'rgba(20, 22, 26, 0.75)'
