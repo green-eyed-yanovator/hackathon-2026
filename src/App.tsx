@@ -2556,7 +2556,7 @@ export default function App() {
         </button>
         {me ? (
           <>
-            <button className="icon-btn bar hide-narrow" onClick={() => go(route.kind === 'friends' ? '' : 'friends')} title="Friends (F)" aria-label="Friends">
+            <button className="icon-btn bar" onClick={() => go(route.kind === 'friends' ? '' : 'friends')} title="Friends (F)" aria-label="Friends">
               <Icon name="users" />
               {incomingRequests > 0 && <b className="badge">{incomingRequests}</b>}
             </button>
