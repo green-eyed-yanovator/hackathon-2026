@@ -64,6 +64,11 @@ sheet has one-tap buttons for them (never in a production build).
 
 Emails (sign-in codes, password resets) land in Mailpit at http://127.0.0.1:54324.
 
+Where you are (the locate button, Get there, friends nearby) needs a secure
+page: `localhost` is fine, but a phone opening the laptop's address over plain
+`http://192.168…` won't be told. Try it on a phone through a deployed build or
+an HTTPS tunnel.
+
 Shared locations only count while they're fresh (a real phone refreshes its
 own), so the demo neighbours fade off the map after half a day. To put them
 back before a demo:
