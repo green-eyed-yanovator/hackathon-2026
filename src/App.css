@@ -2440,6 +2440,18 @@ textarea::placeholder {
   right: 444px;
 }
 
+/* Middling widths: both panels would squeeze the map to a strip, so the feed
+   steps aside while something is open, and comes back when it closes. */
+@media (min-width: 761px) and (max-width: 1179px) {
+  .has-detail .feed {
+    display: none;
+  }
+
+  .has-detail.has-feed .fab {
+    left: calc(50% - 222px);
+  }
+}
+
 /* Phone tab bar: hidden on wide screens. */
 
 .tabbar {

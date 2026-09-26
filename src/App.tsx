@@ -369,7 +369,8 @@ function openArea() {
     const sheet = kind === 'pin' || kind === 'place' || kind === 'new' ? h * 0.58 : kind ? h * 0.86 : UI.feed ? h * 0.56 : 0
     return { left: 0, top: 64, right: w, bottom: h - 60 - sheet }
   }
-  const left = UI.feed ? 392 : 0
+  // Below 1180 px the feed steps aside while something is open (see App.css).
+  const left = UI.feed && !(UI.route.kind && w < 1180) ? 392 : 0
   const right = UI.route.kind ? w - 436 : w
   return { left, top: 72, right, bottom: h }
 }
