@@ -9,6 +9,7 @@ import {
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 
 import 'maplibre-gl/dist/maplibre-gl.css'
+import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 
 setWorkerUrl(workerUrl)
@@ -20,6 +21,7 @@ type Post = {
   latitude: number
   longitude: number
   created_at: string
+  author_name: string | null
 }
 
 type Location = {
@@ -31,6 +33,26 @@ type Reply = {
   post_id: string
   content: string
   created_at: string
+  author_name: string | null
+}
+
+type AuthMode = 'signup' | 'login'
+
+const authLabelStyle = {
+  display: 'block',
+  marginBottom: '6px',
+  fontWeight: 600,
+  color: '#333',
+}
+
+const authInputStyle = {
+  width: '100%',
+  boxSizing: 'border-box' as const,
+  padding: '12px',
+  marginBottom: '16px',
+  border: '1px solid #ccc',
+  borderRadius: '10px',
+  fontSize: '16px',
 }
 
 function App() {
@@ -58,6 +80,24 @@ const [replyText, setReplyText] = useState('')
 
   const [locationStatus, setLocationStatus] =
     useState('Finding your location...')
+
+  const [session, setSession] = useState<Session | null>(null)
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null)
+  const [authName, setAuthName] = useState('')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authMessage, setAuthMessage] = useState('')
+
+  useEffect(() => {
+    // Fires once with the stored session (INITIAL_SESSION), then on every sign-in/out.
+    const { data } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
+        setSession(newSession)
+      },
+    )
+
+    return () => data.subscription.unsubscribe()
+  }, [])
 
   useEffect(() => {
     async function loadPosts() {
@@ -315,6 +355,11 @@ async function handleCreateReply() {
   }
 
   function handleOpenForm() {
+    if (!session) {
+      openAuth('signup')
+      return
+    }
+
     setShowAddForm(true)
     setIsChoosingLocation(false)
     requestCurrentLocation()
@@ -361,6 +406,46 @@ async function handleCreateReply() {
     locationMarker.current = null
   }
 
+  function openAuth(mode: AuthMode) {
+    setAuthMode(mode)
+    setAuthMessage('')
+  }
+
+  async function handleAuthSubmit() {
+    setAuthMessage('')
+
+    const { data, error } =
+      authMode === 'signup'
+        ? await supabase.auth.signUp({
+            email: authEmail.trim(),
+            password: authPassword,
+            options: { data: { display_name: authName.trim() } },
+          })
+        : await supabase.auth.signInWithPassword({
+            email: authEmail.trim(),
+            password: authPassword,
+          })
+
+    if (error) {
+      setAuthMessage(error.message)
+      return
+    }
+
+    // With email confirmation on (the hosted default) sign-up returns no session.
+    if (!data.session) {
+      setAuthMessage('Check your email to confirm your account, then log in.')
+      return
+    }
+
+    setAuthMode(null)
+    setAuthPassword('')
+  }
+
+  async function handleSignOut() {
+    await supabase.auth.signOut()
+    handleCloseForm()
+  }
+
   useEffect(() => {
     if (!map.current || !isChoosingLocation) {
       return
@@ -388,6 +473,11 @@ async function handleCreateReply() {
     }
   }, [isChoosingLocation])
 
+  const authFormComplete =
+    authEmail.trim() !== '' &&
+    authPassword !== '' &&
+    (authMode !== 'signup' || authName.trim() !== '')
+
   return (
     <div
       ref={mapContainer}
@@ -407,10 +497,14 @@ async function handleCreateReply() {
       >
         <div
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16px',
             background: 'white',
             padding: '12px 20px',
             borderRadius: '16px',
             boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
+            fontFamily: 'Arial, sans-serif',
           }}
         >
           <h1
@@ -423,6 +517,29 @@ async function handleCreateReply() {
           >
             AroundHere
           </h1>
+
+          {session && (
+            <span style={{ fontSize: '14px', color: '#444' }}>
+              {session.user.user_metadata.display_name ??
+                session.user.email}
+            </span>
+          )}
+
+          <button
+            onClick={session ? handleSignOut : () => openAuth('login')}
+            style={{
+              border: '1px solid #ccc',
+              background: 'white',
+              color: '#222',
+              padding: '8px 14px',
+              borderRadius: '999px',
+              fontSize: '14px',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            {session ? 'Log out' : 'Log in'}
+          </button>
         </div>
       </header>
 
@@ -492,6 +609,18 @@ async function handleCreateReply() {
       {selectedPost.title}
     </h2>
 
+    {selectedPost.author_name && (
+      <p
+        style={{
+          margin: '0 0 12px',
+          fontSize: '14px',
+          color: '#777',
+        }}
+      >
+        by {selectedPost.author_name}
+      </p>
+    )}
+
     <p
       style={{
         margin: '0 0 24px',
@@ -555,48 +684,81 @@ async function handleCreateReply() {
           color: '#333',
         }}
       >
+        {reply.author_name && (
+          <div
+            style={{
+              marginBottom: '4px',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: '#666',
+            }}
+          >
+            {reply.author_name}
+          </div>
+        )}
         {reply.content}
       </div>
     ))
   )}
 </div>
 
-<textarea
-  value={replyText}
-  onChange={(event) => setReplyText(event.target.value)}
-  placeholder="Write a reply..."
-  rows={3}
-  style={{
-    width: '100%',
-    boxSizing: 'border-box',
-    padding: '12px',
-    border: '1px solid #ccc',
-    borderRadius: '10px',
-    fontSize: '14px',
-    resize: 'vertical',
-    marginBottom: '10px',
-  }}
-/>
+{session ? (
+  <>
+    <textarea
+      value={replyText}
+      onChange={(event) => setReplyText(event.target.value)}
+      placeholder="Write a reply..."
+      rows={3}
+      style={{
+        width: '100%',
+        boxSizing: 'border-box',
+        padding: '12px',
+        border: '1px solid #ccc',
+        borderRadius: '10px',
+        fontSize: '14px',
+        resize: 'vertical',
+        marginBottom: '10px',
+      }}
+    />
 
-<button
-  onClick={handleCreateReply}
-  disabled={!replyText.trim()}
-  style={{
-    width: '100%',
-    border: 'none',
-    background: replyText.trim() ? '#000' : '#ccc',
-    color: 'white',
-    padding: '12px',
-    borderRadius: '10px',
-    fontSize: '15px',
-    fontWeight: 600,
-    cursor: replyText.trim()
-      ? 'pointer'
-      : 'not-allowed',
-  }}
->
-  Reply
-</button>
+    <button
+      onClick={handleCreateReply}
+      disabled={!replyText.trim()}
+      style={{
+        width: '100%',
+        border: 'none',
+        background: replyText.trim() ? '#000' : '#ccc',
+        color: 'white',
+        padding: '12px',
+        borderRadius: '10px',
+        fontSize: '15px',
+        fontWeight: 600,
+        cursor: replyText.trim()
+          ? 'pointer'
+          : 'not-allowed',
+      }}
+    >
+      Reply
+    </button>
+  </>
+) : (
+  <button
+    onClick={() => openAuth('signup')}
+    style={{
+      width: '100%',
+      border: '1px solid #ccc',
+      background: 'white',
+      color: '#222',
+      padding: '12px',
+      borderRadius: '10px',
+      fontSize: '15px',
+      fontWeight: 600,
+      cursor: 'pointer',
+    }}
+  >
+    Sign up to reply
+  </button>
+)}
   </aside>
 )}
 
@@ -815,6 +977,160 @@ async function handleCreateReply() {
             </button>
           </div>
         </aside>
+      )}
+
+      {/* Sign up / log in */}
+      {authMode && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 30,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.35)',
+            fontFamily: 'Arial, sans-serif',
+          }}
+        >
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              handleAuthSubmit()
+            }}
+            style={{
+              width: '340px',
+              background: 'white',
+              borderRadius: '20px',
+              padding: '24px',
+              boxSizing: 'border-box',
+              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.25)',
+            }}
+          >
+            <h2
+              style={{
+                margin: '0 0 24px',
+                fontSize: '24px',
+                fontWeight: 700,
+                color: '#111',
+              }}
+            >
+              {authMode === 'signup' ? 'Create an account' : 'Log in'}
+            </h2>
+
+            {authMode === 'signup' && (
+              <>
+                <label style={authLabelStyle}>Name</label>
+                <input
+                  value={authName}
+                  onChange={(event) => setAuthName(event.target.value)}
+                  placeholder="How neighbours will see you"
+                  autoComplete="nickname"
+                  style={authInputStyle}
+                />
+              </>
+            )}
+
+            <label style={authLabelStyle}>Email</label>
+            <input
+              type="email"
+              value={authEmail}
+              onChange={(event) => setAuthEmail(event.target.value)}
+              autoComplete="email"
+              style={authInputStyle}
+            />
+
+            <label style={authLabelStyle}>Password</label>
+            <input
+              type="password"
+              value={authPassword}
+              onChange={(event) => setAuthPassword(event.target.value)}
+              autoComplete={
+                authMode === 'signup' ? 'new-password' : 'current-password'
+              }
+              style={authInputStyle}
+            />
+
+            {authMessage && (
+              <p
+                role="alert"
+                style={{
+                  margin: '0 0 16px',
+                  padding: '10px 12px',
+                  background: '#f3f4f6',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  color: '#333',
+                }}
+              >
+                {authMessage}
+              </p>
+            )}
+
+            <div
+              style={{
+                display: 'flex',
+                gap: '10px',
+                marginBottom: '16px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setAuthMode(null)}
+                style={{
+                  flex: 1,
+                  border: '1px solid #ccc',
+                  background: 'white',
+                  color: '#333',
+                  padding: '12px',
+                  borderRadius: '10px',
+                  fontSize: '16px',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                disabled={!authFormComplete}
+                style={{
+                  flex: 1,
+                  border: 'none',
+                  background: authFormComplete ? '#000' : '#ccc',
+                  color: 'white',
+                  padding: '12px',
+                  borderRadius: '10px',
+                  fontSize: '16px',
+                  fontWeight: 600,
+                  cursor: authFormComplete ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {authMode === 'signup' ? 'Sign up' : 'Log in'}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                openAuth(authMode === 'signup' ? 'login' : 'signup')
+              }
+              style={{
+                width: '100%',
+                border: 'none',
+                background: 'transparent',
+                color: '#555',
+                fontSize: '14px',
+                cursor: 'pointer',
+                textDecoration: 'underline',
+              }}
+            >
+              {authMode === 'signup'
+                ? 'Already have an account? Log in'
+                : 'New here? Create an account'}
+            </button>
+          </form>
+        </div>
       )}
     </div>
   )
