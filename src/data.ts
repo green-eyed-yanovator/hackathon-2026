@@ -31,9 +31,9 @@ export const supabase = createClient(supabaseUrl, supabaseKey)
 // Photos are only ever ours, from our own storage. The columns can be written
 // directly, and a picture on someone's own server would tell them who looked at
 // it, and when: a profile photo like that isn't shown, a pin's is left out.
-const storage = `${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/public/`
-const ownPhotoOnly = (p: Profile): Profile => (p.avatar_url && !p.avatar_url.startsWith(storage + 'avatars/') ? { ...p, avatar_url: null } : p)
-const ownMedia = (m: Media) => m.url.startsWith(storage + 'post-media/')
+const ourStorage = `${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/public/`
+const ownPhotoOnly = (p: Profile): Profile => (p.avatar_url && !p.avatar_url.startsWith(ourStorage + 'avatars/') ? { ...p, avatar_url: null } : p)
+const ownMedia = (m: Media) => m.url.startsWith(ourStorage + 'post-media/')
 
 export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
 
@@ -517,9 +517,6 @@ function subscribePrivate(userId: string) {
 
 }
 
-// Saying "I'm here" to friends: a row per device, which the server stamps with
-// its own time. Refreshed every minute while the app is in view; leaving sets
-// here = false (never a delete: realtime would announce it to everyone).
 // crypto.randomUUID only exists on secure pages (https, localhost). A phone trying
 // the dev server over the LAN gets the same shape of id from getRandomValues.
 function uuid() {
@@ -531,6 +528,9 @@ function uuid() {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
+// Saying "I'm here" to friends: a row per device, which the server stamps with
+// its own time. Refreshed every minute while the app is in view; leaving sets
+// here = false (never a delete: realtime would announce it to everyone).
 const device = (() => {
   try {
     let id = localStorage.getItem('aroundhere.device')
