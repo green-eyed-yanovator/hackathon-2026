@@ -733,17 +733,23 @@ export async function report(postId: string, reason: 'spam' | 'unkind' | 'unsafe
   return true
 }
 
-const liking = new Set<string>() // replies with a heart on its way; taps wait for it
+// One write at a time per toggle: a second tap while the first is on its way is
+// let go, so an insert and a delete never race each other to the database.
+const inFlight = new Set<string>()
 
-export async function toggleLike(replyId: string) {
-  if (liking.has(replyId)) return true
-  liking.add(replyId)
+async function once(key: string, write: () => Promise<boolean>) {
+  if (inFlight.has(key)) return true
+  inFlight.add(key)
   try {
-    return await flipLike(replyId)
+    return await write()
   } finally {
-    liking.delete(replyId)
+    inFlight.delete(key)
   }
 }
+
+export const toggleLike = (replyId: string) => once(`like/${replyId}`, () => flipLike(replyId))
+export const toggleInterest = (postId: string) => once(`in/${postId}`, () => flipInterest(postId))
+export const toggleSave = (postId: string) => once(`save/${postId}`, () => flipSave(postId))
 
 async function flipLike(replyId: string) {
   const userId = S.userId!
@@ -772,7 +778,7 @@ export async function deleteReply(id: string) {
   return true
 }
 
-export async function toggleInterest(postId: string) {
+async function flipInterest(postId: string) {
   const userId = S.userId!
   const mine = (i: Interest) => i.post_id === postId && i.user_id === userId
   const was = S.interests.some(mine)
@@ -793,7 +799,7 @@ export async function toggleInterest(postId: string) {
   return true
 }
 
-export async function toggleSave(postId: string) {
+async function flipSave(postId: string) {
   const was = S.saved.some((s) => s.post_id === postId)
   const { error } = was
     ? await supabase.from('saved_posts').delete().eq('post_id', postId)
