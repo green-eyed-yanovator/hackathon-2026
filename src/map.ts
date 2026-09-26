@@ -293,7 +293,7 @@ type Props = Record<string, string | number | boolean>
 type Feature = {
   type: number // 1 point, 2 line, 3 polygon
   props: Props
-  rings: number[][] // flat [x0, y0, x1, y1, ...] in tile units
+  rings: Int32Array[] // flat [x0, y0, x1, y1, ...] in tile units; half the memory of plain arrays
   minX: number
   minY: number
   maxX: number
@@ -328,6 +328,7 @@ type SourceTile = {
 
 function decodeFeature(p: Pbf, end: number, keys: string[], values: (string | number | boolean)[]): Feature {
   const feature: Feature = { type: 0, props: {}, rings: [], minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+  const rings: number[][] = []
 
   while (p.pos < end) {
     const tag = readVarint(p)
@@ -359,7 +360,7 @@ function decodeFeature(p: Pbf, end: number, keys: string[], values: (string | nu
             y += zigzag(readVarint(p))
             if (id === 1) {
               ring = [x, y]
-              feature.rings.push(ring)
+              rings.push(ring)
             } else {
               ring!.push(x, y)
             }
@@ -377,6 +378,7 @@ function decodeFeature(p: Pbf, end: number, keys: string[], values: (string | nu
     }
   }
 
+  feature.rings = rings.map((ring) => Int32Array.from(ring))
   return feature
 }
 
@@ -2346,7 +2348,7 @@ function drawTiles(m: MapState, v: View) {
   // Keep a screenful or two of tiles around (each is 1 MB at 2x, so not too many
   // on huge screens), and every source tile that's still useful.
   evict(m.rasters, Math.min(160, Math.max(48, wanted.length * 3)))
-  evict(m.sources, 48)
+  evict(m.sources, 32)
   return unfinished
 }
 
