@@ -172,6 +172,40 @@ function needAccount(mode: AuthMode = 'signup') {
 }
 
 //
+// Actions for buttons: do the thing, then say how it went.
+//
+
+async function interest(postId: string) {
+  if (needAccount()) return
+  if (!(await toggleInterest(postId))) failed("Couldn't update")
+}
+
+async function saveToggle(postId: string, wasSaved: boolean) {
+  if (await toggleSave(postId)) toast(wasSaved ? 'Removed from saved' : 'Saved')
+  else failed("Couldn't save")
+}
+
+async function resolve(postId: string) {
+  if (await updatePost(postId, { resolved_at: new Date().toISOString() })) celebrate('Resolved', 'Moved to Past, thanks for closing the loop')
+  else failed("Couldn't resolve")
+}
+
+async function befriend(id: string) {
+  if (await requestFriend(id)) toast('Friend request sent')
+  else failed("Couldn't send")
+}
+
+async function accept(id: string) {
+  if (await acceptFriend(id)) celebrate('New friend', `You and ${nameOf(id)} are friends`)
+  else failed("Couldn't accept")
+}
+
+async function toggleSharing() {
+  if (await setSharing(!S.sharing)) toast(S.sharing ? 'Friends can see you now' : 'Stopped sharing')
+  else failed("Couldn't change sharing")
+}
+
+//
 // Formatting.
 //
 
@@ -537,7 +571,16 @@ function Grip({ onDismiss }: { onDismiss: () => void }) {
   )
 }
 
-function Panel({ title, icon, onBack, children, foot, className = '' }: { title: ReactNode; icon?: ReactNode; onBack?: () => void; children: ReactNode; foot?: ReactNode; className?: string }) {
+type PanelProps = {
+  title: ReactNode
+  icon?: ReactNode
+  onBack?: () => void
+  children: ReactNode
+  foot?: ReactNode // stays put under the scrolling body, e.g. a reply box
+  className?: string
+}
+
+function Panel({ title, icon, onBack, children, foot, className = '' }: PanelProps) {
   return (
     <aside className={`panel detail ${className}`}>
       <Grip onDismiss={() => go('')} />
@@ -586,7 +629,14 @@ function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
 }
 
 // A textarea that grows with its text, sends on Enter, and keeps Shift+Enter for new lines.
-function Composer({ placeholder, onSend, onType, autoFocus = false }: { placeholder: string; onSend: (text: string) => Promise<boolean>; onType?: () => void; autoFocus?: boolean }) {
+type ComposerProps = {
+  placeholder: string
+  onSend: (text: string) => Promise<boolean> // true once it's sent, which clears the box
+  onType?: () => void
+  autoFocus?: boolean
+}
+
+function Composer({ placeholder, onSend, onType, autoFocus = false }: ComposerProps) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -1025,12 +1075,12 @@ function PostView({ post }: { post: Post }) {
       )}
 
       <div className="actions">
-        <button className={iAmIn ? 'btn on' : 'btn'} aria-pressed={iAmIn} onClick={() => !needAccount() && toggleInterest(post.id).then((ok) => ok || failed("Couldn't update"))}>
+        <button className={iAmIn ? 'btn on' : 'btn'} aria-pressed={iAmIn} onClick={() => interest(post.id)}>
           <Icon name="thumb" size={16} /> {iAmIn ? "I'm in" : 'Interested'}
           {interested.length > 0 && <b>{interested.length}</b>}
         </button>
         {me && (
-          <button className={saved ? 'btn on gold' : 'btn'} aria-pressed={saved} onClick={() => toggleSave(post.id).then((ok) => (ok ? toast(saved ? 'Removed from saved' : 'Saved') : failed("Couldn't save")))}>
+          <button className={saved ? 'btn on gold' : 'btn'} aria-pressed={saved} onClick={() => saveToggle(post.id, saved)}>
             <Icon name="star" size={16} /> {saved ? 'Saved' : 'Save'}
           </button>
         )}
@@ -1050,7 +1100,7 @@ function PostView({ post }: { post: Post }) {
             <Icon name="pencil" size={16} /> Edit
           </button>
           {!post.resolved_at && (
-            <button className="btn" onClick={() => updatePost(post.id, { resolved_at: new Date().toISOString() }).then((ok) => ok && celebrate('Resolved', 'Moved to Past, thanks for closing the loop'))} title="Done, found, sorted: moves it to Past">
+            <button className="btn" onClick={() => resolve(post.id)} title="Done, found, sorted: moves it to Past">
               <Icon name="check" size={16} /> Resolve
             </button>
           )}
@@ -1151,7 +1201,7 @@ function FriendButton({ id }: { id: string }) {
 
   if (!f) {
     return (
-      <button className="btn" onClick={() => requestFriend(id).then((ok) => (ok ? toast('Friend request sent') : failed("Couldn't send")))}>
+      <button className="btn" onClick={() => befriend(id)}>
         <Icon name="userplus" size={16} /> Add friend
       </button>
     )
@@ -1166,7 +1216,7 @@ function FriendButton({ id }: { id: string }) {
   if (f.addressee === S.userId) {
     return (
       <>
-        <button className="btn primary" onClick={() => acceptFriend(id).then((ok) => (ok ? celebrate('New friend', `You and ${nameOf(id)} are friends`) : failed("Couldn't accept")))}>
+        <button className="btn primary" onClick={() => accept(id)}>
           <Icon name="check" size={16} /> Accept
         </button>
         <button className="btn" onClick={() => removeFriend(id)}>
@@ -1569,7 +1619,7 @@ function FriendsView() {
           className={S.sharing ? 'switch on' : 'switch'}
           role="switch"
           aria-checked={S.sharing}
-          onClick={() => setSharing(!S.sharing).then((ok) => (ok ? toast(S.sharing ? 'Friends can see you now' : 'Stopped sharing') : failed("Couldn't change sharing")))}
+          onClick={toggleSharing}
         >
           <i />
         </button>
@@ -1840,7 +1890,15 @@ function ComposeView() {
   async function submit() {
     if (!title.trim() || busy) return
     setBusy(true)
-    const post = await createPost({ title: title.trim(), description: body.trim(), flair, startsAt: fromLocalInput(starts), latitude: draft.latitude, longitude: draft.longitude, files: attached.map((a) => a.file) })
+    const post = await createPost({
+      title: title.trim(),
+      description: body.trim(),
+      flair,
+      startsAt: fromLocalInput(starts),
+      latitude: draft.latitude,
+      longitude: draft.longitude,
+      files: attached.map((a) => a.file),
+    })
     setBusy(false)
     if (!post) {
       failed("Couldn't post")
@@ -2028,6 +2086,11 @@ function AuthView() {
   }
 
   const social = (['google', 'github'] as const).filter((p) => providers[p])
+  let submitLabel = 'Email me a code'
+  if (mode === 'signup') submitLabel = 'Create account'
+  else if (mode === 'signin') submitLabel = 'Sign in'
+  else if (mode === 'new-password') submitLabel = 'Save password'
+  else if (codeSent) submitLabel = mode === 'reset' ? 'Verify code' : 'Sign in'
 
   return (
     <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
@@ -2094,7 +2157,7 @@ function AuthView() {
         {message && <p className="banner" role="alert">{message}</p>}
 
         <button type="submit" className="btn primary wide" disabled={!valid || busy}>
-          {busy ? 'One moment…' : mode === 'signup' ? 'Create account' : mode === 'signin' ? 'Sign in' : mode === 'new-password' ? 'Save password' : codeSent ? (mode === 'reset' ? 'Verify code' : 'Sign in') : 'Email me a code'}
+          {busy ? 'One moment…' : submitLabel}
         </button>
 
         <div className="auth-links">
@@ -2149,14 +2212,17 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
     ...(S.userId
       ? [
           { key: 'me', icon: <Icon name="user" />, label: 'My profile', run: () => go(`user/${S.userId}`) },
-          { key: 'share', icon: <Icon name="pin" />, label: S.sharing ? 'Stop sharing my location' : 'Share my location with friends', run: () => setSharing(!S.sharing).then((ok) => ok || failed("Couldn't change sharing")) },
+          { key: 'share', icon: <Icon name="pin" />, label: S.sharing ? 'Stop sharing my location' : 'Share my location with friends', run: toggleSharing },
           { key: 'out', icon: <Icon name="logout" />, label: 'Sign out', run: signOut },
         ]
       : [
           { key: 'in', icon: <Icon name="user" />, label: 'Sign in', run: () => ui({ auth: 'signin' }) },
           { key: 'up', icon: <Icon name="userplus" />, label: 'Create account', run: () => ui({ auth: 'signup' }) },
         ]),
-    ...THEMES.map((t) => ({ key: `theme-${t.id}`, icon: <ThemeSwatch id={t.id} />, label: `Map style: ${t.name}`, hint: UI.theme === t.id ? 'current' : undefined, run: () => applyTheme(t.id) })),
+    ...THEMES.map((t) => ({
+      key: `theme-${t.id}`, icon: <ThemeSwatch id={t.id} />, label: `Map style: ${t.name}`,
+      hint: UI.theme === t.id ? 'current' : undefined, run: () => applyTheme(t.id),
+    })),
   ].filter((c) => match(c.label))
 
   const pins = S.posts
