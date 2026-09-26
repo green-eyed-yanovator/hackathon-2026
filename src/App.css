@@ -712,6 +712,13 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+.near-me {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
 .welcome p {
   margin: 6px 0 12px;
   color: var(--muted);

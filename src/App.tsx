@@ -788,6 +788,9 @@ function Feed() {
                 Sign in
               </button>
             </div>
+            <button className="link small near-me" onClick={locate}>
+              <Icon name="locate" size={14} /> Show what's around me
+            </button>
           </div>
         )}
 
