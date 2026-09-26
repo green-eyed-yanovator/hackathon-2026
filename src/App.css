@@ -2944,6 +2944,37 @@ button.toast {
   }
 }
 
+/* The console styles, on wide screens: a toast is the games' help box, a dark
+   panel of plain text at the top left of the map, not a pill at the bottom. */
+@media (min-width: 761px) {
+  [data-theme='coast'] .toast,
+  [data-theme='metro'] .toast {
+    top: 76px;
+    bottom: auto;
+    left: 16px;
+    transform: none;
+    max-width: 340px;
+    padding: 12px 16px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.82);
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.4;
+    text-align: left;
+    text-transform: none;
+    letter-spacing: normal;
+    white-space: normal;
+    box-shadow: none;
+    animation: none;
+  }
+
+  [data-theme='coast'] .has-feed .toast,
+  [data-theme='metro'] .has-feed .toast {
+    left: 408px;
+  }
+}
+
 /* Phone tab bar: hidden on wide screens. */
 
 .tabbar {
