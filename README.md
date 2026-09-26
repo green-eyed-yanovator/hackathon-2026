@@ -54,6 +54,21 @@ back before a demo:
 docker exec supabase_db_hackathon-2026 psql -U postgres -c "update locations set updated_at = now() where user_id::text like 'd0000000%'"
 ```
 
+## Demo in two minutes
+
+1. Open the app signed out: the map of Adelaide with pins, the feed beside it.
+   Hover a pin, then press `T` a few times to go through the map styles.
+2. Sign in as `maya@aroundhere.demo` / `neighbour`. Her friends Tom, Priya and
+   Hannah are on the map; Tom has sent her a message (red badge on his dot).
+   Click Tom to open the chat.
+3. In a second browser (or a private window) sign in as `tom@aroundhere.demo`
+   and open his chat with Maya: type, and Maya sees "typing…"; send, and it
+   arrives live, with "seen" once she's looked.
+4. As Tom, press `N`, pick Event, give it a time an hour from now and post: it
+   pops up on Maya's map with a ripple, and she gets a notification.
+5. On a phone (or the browser's phone view): the tab bar, sheets you drag up
+   and down, pinch to zoom, and the locate button that follows you around.
+
 ## Map styles
 
 Press `T` to cycle, or pick one in Settings.
