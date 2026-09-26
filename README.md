@@ -18,7 +18,7 @@ What you can do:
   Soon, ripples on the map while it's on, and goes to your calendar in a tap;
   anything you're in on gets you a word an hour before.
 - **Get there.** A walking route along the streets, drawn on the map (a GPS
-  line in the game styles, on the radar too) with the minutes it takes and
+  line in the game styles) with the minutes it takes and
   the street most of it is on. It shortens as you walk, finds a new way if
   you stray, and works for a friend too, following them as they move (one
   tap tells them you're on your way), or any street search finds. Your own
@@ -38,7 +38,7 @@ What you can do:
   short getting-started list. Settings turns off any kind of notification,
   one by one.
 
-![Get there in Metro: the way along the streets as a GPS line, on the radar too, with the mission line and the walk bar](docs/walk.jpg)
+![Get there in Metro: the way along the streets as a GPS line, with the mission line and the walk bar](docs/walk.jpg)
 
 ## Running it
 
@@ -113,7 +113,7 @@ password reset) into Authentication → Email Templates, so emails carry a
    pops up on Maya's map with a ripple, and she gets a notification.
 5. As Maya, open Hannah's street clean-up and press Get there: the way along
    the streets, with the time it takes. Press `T` for Metro to see it as a
-   purple GPS line, on the radar too. (It starts from where you really are;
+   purple GPS line. (It starts from where you really are;
    away from Adelaide, set a location near the city centre in the browser's
    dev tools, under Sensors.)
 6. On a phone (or the browser's phone view): the tab bar, sheets you drag up
@@ -128,7 +128,7 @@ Press `T` to cycle, or pick one in Settings.
 | Sun        | Day while the sun is up where you are, Night after (worked out from the sun's position, no service) |
 | Day        | Clean and bright |
 | Night      | Dark, easy on the eyes |
-| Palm Coast | Sun-bleached 2004 console radar: square blips, fat outlined caps |
+| Palm Coast | Sun-bleached 2004 console map: square blips, fat outlined caps |
 | Metro      | Modern pause-menu atlas: dark slate, round blips, condensed type |
 | Frontier   | Hand-inked survey map on parchment: wobbly ink, hatched water, tree marks |
 | Phosphor   | Green CRT tracking screen with glow, scanlines and a sweep |
@@ -137,10 +137,7 @@ Press `T` to cycle, or pick one in Settings.
 Each style changes the map, the blips and people, the whole interface, and the
 screen effect on top. The game styles cover the map in place blips from
 further out, like a pause-menu map; the legend (the `i` button) says what
-they mean. They also get a radar in the corner: the streets around you, your
-arrow, north on the rim, friends and live pins waiting on the edge in their
-direction, and the route when you're walking somewhere. Tap it to go back to
-where you are. Setting off somewhere, they say so the way their games do, with
+they mean. Setting off somewhere, they say so the way their games do, with
 a mission line at the bottom ("Go to the street clean-up."), and messages go
 up top left, each style in its own way: a help box, an inked band, a line of
 terminal output, a neon-edged box.

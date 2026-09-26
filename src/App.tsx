@@ -23,9 +23,9 @@ import {
   type Flair, type Post, type Revision, type Notification,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setRadar, setTheme, flyTo, zoomBy, glideBy, requestFrame,
+  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, requestFrame,
   project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute,
-  icons, mapThemes, LEGEND, poiColor, RADAR_WIDE,
+  icons, mapThemes, LEGEND, poiColor,
   MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
@@ -42,7 +42,7 @@ const THEMES = [
   { id: 'auto', name: 'Sun', note: 'Day while the sun is up here, Night after' },
   { id: 'day', name: 'Day', note: 'Clean and bright' },
   { id: 'night', name: 'Night', note: 'Easy on the eyes' },
-  { id: 'coast', name: 'Palm Coast', note: '2004 radar, chunky square blips' },
+  { id: 'coast', name: 'Palm Coast', note: '2004 console map, chunky square blips' },
   { id: 'metro', name: 'Metro', note: 'Pause-menu atlas of a modern sprawl' },
   { id: 'frontier', name: 'Frontier', note: 'Hand-inked survey map on parchment' },
   { id: 'radar', name: 'Phosphor', note: 'Green CRT tracking screen' },
@@ -599,20 +599,6 @@ function openArea() {
   const left = feedShowing() ? 392 : 0
   const right = UI.route.kind ? w - 436 : w
   return { left, top: 72, right, bottom: h }
-}
-
-// The game styles get a radar in the bottom-left corner of what's visible of the map.
-function radarPlace() {
-  if (shown() === 'day' || shown() === 'night' || !map) return null
-  const h = map.height
-  if (narrow()) {
-    if (UI.route.kind || UI.feed) return null
-    const r = Math.min(58, Math.round(h * 0.085)) // smaller on short phones
-    return { x: 12 + (shown() === 'metro' ? r * RADAR_WIDE : r), y: h - 60 - 26 - r - 2, r }
-  }
-  const left = feedShowing() ? 392 : 0
-  const half = shown() === 'metro' ? 76 * RADAR_WIDE : 76 // Metro's radar is a wide rectangle
-  return { x: left + 16 + half, y: h - 26 - 80, r: 76 }
 }
 
 function reveal(lat: number, lng: number, zoom?: number, force = false) {
@@ -3421,7 +3407,6 @@ export default function App() {
       paintChrome(shown())
     }
     setMarkers(map, buildMarkers(posts))
-    setRadar(map, radarPlace())
     const target = walkTarget()
     const here = S.here
     setRoute(map, target && here ? { lng: here.longitude, lat: here.latitude, accuracy: here.accuracy } : null, target)

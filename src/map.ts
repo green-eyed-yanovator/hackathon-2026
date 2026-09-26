@@ -195,7 +195,7 @@ export const mapThemes: Record<string, MapTheme> = {
     font: sans, labelColor: '#8e96a3', labelHalo: '#16181d', placeColor: '#c5ccd6', waterLabel: '#4d7394',
     caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.75, me: '#4c9bff', route: '#4c9bff', routeLine: 'solid', photo: 'none',
   },
-  // Sun-bleached radar from a certain early-2000s west coast crime saga.
+  // The sun-bleached map of a certain early-2000s west coast crime saga.
   coast: {
     land: '#8b9468', texture: 'grain',
     water: '#44698f', waterShore: null, waterHatch: null,
@@ -793,10 +793,9 @@ export type MapState = {
   samples: { x: number; y: number; t: number }[]
 
   fade: { canvas: HTMLCanvasElement; start: number } | null // the old style, fading out after a switch
-  radar: { x: number; y: number; r: number } | null // the corner minimap, in css px; null when hidden
 
   // The settled map (land, tiles, labels) kept as one bitmap, so frames that only
-  // animate pins, the radar sweep or pulses just blit it and draw those on top.
+  // animate pins or pulses just blit it and draw those on top.
   base: HTMLCanvasElement
   baseDirty: boolean // something besides the camera changed (tiles, markers, style, size)
   baseCamera: string // the camera the base was taken at; any other camera redraws
@@ -857,7 +856,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, moved: false, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, radar: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
+    fade: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {}, onLongPress: () => {},
     route: null, onRoute: () => {},
@@ -913,16 +912,6 @@ export function setTheme(m: MapState, name: string) {
   m.rasters.clear()
   m.sprites.clear()
   m.baseDirty = true
-  requestFrame(m)
-}
-
-// The rectangular radar is this much wider than tall (its half width over r).
-export const RADAR_WIDE = 1.35
-
-export function setRadar(m: MapState, radar: { x: number; y: number; r: number } | null) {
-  const same = radar && m.radar && radar.x === m.radar.x && radar.y === m.radar.y && radar.r === m.radar.r
-  if (same || (!radar && !m.radar)) return
-  m.radar = radar
   requestFrame(m)
 }
 
@@ -1138,13 +1127,6 @@ function attachInput(m: MapState) {
         return
       }
       m.lastTap = now
-      const me = m.markers.find((marker) => marker.kind === 'me')
-      const wide = m.theme.blip === 'round' ? RADAR_WIDE : 1
-      if (me && m.radar && Math.abs(p.x - m.radar.x) <= m.radar.r * wide && Math.abs(p.y - m.radar.y) <= m.radar.r) {
-        // The radar is a button: back to where you are.
-        flyTo(m, xToLng(me.x), yToLat(me.y), Math.max(m.zoom, 16))
-        return
-      }
       const marker = pickMarker(m, p.x, p.y)
       if (marker?.kind === 'cluster') {
         // A crowd of pins: go closer until they separate.
@@ -2947,14 +2929,13 @@ function frame(m: MapState, time: number) {
   }
 
   const animated = drawMarkers(m, view, time)
-  const sweeping = m.radar ? drawRadar(m, view, time) : false
   if (drawFade(m, time)) keepGoing = true
 
   m.onFrame()
 
   if (keepGoing) requestFrame(m)
-  else if (animated || sweeping) {
-    // Pulses and sweeps don't need 60 fps; let the battery breathe.
+  else if (animated) {
+    // Pulses don't need 60 fps; let the battery breathe.
     setTimeout(() => requestFrame(m), 33)
   }
 }
@@ -3240,147 +3221,6 @@ function drawMarkers(m: MapState, v: View, time: number) {
   // A drop needs every frame to look right; pulses can make do with fewer.
   if (dropping) requestFrame(m)
   return animated
-}
-
-// The corner radar of the game styles: the streets around you, a little further
-// out than the map, your arrow in the middle, north at the top. Pins and friends
-// in range are dots; those out of range wait on the rim, in their direction.
-function drawRadar(m: MapState, v: View, time: number) {
-  const t = m.theme
-  const c = m.ctx
-  const { x: cx, y: cy, r } = m.radar!
-  const me = m.markers.find((marker) => marker.kind === 'me')
-  const wx = me ? me.x : m.x
-  const wy = me ? me.y : m.y
-  const zoom = clamp(m.zoom - 1.5, 12, 17)
-  const size = TILE * 2 ** zoom
-  const tileSize = TILE * 2 ** (zoom - v.z)
-
-  // Most radars are round; the modern sprawl's is a wide rounded rectangle.
-  const wide = t.blip === 'round'
-  const hw = wide ? r * RADAR_WIDE : r // half width and height
-  const hh = wide ? r * 0.9 : r
-  const outline = (grow: number) => {
-    c.beginPath()
-    if (wide) c.roundRect(cx - hw - grow, cy - hh - grow, 2 * (hw + grow), 2 * (hh + grow), 10 + grow)
-    else c.arc(cx, cy, r + grow, 0, Math.PI * 2)
-  }
-
-  c.save()
-  outline(0)
-  c.fillStyle = t.land
-  c.fill()
-  c.clip()
-
-  // The tiles of the main map's level, drawn smaller, around the radar's centre.
-  const left = wx * TILE * 2 ** v.z * (tileSize / TILE) - hw
-  const top = wy * TILE * 2 ** v.z * (tileSize / TILE) - hh
-  const count = 2 ** v.z
-  for (let ty = Math.floor(top / tileSize); ty <= Math.floor((top + 2 * hh) / tileSize); ty++) {
-    for (let tx = Math.floor(left / tileSize); tx <= Math.floor((left + 2 * hw) / tileSize); tx++) {
-      if (tx < 0 || ty < 0 || tx >= count || ty >= count) continue
-      const raster = tileRaster(m, v.z, tx, ty, true)
-      if (raster) c.drawImage(raster.canvas, cx - hw + tx * tileSize - left, cy - hh + ty * tileSize - top, tileSize + 0.5, tileSize + 0.5)
-    }
-  }
-
-  // A wash of the style's colour, so the radar reads as its own thing.
-  c.fillStyle = t.blip === 'stamp' ? 'rgba(120, 90, 50, 0.18)' : t.blip === 'square' ? 'rgba(0, 0, 0, 0.18)' : 'rgba(0, 0, 0, 0.3)'
-  c.fillRect(cx - hw, cy - hh, 2 * hw, 2 * hh)
-  if (m.route?.points.length) strokeRoute(c, t, m.route.points, cx - wx * size, cy - wy * size, size, 3)
-  c.restore()
-
-  // Blips: inside, a dot where it is; outside, a smaller one on the rim.
-  // Where the route ends is a waypoint, and always shows.
-  const waypoint = m.route?.points.length ? { x: m.route.toX, y: m.route.toY, kind: 'waypoint', flags: 0, color: t.route } : null
-  for (const marker of waypoint ? [...m.visible, waypoint] : m.visible) {
-    if (marker.kind !== 'pin' && marker.kind !== 'person' && marker.kind !== 'cluster' && marker !== waypoint) continue
-    let dx = (marker.x - wx) * size
-    let dy = (marker.y - wy) * size
-    const d = Math.hypot(dx, dy)
-    const inside = wide ? Math.abs(dx) < hw - 6 && Math.abs(dy) < hh - 6 : d < r - 6
-    if (!inside) {
-      if (marker.kind === 'pin' && !(marker.flags & (MARK_LIVE | MARK_NEW | MARK_SELECTED))) continue // only what matters goes on the rim
-      const k = wide ? Math.min((hw - 5) / Math.abs(dx || 1), (hh - 5) / Math.abs(dy || 1)) : (r - 5) / d
-      dx *= k
-      dy *= k
-    }
-    const size2 = marker === waypoint ? 5.5 : inside ? 4.5 : 3.5
-    c.beginPath()
-    if (t.blip === 'square') c.rect(cx + dx - size2, cy + dy - size2, 2 * size2, 2 * size2)
-    else c.arc(cx + dx, cy + dy, size2, 0, Math.PI * 2)
-    c.fillStyle = marker.kind === 'person' ? '#4c9bff' : t.blip === 'stamp' || marker === waypoint ? t.route : marker.color
-    c.fill()
-    c.lineWidth = 1.2
-    c.strokeStyle = t.blip === 'stamp' ? '#3f2e1e' : '#000'
-    c.stroke()
-  }
-
-  // You, in the middle.
-  c.save()
-  c.translate(cx, cy)
-  if (me) {
-    c.rotate(((me.heading ?? 0) * Math.PI) / 180)
-    drawIcon(c, 'arrow', 0, 1, 20, t.blip === 'stamp' ? '#e9d8b0' : '#000')
-    drawIcon(c, 'arrow', 0, 1, 15, t.blip === 'stamp' ? '#8f2b1c' : '#fff')
-  } else {
-    c.strokeStyle = t.blipInk
-    c.lineWidth = 1.5
-    c.beginPath()
-    c.moveTo(-6, 0)
-    c.lineTo(6, 0)
-    c.moveTo(0, -6)
-    c.lineTo(0, 6)
-    c.stroke()
-  }
-  c.restore()
-
-  // The rim, in each style's way, with north marked.
-  c.save()
-  outline(0)
-  if (t.blip === 'stamp') {
-    c.strokeStyle = '#3f2e1e'
-    c.lineWidth = 2
-    c.stroke()
-    outline(4)
-    c.lineWidth = 0.8
-    c.stroke()
-  } else if (t.blip === 'ring') {
-    c.strokeStyle = t.blipInk
-    c.globalAlpha = 0.2
-    c.lineWidth = 8
-    c.stroke()
-    c.globalAlpha = 1
-    c.lineWidth = 2
-    c.stroke()
-    // The sweep.
-    const angle = (time / 1000) % (Math.PI * 2)
-    c.beginPath()
-    c.moveTo(cx, cy)
-    c.arc(cx, cy, r, angle - 0.6, angle)
-    c.closePath()
-    c.globalAlpha = 0.18
-    c.fillStyle = t.blipInk
-    c.fill()
-    c.globalAlpha = 1
-  } else {
-    c.strokeStyle = t.blip === 'square' ? '#000' : 'rgba(0, 0, 0, 0.8)'
-    c.lineWidth = t.blip === 'square' ? 4 : 3
-    c.stroke()
-  }
-  c.restore()
-
-  c.beginPath()
-  c.arc(cx, cy - hh, 8, 0, Math.PI * 2)
-  c.fillStyle = t.blip === 'stamp' ? '#e9d8b0' : t.blip === 'ring' ? t.land : '#000'
-  c.fill()
-  c.fillStyle = t.blip === 'stamp' ? '#8f2b1c' : t.blip === 'ring' ? t.blipInk : '#fff'
-  c.font = `800 10px ${t.blip === 'stamp' ? t.font : sans}`
-  c.textAlign = 'center'
-  c.textBaseline = 'middle'
-  c.fillText('N', cx, cy - hh + 0.5)
-
-  return t.blip === 'ring' // the sweep turns
 }
 
 // After a style switch, the old picture fades out over the new one.

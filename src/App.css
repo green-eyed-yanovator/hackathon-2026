@@ -2506,7 +2506,7 @@ button.toast {
   position: absolute;
   z-index: 60;
   left: 50%;
-  bottom: 200px; /* over the radar's top */
+  bottom: 100px;
   transform: translateX(-50%);
   width: max-content;
   max-width: min(420px, calc(100vw - 32px));
@@ -3201,7 +3201,7 @@ button.toast {
 
   .objective {
     left: 50% !important; /* phones: over the map, whatever's open */
-    bottom: 230px; /* above the radar, clear of the map buttons */
+    bottom: calc(100px + env(safe-area-inset-bottom)); /* above the tab bar, clear of the map buttons */
     max-width: calc(100vw - 150px);
     font-size: 18px;
   }
