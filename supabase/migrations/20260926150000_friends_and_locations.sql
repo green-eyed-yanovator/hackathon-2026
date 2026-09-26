@@ -93,7 +93,9 @@ language plpgsql security definer set search_path = ''
 as $$
 begin
   if tg_op = 'INSERT' then
-    perform public.notify(new.addressee, 'friend_request', new.requester, null::public.posts);
+    if new.accepted_at is null then
+      perform public.notify(new.addressee, 'friend_request', new.requester, null::public.posts);
+    end if;
   elsif old.accepted_at is null and new.accepted_at is not null then
     perform public.notify(new.requester, 'friend_accept', new.addressee, null::public.posts);
   end if;
