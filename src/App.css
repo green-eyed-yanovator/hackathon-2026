@@ -583,6 +583,10 @@ kbd {
   background: var(--bg2);
 }
 
+.icon-btn.on {
+  color: var(--accent);
+}
+
 .icon-btn:active {
   background: var(--bg3);
 }

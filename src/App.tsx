@@ -2243,6 +2243,11 @@ function FriendsView() {
                   <Icon name="locate" />
                 </button>
               )}
+              {loc && (
+                <button className={UI.walk === `user/${id}` ? 'icon-btn on' : 'icon-btn'} title="Get there" aria-pressed={UI.walk === `user/${id}`} onClick={() => walkTo(`user/${id}`)}>
+                  <Icon name="arrow" />
+                </button>
+              )}
               <button className="icon-btn" title="Message" onClick={() => go(`chat/${id}`)}>
                 <Icon name="chat" />
               </button>
