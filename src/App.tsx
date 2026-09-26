@@ -3007,6 +3007,7 @@ function Palette() {
 
 // What everything on the map means, in the current style.
 function Legend() {
+  const theme = mapThemes[shown()] ?? mapThemes.day
   return (
     <div className="panel legend">
       <div className="section">Pins</div>
@@ -3022,6 +3023,10 @@ function Legend() {
             FR
           </span>
           <span>A friend</span>
+        </div>
+        <div>
+          <span className="legend-route" style={{ borderTop: `4px ${theme.routeDash ? 'dashed' : 'solid'} ${theme.route}` }} />
+          <span>The way there (G)</span>
         </div>
       </div>
       <div className="section">Places</div>

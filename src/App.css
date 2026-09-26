@@ -2256,6 +2256,11 @@ textarea::placeholder {
   margin: 12px 0 8px;
 }
 
+.legend-route {
+  width: 22px;
+  flex: none;
+}
+
 .legend-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
