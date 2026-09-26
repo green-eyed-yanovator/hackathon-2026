@@ -851,6 +851,11 @@ function PostView({ post }: { post: Post }) {
   }
 
   async function copyLink() {
+    // Phones get their own share sheet; everything else copies the link.
+    if (narrow() && navigator.share) {
+      navigator.share({ title: post.title, text: post.description.slice(0, 140), url: window.location.href }).catch(() => {})
+      return
+    }
     try {
       await navigator.clipboard.writeText(window.location.href)
       toast('Link copied')
