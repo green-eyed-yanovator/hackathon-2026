@@ -371,7 +371,7 @@ type Channel = ReturnType<typeof supabase.channel>
 let privateChannel: Channel | null = null
 
 // Something arrived for the signed-in user; the UI may raise a desktop alert.
-export let onIncoming: (title: string, body: string, route: string) => void = () => {}
+let onIncoming: (title: string, body: string, route: string) => void = () => {}
 export function setIncomingHandler(handler: typeof onIncoming) {
   onIncoming = handler
 }

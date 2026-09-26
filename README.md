@@ -13,9 +13,10 @@ What you can do:
   or share. Give a pin a time and it counts down in the feed, shows under
   Soon, and ripples on the map while it's on.
 - **Get there.** A walking route along the streets, drawn on the map (a GPS
-  line in the game styles, on the radar too) with the minutes it takes. It
-  shortens as you walk, finds a new way if you stray, and works for a friend
-  too, following them as they move. Your own maps app is one tap away.
+  line in the game styles, on the radar too) with the minutes it takes and
+  the street most of it is on. It shortens as you walk, finds a new way if
+  you stray, and works for a friend too, following them as they move; one
+  tap tells them you're on your way. Your own maps app is one tap away.
 - **Friends.** People around here suggests neighbours whose pins are close.
   Friends can share their location (until they stop, or just for an hour) and
   see each other on the map with their photos, only while the app is open.

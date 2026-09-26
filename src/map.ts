@@ -159,7 +159,7 @@ export type MapTheme = {
   poiAlpha: number
   me: string
   route: string // the walking route's line
-  routeDash: boolean // inked styles dash it
+  routeLine: 'solid' | 'dashed' | 'dotted' // named like CSS borders, so the legend draws it the same
   photo: string // canvas filter that gives people's photos the map's look
 }
 
@@ -176,7 +176,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#ffcf73', trunk: '#ffe29a', primary: '#fff3c4', secondary: '#ffffff', tertiary: '#ffffff', minor: '#ffffff', service: '#fbfaf7', path: '#c9bfae', rail: '#b9b4ab' },
     roadWidth: 1, wobble: 0, boundary: '#b7a6c9', glow: null,
     font: sans, labelColor: '#4a4d52', labelHalo: '#f3f1ec', placeColor: '#2b2d31', waterLabel: '#4f7ea3',
-    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.85, me: '#2f7cf6', route: '#2f7cf6', routeDash: false, photo: 'none',
+    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.85, me: '#2f7cf6', route: '#2f7cf6', routeLine: 'solid', photo: 'none',
   },
   night: {
     land: '#16181d', texture: 'none',
@@ -188,7 +188,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#6b5a33', trunk: '#4d4636', primary: '#3b3d44', secondary: '#34363d', tertiary: '#303239', minor: '#2a2c33', service: '#25272d', path: '#34373f', rail: '#3a3d45' },
     roadWidth: 1, wobble: 0, boundary: '#5b4d72', glow: null,
     font: sans, labelColor: '#8e96a3', labelHalo: '#16181d', placeColor: '#c5ccd6', waterLabel: '#4d7394',
-    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.75, me: '#4c9bff', route: '#4c9bff', routeDash: false, photo: 'none',
+    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.75, me: '#4c9bff', route: '#4c9bff', routeLine: 'solid', photo: 'none',
   },
   // Sun-bleached radar from a certain early-2000s west coast crime saga.
   coast: {
@@ -201,7 +201,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#d8d2bd', trunk: '#d0cab4', primary: '#c8c2ab', secondary: '#bfb9a3', tertiary: '#b8b29c', minor: '#aea893', service: '#a39e8a', path: '#9c966f', rail: '#4a473f' },
     roadWidth: 1.25, wobble: 0, boundary: '#3a3830', glow: null,
     font: '"Arial Black", "Helvetica Neue", Arial, sans-serif', labelColor: '#ffffff', labelHalo: '#1b1a17', placeColor: '#f4e7b8', waterLabel: '#d6e4f2',
-    caps: true, italic: false, blip: 'square', blipInk: '#111111', poiAlpha: 1, me: '#ffffff', route: '#e0409a', routeDash: false, photo: 'saturate(1.3) contrast(1.1)',
+    caps: true, italic: false, blip: 'square', blipInk: '#111111', poiAlpha: 1, me: '#ffffff', route: '#e0409a', routeLine: 'solid', photo: 'saturate(1.3) contrast(1.1)',
   },
   // Pause-menu atlas of a modern sun-soaked sprawl.
   metro: {
@@ -214,7 +214,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#c2c7cc', trunk: '#b2b7bd', primary: '#9aa0a7', secondary: '#8a9097', tertiary: '#7b8188', minor: '#636970', service: '#565c63', path: '#4f555c', rail: '#4a5057' },
     roadWidth: 0.9, wobble: 0, boundary: '#717880', glow: null,
     font: '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, sans-serif', labelColor: '#e8ebee', labelHalo: '#1b1f24', placeColor: '#ffffff', waterLabel: '#a9c6e6',
-    caps: true, italic: false, blip: 'round', blipInk: '#ffffff', poiAlpha: 1, me: '#ffffff', route: '#b25ce6', routeDash: false, photo: 'none',
+    caps: true, italic: false, blip: 'round', blipInk: '#ffffff', poiAlpha: 1, me: '#ffffff', route: '#b25ce6', routeLine: 'solid', photo: 'none',
   },
   // A hand-inked survey map of the old frontier.
   frontier: {
@@ -227,7 +227,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#4a3624', trunk: '#4a3624', primary: '#523d29', secondary: '#5a4430', tertiary: '#634c36', minor: '#6f573f', service: '#7d6549', path: '#7d6549', rail: '#3b2a1b' },
     roadWidth: 0.55, wobble: 1.4, boundary: '#8a4b32', glow: null,
     font: '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif', labelColor: '#3f2e1e', labelHalo: '#dcc9a0', placeColor: '#2e2115', waterLabel: '#3f4c43',
-    caps: false, italic: true, blip: 'stamp', blipInk: '#3f2e1e', poiAlpha: 0.9, me: '#8f2b1c', route: '#8f2b1c', routeDash: true, photo: 'sepia(0.8) contrast(0.95)',
+    caps: false, italic: true, blip: 'stamp', blipInk: '#3f2e1e', poiAlpha: 0.9, me: '#8f2b1c', route: '#8f2b1c', routeLine: 'dotted', photo: 'sepia(0.8) contrast(0.95)',
   },
   // Green phosphor tracking screen.
   radar: {
@@ -240,7 +240,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#58ff9c', trunk: '#4ef090', primary: '#3fd67c', secondary: '#34bb6b', tertiary: '#2ca25d', minor: '#1f7c46', service: '#18643a', path: '#145331', rail: '#1b6b3f' },
     roadWidth: 0.45, wobble: 0, boundary: '#2ca25d', glow: '#2dff88',
     font: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace', labelColor: '#6dffaa', labelHalo: '#030b06', placeColor: '#b4ffd2', waterLabel: '#3fd67c',
-    caps: true, italic: false, blip: 'ring', blipInk: '#6dffaa', poiAlpha: 0.9, me: '#b4ffd2', route: '#b4ffd2', routeDash: true,
+    caps: true, italic: false, blip: 'ring', blipInk: '#6dffaa', poiAlpha: 0.9, me: '#b4ffd2', route: '#b4ffd2', routeLine: 'dashed',
     photo: 'grayscale(1) sepia(1) hue-rotate(80deg) saturate(3) brightness(0.9)',
   },
   // Beachfront nights in the eighties: hot pink roads glowing over a purple dusk.
@@ -254,7 +254,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#ff5ad9', trunk: '#ff4fd0', primary: '#ff3fa4', secondary: '#e23d9e', tertiary: '#bf3a92', minor: '#83308c', service: '#622775', path: '#4d2263', rail: '#19e3ff' },
     roadWidth: 0.55, wobble: 0, boundary: '#19e3ff', glow: '#ff2ea6',
     font: '"Futura", "Avenir Next", "Trebuchet MS", sans-serif', labelColor: '#ffd8f4', labelHalo: '#1a0b2e', placeColor: '#8af6ff', waterLabel: '#8af6ff',
-    caps: true, italic: true, blip: 'ring', blipInk: '#ff6ad5', poiAlpha: 0.95, me: '#8af6ff', route: '#8af6ff', routeDash: false,
+    caps: true, italic: true, blip: 'ring', blipInk: '#ff6ad5', poiAlpha: 0.95, me: '#8af6ff', route: '#8af6ff', routeLine: 'solid',
     photo: 'saturate(1.4) hue-rotate(-20deg) contrast(1.1)',
   },
 }
@@ -2390,7 +2390,7 @@ const metersPerWorld = (y: number) => 40075016.686 * Math.cos((yToLat(y) * Math.
 // Called on every render with where you are and where you're going. Walking
 // along the line just eats the part behind you; straying off it, or the other
 // end moving (a friend walking), works the way out again.
-export function setRoute(m: MapState, from: { lng: number; lat: number } | null, to: { lng: number; lat: number } | null) {
+export function setRoute(m: MapState, from: { lng: number; lat: number; accuracy: number } | null, to: { lng: number; lat: number } | null) {
   if (!from || !to) {
     if (m.route) {
       m.route = null
@@ -2405,7 +2405,7 @@ export function setRoute(m: MapState, from: { lng: number; lat: number } | null,
   const toY = latToY(to.lat)
   const metre = 1 / metersPerWorld(fromY)
   const old = m.route
-  const sameEnd = !!old && Math.hypot(old.toX - toX, old.toY - toY) < 20 * metre
+  const sameEnd = !!old && Math.hypot(old.toX - toX, old.toY - toY) < 40 * metre
   // A few metres is GPS jitter; with no way found, only a real move is worth another try.
   if (sameEnd && Math.hypot(old.fromX - fromX, old.fromY - fromY) < (old.state === 'ready' ? 3 : 20) * metre) return
 
@@ -2429,7 +2429,8 @@ export function setRoute(m: MapState, from: { lng: number; lat: number } | null,
         py = ay + t * dy
       }
     }
-    if (best < 25 * metre) {
+    // GPS indoors jumps about; only a move past the fix's own accuracy counts as straying.
+    if (best < Math.max(25, from.accuracy) * metre) {
       old.points = [fromX, fromY, px, py, ...old.points.slice(at)]
       old.fromX = fromX
       old.fromY = fromY
@@ -2443,7 +2444,9 @@ export function setRoute(m: MapState, from: { lng: number; lat: number } | null,
 
   // The old line stays up until the new one is ready.
   m.route = { fromX, fromY, toX, toY, state: 'waiting', points: sameEnd ? old.points : [], meters: sameEnd ? old.meters : 0, via: sameEnd ? old.via : '' }
+  m.baseDirty = true
   requestFrame(m)
+  m.onRoute()
 }
 
 function measureRoute(r: Route) {
@@ -2475,14 +2478,16 @@ function stepRoute(m: MapState) {
   let waiting = false
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
+      // A tile that failed is waited for too (it's asked for again after a few
+      // seconds); a way worked out around a hole in the map would be wrong.
       const entry = requestSource(m, SOURCE_MAX_ZOOM, tx, ty)
-      if (!entry || entry.state === 'loading') waiting = true
-      else if (entry.tile) tiles.push(entry.tile)
+      if (!entry || entry.state !== 'ready' || !entry.tile) waiting = true
+      else tiles.push(entry.tile)
     }
   }
   if (waiting) return
 
-  const points = tiles.length ? findRoute(tiles, r, box) : null
+  const points = findRoute(tiles, r, box)
   r.state = points ? 'ready' : 'none'
   r.points = points ?? []
   measureRoute(r)
@@ -2554,18 +2559,19 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
   if (!count) return null
 
   // Where lines meet. The tiles drop vertices that sit on a straight line, junctions
-  // included, so crossings and T-junctions are found by intersecting segments, a
-  // grid cell at a time. A bridge or tunnel meets only what joins its ends.
+  // included, so junctions are found from the segments, a grid cell at a time: where
+  // two cross, and where one ends on (or within a metre of) another. A bridge or
+  // tunnel meets only what joins its ends.
   const CELL = 64
   const TOLERANCE = 1.5 // grid units; about a metre
   const cells = new Map<number, number[]>()
   const cellKey = (cx: number, cy: number) => cx * 1048576 + cy
   for (let i = 0; i < count; i++) {
     const s = i * 5
-    const cx0 = Math.floor(Math.min(segs[s], segs[s + 2]) / CELL)
-    const cx1 = Math.floor(Math.max(segs[s], segs[s + 2]) / CELL)
-    const cy0 = Math.floor(Math.min(segs[s + 1], segs[s + 3]) / CELL)
-    const cy1 = Math.floor(Math.max(segs[s + 1], segs[s + 3]) / CELL)
+    const cx0 = Math.floor((Math.min(segs[s], segs[s + 2]) - TOLERANCE) / CELL)
+    const cx1 = Math.floor((Math.max(segs[s], segs[s + 2]) + TOLERANCE) / CELL)
+    const cy0 = Math.floor((Math.min(segs[s + 1], segs[s + 3]) - TOLERANCE) / CELL)
+    const cy1 = Math.floor((Math.max(segs[s + 1], segs[s + 3]) + TOLERANCE) / CELL)
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         const key = cellKey(cx, cy)
@@ -2576,34 +2582,54 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
     }
   }
   const cuts: number[][] = Array.from({ length: count }, () => [0, 1])
+  // Segment i ending on segment j cuts j there. The middle of a bridge doesn't
+  // take a path that ends under it, nor the other way round.
+  const touch = (i: number, j: number) => {
+    const s = i * 5
+    const u = j * 5
+    const qx = segs[u + 2] - segs[u]
+    const qy = segs[u + 3] - segs[u + 1]
+    const lengthSquared = qx * qx + qy * qy
+    if (lengthSquared === 0) return
+    for (let end = 0; end <= 2; end += 2) {
+      const x = segs[s + end]
+      const y = segs[s + end + 1]
+      const v = clamp(((x - segs[u]) * qx + (y - segs[u + 1]) * qy) / lengthSquared, 0, 1)
+      if (Math.hypot(segs[u] + v * qx - x, segs[u + 1] + v * qy - y) > TOLERANCE) continue
+      if (v > 0 && v < 1 && segs[u + 4] !== segs[s + 4]) continue
+      cuts[j].push(v)
+    }
+  }
   for (const [key, list] of cells) {
     for (let a = 0; a < list.length; a++) {
       for (let b = a + 1; b < list.length; b++) {
-        const s = list[a] * 5
-        const u = list[b] * 5
-        // A pair shares several cells; only the one holding the corner of their overlap tests it.
-        const cornerX = Math.max(Math.min(segs[s], segs[s + 2]), Math.min(segs[u], segs[u + 2]))
-        const cornerY = Math.max(Math.min(segs[s + 1], segs[s + 3]), Math.min(segs[u + 1], segs[u + 3]))
+        const i = list[a]
+        const j = list[b]
+        const s = i * 5
+        const u = j * 5
+        // A pair shares several cells; only the one holding the corner of their
+        // (grown) overlap tests it.
+        const cornerX = Math.max(Math.min(segs[s], segs[s + 2]), Math.min(segs[u], segs[u + 2])) - TOLERANCE
+        const cornerY = Math.max(Math.min(segs[s + 1], segs[s + 3]), Math.min(segs[u + 1], segs[u + 3])) - TOLERANCE
         if (cellKey(Math.floor(cornerX / CELL), Math.floor(cornerY / CELL)) !== key) continue
+        touch(i, j)
+        touch(j, i)
+
+        // Crossing through the middle of both: a junction, when both are on the ground.
+        if (!segs[s + 4] || !segs[u + 4]) continue
         const rx = segs[s + 2] - segs[s]
         const ry = segs[s + 3] - segs[s + 1]
         const qx = segs[u + 2] - segs[u]
         const qy = segs[u + 3] - segs[u + 1]
         const cross = rx * qy - ry * qx
-        const lengthS = Math.hypot(rx, ry)
-        const lengthU = Math.hypot(qx, qy)
-        if (Math.abs(cross) < 1e-9 || lengthS === 0 || lengthU === 0) continue
+        if (Math.abs(cross) < 1e-9) continue
         const wx = segs[u] - segs[s]
         const wy = segs[u + 1] - segs[s + 1]
         const t = (wx * qy - wy * qx) / cross
         const v = (wx * ry - wy * rx) / cross
-        const es = TOLERANCE / lengthS
-        const eu = TOLERANCE / lengthU
-        if (t < -es || t > 1 + es || v < -eu || v > 1 + eu) continue
-        const through = t > es && t < 1 - es && v > eu && v < 1 - eu
-        if (through && !(segs[s + 4] && segs[u + 4])) continue
-        cuts[list[a]].push(clamp(t, 0, 1))
-        cuts[list[b]].push(clamp(v, 0, 1))
+        if (t <= 0 || t >= 1 || v <= 0 || v >= 1) continue
+        cuts[i].push(t)
+        cuts[j].push(v)
       }
     }
   }
@@ -2612,21 +2638,26 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
   const nodeX: number[] = []
   const nodeY: number[] = []
   const edges: number[][] = [] // per node: neighbour, length, neighbour, length...
-  const nodeAt = new Map<number, number>()
+  const nodesAt = new Map<number, number[]>() // by 2-unit cell
   const node = (x: number, y: number) => {
     const gx = Math.round(x / 2)
     const gy = Math.round(y / 2)
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
-        const id = nodeAt.get(cellKey(gx + dx, gy + dy))
-        if (id !== undefined && Math.abs(nodeX[id] - x) <= TOLERANCE && Math.abs(nodeY[id] - y) <= TOLERANCE) return id
+        for (const id of nodesAt.get(cellKey(gx + dx, gy + dy)) ?? []) {
+          if (Math.abs(nodeX[id] - x) <= TOLERANCE && Math.abs(nodeY[id] - y) <= TOLERANCE) return id
+        }
       }
     }
+    const id = nodeX.length
     nodeX.push(x)
     nodeY.push(y)
     edges.push([])
-    nodeAt.set(cellKey(gx, gy), nodeX.length - 1)
-    return nodeX.length - 1
+    const key = cellKey(gx, gy)
+    const list = nodesAt.get(key)
+    if (list) list.push(id)
+    else nodesAt.set(key, [id])
+    return id
   }
   const join = (a: number, b: number) => {
     if (a === b) return
@@ -2796,7 +2827,11 @@ function strokeRoute(c: CanvasRenderingContext2D, t: MapTheme, points: number[],
   c.strokeStyle = t.labelHalo
   c.lineWidth = width + 3
   c.stroke()
-  if (t.routeDash) c.setLineDash([width * 1.5, width * 1.2])
+  // Round caps would fill the gaps of dashes; on dots they're what makes the dots.
+  if (t.routeLine === 'dashed') {
+    c.lineCap = 'butt'
+    c.setLineDash([width * 1.6, width * 1.2])
+  } else if (t.routeLine === 'dotted') c.setLineDash([0.01, width * 2])
   c.strokeStyle = t.route
   c.lineWidth = width
   c.stroke()

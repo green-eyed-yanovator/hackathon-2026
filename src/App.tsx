@@ -669,9 +669,9 @@ function startCompose() {
 //
 
 // Where the walk is heading: a pin, or a friend, who may be moving.
-function walkTarget() {
-  if (!UI.walk) return null
-  const [kind, id] = UI.walk.split('/')
+function walkTarget(to = UI.walk) {
+  if (!to) return null
+  const [kind, id] = to.split('/')
   if (kind === 'pin') {
     const post = S.posts.find((p) => p.id === id)
     return post ? { lat: post.latitude, lng: post.longitude, name: post.title, person: false } : null
@@ -701,6 +701,8 @@ let noFix = false
 
 async function walkTo(to: string) {
   if (UI.walk === to) return ui({ walk: null })
+  const there = walkTarget(to)
+  if (S.here && there && distance(S.here.latitude, S.here.longitude, there.lat, there.lng) < 30) return toast("You're already there")
   UI.walk = to
   UI.follow = false
   // Phones put the map first, so the way is what you see.
@@ -721,7 +723,7 @@ async function walkTo(to: string) {
   const y0 = latToY(here.latitude)
   const x1 = lngToX(target.lng)
   const y1 = latToY(target.lat)
-  const fit = (pixels: number, span: number) => Math.log2(pixels / Math.max(span * 256, 1e-9))
+  const fit = (pixels: number, span: number) => Math.log2(Math.max(pixels, 120) / Math.max(span * 256, 1e-9)) // short screens too
   // Room around the ends for the pin, the walk bar and the map buttons.
   const zoom = Math.min(17, Math.max(12, Math.min(fit(area.right - area.left - 200, Math.abs(x1 - x0)), fit(area.bottom - area.top - 240, Math.abs(y1 - y0)))))
   reveal(yToLat((y0 + y1) / 2), xToLng((x0 + x1) / 2), zoom, true)
@@ -3034,7 +3036,7 @@ function Legend() {
           <span>A friend</span>
         </div>
         <div>
-          <span className="legend-route" style={{ borderTop: `4px ${theme.routeDash ? 'dashed' : 'solid'} ${theme.route}` }} />
+          <span className="legend-route" style={{ borderTop: `4px ${theme.routeLine} ${theme.route}` }} />
           <span>The way there (G)</span>
         </div>
       </div>
@@ -3154,18 +3156,17 @@ function WalkBar() {
   const target = walkTarget()
   if (!target || UI.route.kind === 'new') return null
   const route = map?.route
-  const minutes = route?.points.length ? Math.max(1, Math.round(route.meters / 80)) : 0
-  const status = !route
-    ? noFix && !S.here
-      ? "Can't see where you are; your maps app can help"
-      : 'Finding you…'
-    : minutes
-      ? `${minutes} min walk · ${route.meters < 1000 ? `${Math.round(route.meters / 10) * 10} m` : `${(route.meters / 1000).toFixed(1)} km`}${route.via ? ` · via ${route.via}` : ''}`
-      : route.state === 'waiting'
-        ? 'Working out the way…'
-        : route.state === 'far'
-          ? 'Too far to walk from here'
-          : "Can't find a way there on foot"
+  const minutes = route?.points.length ? Math.max(1, Math.round(route.meters / 80)) : 0 // 80 m a minute
+
+  let status = 'Finding you…'
+  if (!route) {
+    if (noFix && !S.here) status = "Can't see where you are; your maps app can help"
+  } else if (minutes) {
+    const length = route.meters < 1000 ? `${Math.round(route.meters / 10) * 10} m` : `${(route.meters / 1000).toFixed(1)} km`
+    status = `${minutes} min walk · ${length}${route.via ? ` · via ${route.via}` : ''}`
+  } else if (route.state === 'waiting') status = 'Working out the way…'
+  else if (route.state === 'far') status = 'Too far to walk from here'
+  else status = "Can't find a way there on foot"
   return (
     <div className="walk" role="status">
       <button className="walk-main" onClick={() => go(UI.walk!)}>
@@ -3189,7 +3190,7 @@ function WalkBar() {
         </button>
       )}
       <a className="icon-btn" href={directions(target.lat, target.lng)} target="_blank" rel="noreferrer noopener" title="Open in your maps app" aria-label="Open in your maps app">
-        <Icon name="link" />
+        <Icon name="map" />
       </a>
       <button className="icon-btn" onClick={() => ui({ walk: null })} title="Stop" aria-label="Stop">
         <Icon name="close" />
@@ -3324,7 +3325,7 @@ export default function App() {
     setRadar(map, radarPlace())
     const target = walkTarget()
     const here = S.here
-    setRoute(map, target && here ? { lng: here.longitude, lat: here.latitude } : null, target)
+    setRoute(map, target && here ? { lng: here.longitude, lat: here.latitude, accuracy: here.accuracy } : null, target)
     if (UI.walk && !target) ui({ walk: null }) // the pin went, or the friend stopped sharing
     else if (target && here && distance(here.latitude, here.longitude, target.lat, target.lng) < 30) {
       ui({ walk: null })
