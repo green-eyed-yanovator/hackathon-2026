@@ -316,14 +316,16 @@ function dayLabel(iso: string) {
 // The feed and the map always show the same pins.
 function visiblePosts() {
   const friends = new Set(friendIds())
-  const joined = stats().joined
+  const { joined, active } = stats()
+  // Pins nobody has touched in a month quietly leave the map; Past still has them.
+  const recent = (p: Post) => (active.get(p.id) ?? 0) > Date.now() - 30 * 86400000
 
   return S.posts.filter((p) => {
     if (UI.flair && p.flair !== UI.flair) return false
     switch (UI.tab) {
       case 'around':
       case 'latest':
-        return !p.resolved_at
+        return !p.resolved_at && recent(p)
       case 'soon':
         // Happening now (started within 3 hours) or in the coming week.
         return !p.resolved_at && !!p.starts_at && time(p.starts_at) > Date.now() - 3 * 3600000 && time(p.starts_at) < Date.now() + 7 * 86400000
@@ -332,7 +334,7 @@ function visiblePosts() {
       case 'mine':
         return joined.has(p.id)
       case 'past':
-        return !!p.resolved_at
+        return !!p.resolved_at || !recent(p)
     }
   })
 }
