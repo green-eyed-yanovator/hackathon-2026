@@ -443,7 +443,7 @@ const POI_ICONS: Record<string, IconName> = {
   restaurant: 'fork', fast_food: 'burger', cafe: 'cup', ice_cream: 'cup', bakery: 'cup',
   bar: 'glass', beer: 'glass', alcohol_shop: 'glass',
   shop: 'bag', grocery: 'bag', clothing_store: 'shirt', jewelry: 'bag',
-  hospital: 'cross', doctors: 'cross', pharmacy: 'cross', dentist: 'cross',
+  hospital: 'cross', pharmacy: 'cross',
   police: 'shield', fire_station: 'shield', town_hall: 'shield',
   fuel: 'fuel', car: 'wrench', lodging: 'bed', bank: 'dollar',
   cinema: 'film', theatre: 'film', music: 'note',
@@ -2156,7 +2156,9 @@ function frame(m: MapState, time: number) {
 
   const roadsPlaced = new Map<string, { x: number; y: number }[]>()
   let drawn = 0
-  const showPoi = z >= 15
+  // Game maps are covered in blips from further out; plain maps keep them for close up.
+  const poiEarly = t.blip === 'pin' ? 0 : 2
+  const showPoi = z >= 15 - poiEarly
 
   // A label placed this frame keeps fading in from where it was last frame; one
   // that dropped out starts again from nothing next time it gets room.
@@ -2171,7 +2173,7 @@ function frame(m: MapState, time: number) {
 
   for (const label of labels) {
     if (drawn > 140) break
-    if (m.zoom < label.minZoom || m.zoom > label.maxZoom) continue
+    if (m.zoom < label.minZoom - (label.kind === 'poi' ? poiEarly : 0) || m.zoom > label.maxZoom) continue
     if (label.kind === 'poi' && !showPoi) continue
     const sx = (label.x - m.x) * size + m.width / 2
     const sy = (label.y - m.y) * size + m.height / 2
