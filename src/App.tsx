@@ -1357,7 +1357,7 @@ function InboxView() {
                   <button className="plain" onClick={() => n.actor_id && go(`user/${n.actor_id}`)}>
                     <Avatar id={n.actor_id} size={34} />
                   </button>
-                  <button className="plain row-main" onClick={() => open(n)}>
+                  <button className="row-main" onClick={() => open(n)}>
                     <div>
                       <strong>{n.actor_id ? nameOf(n.actor_id, n.actor_name) : 'Someone'}</strong> {describeNotification(n)}
                     </div>

@@ -317,6 +317,11 @@ function subscribePrivate(userId: string) {
       const text = describeNotification(n)
       onIncoming(`${n.actor_name ?? 'Someone'} ${text}`, n.preview ?? '', n.post_id ? `pin/${n.post_id}` : n.actor_id ? `user/${n.actor_id}` : 'inbox')
     })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, ({ new: row }) => {
+      // Read on another device.
+      upsert(S.notifications, row as Notification, byId)
+      changed()
+    })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: row }) => {
       const message = row as Message
       upsert(S.messages, message, byId)
