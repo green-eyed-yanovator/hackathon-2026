@@ -903,6 +903,10 @@ button.row:hover,
   flex: 1;
 }
 
+.btn-row.center {
+  justify-content: center;
+}
+
 .btn-row.tight {
   gap: 2px;
 }
@@ -1881,6 +1885,111 @@ textarea::placeholder {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* The big-moment banner: every game style shouts in its own voice. */
+
+.banner-big {
+  position: absolute;
+  z-index: 65;
+  left: 0;
+  right: 0;
+  top: 30%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 16px;
+  pointer-events: none;
+  text-align: center;
+  animation: banner 2.6s ease both;
+}
+
+.banner-big strong {
+  font-family: var(--font-head);
+  font-weight: 900;
+  font-size: clamp(34px, 7vw, 64px);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.banner-big span {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+@keyframes banner {
+  0% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+  10%,
+  82% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+[data-theme='coast'] .banner-big strong {
+  color: #f0c24b;
+  letter-spacing: 0.02em;
+  -webkit-text-stroke: 2px #000;
+  text-shadow: 3px 3px 0 #000;
+}
+
+[data-theme='coast'] .banner-big span {
+  color: #fff;
+  text-shadow: var(--text-shadow);
+  font-family: var(--font-head);
+  text-transform: uppercase;
+}
+
+[data-theme='metro'] .banner-big {
+  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.72) 20%, rgba(0, 0, 0, 0.72) 80%, transparent);
+}
+
+[data-theme='metro'] .banner-big strong {
+  color: #f0c850;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+[data-theme='metro'] .banner-big span {
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 13px;
+}
+
+[data-theme='frontier'] .banner-big strong {
+  color: #8f2b1c;
+  font-style: italic;
+  font-weight: 700;
+  text-transform: none;
+  text-shadow: 0 1px 0 #f4e6c6, 0 0 18px rgba(244, 230, 198, 0.9);
+}
+
+[data-theme='frontier'] .banner-big span {
+  color: #33241a;
+  font-style: italic;
+  text-shadow: 0 0 10px #f4e6c6, 0 0 4px #f4e6c6;
+}
+
+[data-theme='radar'] .banner-big strong::before {
+  content: '> ';
+}
+
+[data-theme='radar'] .banner-big strong {
+  color: var(--accent);
+  font-size: clamp(26px, 5vw, 44px);
+  text-shadow: 0 0 12px var(--accent);
+}
+
+[data-theme='radar'] .banner-big span {
+  color: var(--fg);
 }
 
 /* Modals: auth and the command palette. */

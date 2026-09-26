@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 
 import {
   S, useStore, changed, start, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
-  friendIds, friendshipWith, conversations, describeNotification, setIncomingHandler, watchHere, setSharing,
+  friendIds, friendshipWith, conversations, describeNotification, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, toggleInterest, toggleSave, saveProfile,
   requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
@@ -87,6 +87,7 @@ const UI = {
   view: initialView(),
   draft: null as { latitude: number; longitude: number } | null,
   alerts: stored('aroundhere.alerts') === 'on',
+  banner: null as { title: string; sub: string } | null,
 }
 
 let map: MapState | null = null
@@ -128,6 +129,22 @@ function toast(message: string) {
     UI.toast = ''
     changed()
   }, 2800)
+}
+
+// Big moments get a full-screen banner in the game styles, a toast elsewhere.
+let bannerTimer = 0
+function celebrate(title: string, sub: string) {
+  if (UI.theme === 'day' || UI.theme === 'night') {
+    toast(sub)
+    return
+  }
+  UI.banner = { title, sub }
+  changed()
+  window.clearTimeout(bannerTimer)
+  bannerTimer = window.setTimeout(() => {
+    UI.banner = null
+    changed()
+  }, 2600)
 }
 
 function failed(fallback: string) {
@@ -174,6 +191,8 @@ function meters(m: number) {
   if (m < 1000) return `${Math.round(m / 10) * 10} m`
   return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`
 }
+
+const awayText = (m: number) => (m < 50 ? 'right here' : `${meters(m)} away`)
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
@@ -343,6 +362,7 @@ function openPin(post: Post) {
 }
 
 async function locate() {
+  enableCompass()
   const here = S.here ?? (await watchHere())
   if (!here) {
     toast("Can't find you: location is blocked or unavailable")
@@ -740,7 +760,7 @@ function PostView({ post }: { post: Post }) {
             <div className="muted small">
               {ago(post.created_at)}
               {street && ` · ${street}`}
-              {away !== null && ` · ${meters(away)} away`}
+              {away !== null && ` · ${awayText(away)}`}
             </div>
           </div>
         </button>
@@ -842,7 +862,7 @@ function PostView({ post }: { post: Post }) {
             <Icon name="pencil" size={16} /> Edit
           </button>
           {!post.resolved_at && (
-            <button className="btn" onClick={() => updatePost(post.id, { resolved_at: new Date().toISOString() }).then((ok) => ok && toast('Marked resolved'))} title="Done, found, sorted: moves it to Past">
+            <button className="btn" onClick={() => updatePost(post.id, { resolved_at: new Date().toISOString() }).then((ok) => ok && celebrate('Resolved', 'Moved to Past, thanks for closing the loop'))} title="Done, found, sorted: moves it to Past">
               <Icon name="check" size={16} /> Resolve
             </button>
           )}
@@ -905,6 +925,24 @@ function PlaceView({ id }: { id: string }) {
   )
 }
 
+// Private pages when signed out: say why, and offer the way in.
+function SignInFirst({ title, icon, why }: { title: string; icon: IconName; why: string }) {
+  if (!S.authKnown) return <Panel title={title}>{null}</Panel>
+  return (
+    <Panel title={title} icon={<Icon name={icon} />}>
+      <Empty icon={icon}>{why}</Empty>
+      <div className="btn-row center">
+        <button className="btn primary" onClick={() => ui({ auth: 'signup' })}>
+          Create account
+        </button>
+        <button className="btn" onClick={() => ui({ auth: 'signin' })}>
+          Sign in
+        </button>
+      </div>
+    </Panel>
+  )
+}
+
 function Missing({ what }: { what: string }) {
   return (
     <Panel title="Not found">
@@ -938,7 +976,7 @@ function FriendButton({ id }: { id: string }) {
   if (f.addressee === S.userId) {
     return (
       <>
-        <button className="btn primary" onClick={() => acceptFriend(id).then((ok) => (ok ? toast(`You and ${nameOf(id)} are friends`) : failed("Couldn't accept")))}>
+        <button className="btn primary" onClick={() => acceptFriend(id).then((ok) => (ok ? celebrate('New friend', `You and ${nameOf(id)} are friends`) : failed("Couldn't accept")))}>
           <Icon name="check" size={16} /> Accept
         </button>
         <button className="btn" onClick={() => removeFriend(id)}>
@@ -1107,7 +1145,7 @@ function ChatView({ id }: { id: string }) {
     endRef.current?.scrollIntoView()
   }, [thread.length])
 
-  if (!S.userId) return <Missing what="conversation" />
+  if (!S.userId) return <SignInFirst title="Messages" icon="chat" why="Sign in to message your neighbours." />
 
   return (
     <Panel
@@ -1118,7 +1156,7 @@ function ChatView({ id }: { id: string }) {
             {nameOf(id)}
             <small className="muted">
               {S.online.has(id) ? 'online' : 'offline'}
-              {loc && ` · ${away !== null ? meters(away) + ' away' : 'on the map'} ${since(loc.updated_at)}`}
+              {loc && ` · ${away !== null ? awayText(away) : 'on the map'} ${since(loc.updated_at)}`}
             </small>
           </span>
         </button>
@@ -1171,7 +1209,7 @@ function ChatView({ id }: { id: string }) {
 
 function InboxView() {
   const [tab, setTab] = useState<'activity' | 'messages'>(S.messages.some((m) => m.recipient_id === S.userId && !m.read_at) ? 'messages' : 'activity')
-  if (!S.userId) return <Missing what="inbox" />
+  if (!S.userId) return <SignInFirst title="Inbox" icon="bell" why="Replies to your pins, friend requests and messages land here." />
 
   const notifications = [...S.notifications].reverse()
   const unreadCount = notifications.filter((n) => !n.read_at).length
@@ -1268,7 +1306,7 @@ function InboxView() {
 
 function FriendsView() {
   const [query, setQuery] = useState('')
-  if (!S.userId) return <Missing what="page" />
+  if (!S.userId) return <SignInFirst title="Friends" icon="users" why="Add friends to see them on the map and chat." />
 
   const friends = friendIds().sort((a, b) => Number(S.online.has(b)) - Number(S.online.has(a)) || nameOf(a).localeCompare(nameOf(b)))
   const incoming = S.friendships.filter((f) => !f.accepted_at && f.addressee === S.userId).map((f) => f.requester)
@@ -1326,7 +1364,7 @@ function FriendsView() {
                 <strong>{nameOf(id)}</strong>
                 <div className="muted small">
                   {S.online.has(id) ? 'online' : 'offline'}
-                  {loc && ` · ${away !== null ? meters(away) + ' away' : 'on the map'}`}
+                  {loc && ` · ${away !== null ? awayText(away) : 'on the map'}`}
                 </div>
               </div>
             </button>
@@ -1510,7 +1548,7 @@ function ComposeView() {
     setAttached(attached.filter((_, i) => i !== index))
   }
 
-  if (!S.userId) return <Missing what="page" />
+  if (!S.userId) return <SignInFirst title="New pin" icon="plus" why="Join to pin what's happening around you." />
   const draft = UI.draft ?? viewCenter()
   const street = map ? nearestStreet(map, draft.longitude, draft.latitude) : ''
 
@@ -1524,7 +1562,7 @@ function ComposeView() {
       return
     }
     go(`pin/${post.id}`)
-    toast('Pinned. Neighbours can see it now')
+    celebrate('Pin posted', 'Neighbours can see it now')
   }
 
   return (
@@ -1943,7 +1981,7 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
           <strong>{nameOf(userId)}</strong>
           <div className="muted small">
             {loc && `here ${since(loc.updated_at)}`}
-            {away !== null && ` · ${meters(away)} away`}
+            {away !== null && ` · ${awayText(away)}`}
           </div>
           <div className="muted small">Click to message</div>
         </div>
@@ -2224,6 +2262,12 @@ export default function App() {
         © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> · OpenFreeMap
       </div>
       <HoverCard cardRef={cardRef} />
+      {UI.banner && (
+        <div className="banner-big" role="status" key={UI.banner.title + UI.banner.sub}>
+          <strong>{UI.banner.title}</strong>
+          <span>{UI.banner.sub}</span>
+        </div>
+      )}
       {UI.toast && (
         <div className="toast" role="status">
           {UI.toast}

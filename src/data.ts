@@ -81,6 +81,7 @@ export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'n
 
 export const S = {
   ready: false,
+  authKnown: false, // true once the stored session has been read
   session: null as Session | null,
   userId: null as string | null,
 
@@ -347,6 +348,7 @@ export function start() {
   // Fires once with the stored session, then on every sign-in and sign-out.
   supabase.auth.onAuthStateChange((_event, session) => {
     const userId = session?.user.id ?? null
+    S.authKnown = true
     S.session = session
     if (userId !== S.userId) {
       resetPrivate()
@@ -660,6 +662,31 @@ export function watchHere(): Promise<Here | null> {
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 15000 },
     )
   })
+}
+
+// Which way the phone points, for the arrow on the map. iOS asks for permission,
+// and only from a tap, so this is called from the locate button.
+let compassOn = false
+let lastHeadingAt = 0
+
+export async function enableCompass() {
+  if (compassOn || typeof DeviceOrientationEvent === 'undefined') return
+  const ask = (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission
+  if (ask && (await ask().catch(() => 'denied')) !== 'granted') return
+  compassOn = true
+
+  const onTurn = (e: DeviceOrientationEvent) => {
+    const ios = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading
+    const heading = ios ?? (e.absolute && e.alpha !== null ? 360 - e.alpha : null)
+    const now = Date.now()
+    if (heading === null || !S.here || now - lastHeadingAt < 100) return
+    const old = S.here.heading
+    if (old !== null && Math.abs(((heading - old + 540) % 360) - 180) < 3) return
+    lastHeadingAt = now
+    S.here = { ...S.here, heading }
+    changed()
+  }
+  window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onTurn as EventListener)
 }
 
 // Sends my position to friends, at most every 20 s unless I moved a fair bit.
