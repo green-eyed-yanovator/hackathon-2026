@@ -323,7 +323,7 @@ function subscribePublic() {
       // so my position never leaves this device. (Friends hear via notifications.)
       const mine = post.author_id === S.userId
       const known = post.author_id && (S.blocked.has(post.author_id) || friendIds().includes(post.author_id))
-      if (fresh && !mine && !known && S.here && distance(S.here.latitude, S.here.longitude, post.latitude, post.longitude) < 1500) {
+      if (fresh && !mine && !known && !muted('nearby_pin') && S.here && distance(S.here.latitude, S.here.longitude, post.latitude, post.longitude) < 1500) {
         onIncoming('New nearby', post.title, `pin/${post.id}`)
       }
     })
@@ -1133,13 +1133,17 @@ export async function enableCompass() {
   window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onTurn as EventListener)
 }
 
+// The words worked out on this device can be turned off in Settings like the
+// server's notifications; their kinds sit in the same list, which the server ignores.
+const muted = (kind: string) => S.mutedKinds.includes(kind)
+
 // A friend who shares where they are comes within a couple of streets of you: a
 // word about it, at most every two hours each. Worked out here, from what we see.
 const saidNearby = new Map<string, number>()
 
 function noticeNearby() {
   const here = S.here
-  if (!here || !S.userId) return
+  if (!here || !S.userId || muted('friend_nearby')) return
   for (const id of S.locations.keys()) {
     const loc = locationOf(id)
     if (!loc || id === S.userId || S.blocked.has(id)) continue
@@ -1154,7 +1158,7 @@ function noticeNearby() {
 let reminded: Set<string> | null = null
 
 function remindSoon() {
-  if (!S.userId || !S.ready) return
+  if (!S.userId || !S.ready || muted('starting_soon')) return
   try {
     reminded ??= new Set(JSON.parse(localStorage.getItem('aroundhere.reminded') ?? '[]') as string[])
   } catch {

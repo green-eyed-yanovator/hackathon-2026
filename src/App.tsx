@@ -2338,6 +2338,9 @@ const MUTABLE: [string, string][] = [
   ['friend_accept', 'Friend requests accepted'],
   ['friend_post', 'Friends pinning something new'],
   ['mention', 'Someone mentioning you'],
+  ['nearby_pin', 'New pins close to you'],
+  ['friend_nearby', 'A friend a street away'],
+  ['starting_soon', "Things you're in on, an hour before"],
 ]
 
 function ThemeSwatch({ id }: { id: string }) {
