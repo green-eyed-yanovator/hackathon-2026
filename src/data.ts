@@ -312,8 +312,17 @@ function subscribePublic() {
   supabase
     .channel('public-live')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, ({ new: row }) => {
-      upsert(S.posts, row as Post, byId, true)
+      const post = row as Post
+      const fresh = !S.posts.some((p) => p.id === post.id)
+      upsert(S.posts, post, byId, true)
       changed()
+      // Someone else pinned something close to me: worth a word. Worked out here,
+      // so my position never leaves this device. (Friends hear via notifications.)
+      const mine = post.author_id === S.userId
+      const known = post.author_id && (S.blocked.has(post.author_id) || friendIds().includes(post.author_id))
+      if (fresh && !mine && !known && S.here && distance(S.here.latitude, S.here.longitude, post.latitude, post.longitude) < 1500) {
+        onIncoming('New nearby', post.title, `pin/${post.id}`)
+      }
     })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, ({ new: row }) => {
       upsert(S.posts, row as Post, byId, true)
