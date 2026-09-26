@@ -2712,7 +2712,8 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
   ]
   const shownCommands = q ? ranked(commands, (c) => score(words, [c.label])) : commands
 
-  const pins = (q ? ranked(S.posts, (p) => score(words, [p.title, p.author_name, flairs[p.flair]?.label], [p.description])) : S.posts)
+  const posts = S.posts.filter((p) => !(p.author_id && S.blocked.has(p.author_id)))
+  const pins = (q ? ranked(posts, (p) => score(words, [p.title, p.author_name, flairs[p.flair]?.label], [p.description])) : posts)
     .slice(0, q ? 8 : 5)
     .map((p) => ({ key: p.id, icon: <Blip flair={p.flair} size={22} />, label: p.title, hint: p.resolved_at ? 'resolved' : ago(p.created_at), run: () => openPin(p) }))
 
