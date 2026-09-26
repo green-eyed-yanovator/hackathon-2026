@@ -62,7 +62,12 @@ export type Post = {
   place_id: string | null // posts within ~30 m share a place and one marker
   flair: Flair
   starts_at: string | null // when it happens, for events and meetups
+  area: Area | null // the stretch of city it's about, if more than a spot
 }
+
+// A pin's area, the way a game marks out a district: a circle of so many metres
+// round the pin, or a ring of corners (longitude, latitude) drawn round a few blocks.
+export type Area = { r: number } | { ring: [number, number][] }
 
 export type Reply = {
   id: string
@@ -706,7 +711,7 @@ function forgetPost(postId: string) {
   changed()
 }
 
-export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; latitude: number; longitude: number; files: File[] }
+export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; latitude: number; longitude: number; area: Area | null; files: File[] }
 
 export async function createPost(draft: Draft) {
   // Posts within 30 m of an existing place join it and share its marker.
@@ -732,7 +737,7 @@ export async function createPost(draft: Draft) {
 
   const { data: post, error } = await supabase
     .from('posts')
-    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt })
+    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt, area: draft.area })
     .select()
     .single()
   if (error) {
@@ -765,7 +770,7 @@ export async function createPost(draft: Draft) {
   return post as Post
 }
 
-export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair'>>) {
+export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair' | 'area'>>) {
   const { data, error } = await supabase.from('posts').update(patch).eq('id', id).select().single()
   if (error) return fail("Couldn't save the change", error)
   upsert(S.posts, data as Post, byId, true)

@@ -17,6 +17,12 @@ What you can do:
   or share. Give a pin a time and it counts down in the feed, shows under
   Soon, ripples on the map while it's on, and goes to your calendar in a tap;
   anything you're in on gets you a word an hour before.
+- **Areas, like a game's districts.** A pin can be about a stretch of the
+  city, not just a spot: a circle of so many metres, or a few blocks drawn
+  corner by corner on the map. Each style marks them its own way (a territory
+  patch on Palm Coast, hatched ink on Frontier, a glowing edge on Phosphor), big
+  ones carry their name across them, a tap inside one opens its pin, and walking
+  into one brings its name up in the corner.
 - **Get there.** A walking route along the streets, drawn on the map (a GPS
   line in the game styles) with the minutes it takes and
   the street most of it is on. It shortens as you walk, finds a new way if

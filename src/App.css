@@ -2501,6 +2501,74 @@ button.toast {
 
 /* The big-moment banner: every game style shouts in its own voice. */
 
+/* Picking a pin's area while making it. */
+.area-field .tabs {
+  margin: 0;
+}
+
+.area-range {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.area-range input {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.area-range span {
+  min-width: 96px;
+  text-align: right;
+}
+
+.area-help {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-weight: 500;
+}
+
+/* Walking into a pin's area: its name in the corner, the way a game names a district. */
+.district {
+  position: absolute;
+  z-index: 60;
+  right: 84px;
+  bottom: 96px; /* clear of the pin button */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: min(460px, calc(100vw - 120px));
+  text-align: right;
+  color: #fff;
+  pointer-events: none;
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.85), 0 0 12px rgba(0, 0, 0, 0.7);
+  animation: district 4.5s ease both;
+}
+
+.district strong {
+  font-family: var(--font-head);
+  font-size: 30px;
+  font-style: italic;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: var(--head-case);
+}
+
+.district span {
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+@keyframes district {
+  0% { opacity: 0; transform: translateX(12px); }
+  10%, 85% { opacity: 1; transform: none; }
+  100% { opacity: 0; }
+}
+
 /* The game styles' mission line: white type with a hard shadow, the place in colour. */
 .objective {
   position: absolute;
@@ -3197,6 +3265,15 @@ button.toast {
   .hint-bar,
   .walk {
     top: calc(62px + env(safe-area-inset-top));
+  }
+
+  .district {
+    right: 68px;
+    bottom: calc(150px + env(safe-area-inset-bottom));
+  }
+
+  .district strong {
+    font-size: 22px;
   }
 
   .objective {

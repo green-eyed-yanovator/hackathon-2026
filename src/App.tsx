@@ -20,14 +20,14 @@ import {
   watchHere, setSharing, enableCompass, checkOut,
   // Accounts.
   changeEmail, deleteAccount,
-  type Flair, type Post, type Revision, type Notification,
+  type Flair, type Post, type Revision, type Notification, type Area,
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, requestFrame,
-  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute,
+  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, regionAt,
   icons, mapThemes, LEGEND, poiColor,
   MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
-  type IconName, type MapState, type Marker,
+  type IconName, type MapState, type Marker, type Region,
 } from './map'
 import './App.css'
 
@@ -101,6 +101,8 @@ const UI = {
   feed: !narrow(),
   view: initialView(),
   draft: null as { latitude: number; longitude: number } | null,
+  draftArea: null as Area | null, // the area of the pin being made: a circle, or corners being tapped
+  district: null as { name: string; sub: string } | null, // an area just walked into, named in the corner
   alerts: stored('aroundhere.alerts') === 'on',
   sounds: stored('aroundhere.sounds') !== 'off',
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
@@ -173,8 +175,10 @@ function go(path: string) {
   UI.route = readRoute()
   UI.hover = null
   UI.sheetFull = false
-  if (UI.route.kind !== 'new') UI.draft = null
-  else if (!UI.draft) UI.draft = viewCenter()
+  if (UI.route.kind !== 'new') {
+    UI.draft = null
+    UI.draftArea = null
+  } else if (!UI.draft) UI.draft = viewCenter()
   changed()
 }
 
@@ -510,6 +514,56 @@ function sortedFeed(posts: Post[]) {
   else if (UI.tab === 'soon') withMeta.sort((a, b) => time(a.post.starts_at!) - time(b.post.starts_at!))
   else withMeta.sort((a, b) => b.active - a.active)
   return withMeta
+}
+
+// Pins that cover an area, for the map to mark out.
+function buildRegions(posts: Post[]): Region[] {
+  return posts
+    .filter((p) => p.area)
+    .map((p) => ({
+      id: p.id, name: p.title, color: (flairs[p.flair] ?? flairs.general).color, lng: p.longitude, lat: p.latitude, area: p.area!,
+      selected: UI.route.kind === 'pin' && UI.route.id === p.id,
+    }))
+}
+
+// The area of the pin being made, while it's being made.
+function draftRegion(): Region | null {
+  const area = UI.draftArea
+  if (UI.route.kind !== 'new' || !area || !UI.draft || ('ring' in area && !area.ring.length)) return null
+  return { id: 'draft', name: '', color: '#f25c2a', lng: UI.draft.longitude, lat: UI.draft.latitude, area, selected: true }
+}
+
+// The middle of a ring of corners, where its pin goes.
+function ringMiddle(ring: [number, number][]) {
+  return { latitude: ring.reduce((sum, c) => sum + c[1], 0) / ring.length, longitude: ring.reduce((sum, c) => sum + c[0], 0) / ring.length }
+}
+
+// How big an area is, in words: "250 m around", "about 4 football pitches".
+function areaText(area: Area, lat: number) {
+  if ('r' in area) return `${area.r} m around`
+  const my = 111320 // metres in a degree of latitude
+  const mx = my * Math.cos((lat * Math.PI) / 180)
+  const [x0, y0] = area.ring[0]
+  let twice = 0
+  area.ring.forEach(([x1, y1], i) => {
+    const [x2, y2] = area.ring[(i + 1) % area.ring.length]
+    twice += (x1 - x0) * mx * (y2 - y0) * my - (x2 - x0) * mx * (y1 - y0) * my
+  })
+  const pitches = Math.abs(twice) / 2 / 7140
+  if (pitches < 1) return 'smaller than a football pitch'
+  if (pitches < 60) return `about ${Math.round(pitches)} football pitch${Math.round(pitches) === 1 ? '' : 'es'}`
+  return `about ${((pitches * 7140) / 1e6).toFixed(1)} km²`
+}
+
+// The area last walked into, so it's named once on the way in.
+let lastRegion = ''
+let districtTimer = 0
+
+function district(name: string, sub: string) {
+  UI.district = { name, sub }
+  changed()
+  window.clearTimeout(districtTimer)
+  districtTimer = window.setTimeout(() => ui({ district: null }), 4500)
 }
 
 function buildMarkers(posts: Post[]): Marker[] {
@@ -1435,6 +1489,7 @@ function PostView({ post }: { post: Post }) {
               {ago(post.created_at)}
               {street && ` · ${street}`}
               {away !== null && ` · ${awayText(away)}`}
+              {post.area && ` · covers ${areaText(post.area, post.latitude)}`}
             </div>
           </div>
         </button>
@@ -2572,6 +2627,7 @@ function ComposeView() {
 
   if (!S.userId) return <SignInFirst title="New pin" icon="plus" why="Join to pin what's happening around you." />
   const draft = UI.draft ?? viewCenter()
+  const area = UI.draftArea
   const street = map ? nearestStreet(map, draft.longitude, draft.latitude) : ''
 
   async function submit() {
@@ -2584,6 +2640,7 @@ function ComposeView() {
       startsAt: fromLocalInput(starts),
       latitude: draft.latitude,
       longitude: draft.longitude,
+      area: area && ('r' in area || area.ring.length >= 3) ? area : null,
       files: attached.map((a) => a.file),
     })
     setBusy(false)
@@ -2625,6 +2682,47 @@ function ComposeView() {
         }}>
           <Icon name="locate" size={14} /> Me
         </button>
+      </div>
+
+      <div className="field area-field">
+        <span>
+          Area <em className="muted">· a stretch of the city, not just a spot</em>
+        </span>
+        <div className="tabs">
+          <button className={!area ? 'tab on' : 'tab'} onClick={() => ui({ draftArea: null })}>
+            A spot
+          </button>
+          <button className={area && 'r' in area ? 'tab on' : 'tab'} onClick={() => ui({ draftArea: { r: 150 } })}>
+            A circle
+          </button>
+          <button className={area && 'ring' in area ? 'tab on' : 'tab'} onClick={() => ui({ draftArea: { ring: [] } })}>
+            Some blocks
+          </button>
+        </div>
+        {area && 'r' in area && (
+          <label className="area-range">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round((Math.log(area.r / 30) / Math.log(1000 / 30)) * 100)}
+              onChange={(e) => ui({ draftArea: { r: Math.round((30 * (1000 / 30) ** (Number(e.target.value) / 100)) / 10) * 10 } })}
+            />
+            <span>{area.r} m around</span>
+          </label>
+        )}
+        {area && 'ring' in area && (
+          <div className="area-help muted small">
+            {area.ring.length < 3
+              ? `${narrow() ? 'Tap' : 'Click'} its corners on the map: ${area.ring.length} so far, at least 3`
+              : `${area.ring.length} corners, ${areaText(area, draft.latitude)}. The pin sits in the middle.`}
+            {area.ring.length > 0 && (
+              <button className="link small" onClick={() => ui({ draftArea: { ring: area.ring.slice(0, -1) } })}>
+                Undo
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <FlairPick value={flair} onPick={setFlair} />
@@ -3325,16 +3423,27 @@ export default function App() {
 
     m.onClick = (marker, lng, lat) => {
       if (UI.route.kind === 'new') {
-        ui({ draft: { latitude: lat, longitude: lng } })
+        // Drawing an area of blocks, a tap is another corner, and the pin sits in
+        // the middle of them; otherwise a tap moves the pin.
+        const area = UI.draftArea
+        if (area && 'ring' in area) {
+          if (area.ring.length >= 32) return
+          const ring: [number, number][] = [...area.ring, [lng, lat]]
+          ui({ draftArea: { ring }, draft: ring.length >= 3 ? ringMiddle(ring) : UI.draft })
+        } else ui({ draft: { latitude: lat, longitude: lng } })
         return
       }
       if (!marker) {
-        // Tapping empty map puts the map first: the legend goes, and on a phone the sheets.
+        // Tapping empty map puts the map first: the legend goes, and on a phone the
+        // sheets. With the map clear, a tap inside a pin's area opens the pin.
         if (UI.legend) ui({ legend: false })
         if (narrow() && (UI.route.kind || UI.feed)) {
           ui({ feed: false })
           go('')
+          return
         }
+        const region = regionAt(m, lng, lat)
+        if (region && !(UI.route.kind === 'pin' && UI.route.id === region.id)) go(`pin/${region.id}`)
         return
       }
       if (marker.kind === 'pin') {
@@ -3407,6 +3516,14 @@ export default function App() {
       paintChrome(shown())
     }
     setMarkers(map, buildMarkers(posts))
+    setRegions(map, buildRegions(posts), draftRegion())
+    // Walking into a pin's area: its name comes up, the way a game names a district.
+    const inside = S.here ? regionAt(map, S.here.longitude, S.here.latitude) : null
+    if ((inside?.id ?? '') !== lastRegion) {
+      lastRegion = inside?.id ?? ''
+      const post = inside && S.posts.find((p) => p.id === inside.id)
+      if (post) district(post.title, `${(flairs[post.flair] ?? flairs.general).label} · ${nameOf(post.author_id, post.author_name)}`)
+    }
     const target = walkTarget()
     const here = S.here
     setRoute(map, target && here ? { lng: here.longitude, lat: here.latitude, accuracy: here.accuracy } : null, target)
@@ -3514,7 +3631,11 @@ export default function App() {
           <Icon name="plus" size={20} /> Pin something
         </button>
       )}
-      {route.kind === 'new' && <div className="hint-bar">{narrow() ? 'Tap' : 'Click'} the map to place your pin</div>}
+      {route.kind === 'new' && (
+        <div className="hint-bar">
+          {narrow() ? 'Tap' : 'Click'} {UI.draftArea && 'ring' in UI.draftArea ? 'the corners of the area' : 'the map to place your pin'}
+        </div>
+      )}
 
       <nav className="tabbar">
         <button className={!detail && !UI.feed ? 'on' : ''} onClick={() => { ui({ feed: false }); go('') }}>
@@ -3545,6 +3666,12 @@ export default function App() {
       </div>
       <WalkBar />
       <HoverCard cardRef={cardRef} />
+      {UI.district && (
+        <div className="district" key={UI.district.name}>
+          <strong>{UI.district.name}</strong>
+          <span>{UI.district.sub}</span>
+        </div>
+      )}
       {UI.objective && (
         <div className="objective" key={UI.objective.place}>
           {UI.objective.verb} <b>{UI.objective.place}</b>

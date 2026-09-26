@@ -800,6 +800,9 @@ export type MapState = {
   baseDirty: boolean // something besides the camera changed (tiles, markers, style, size)
   baseCamera: string // the camera the base was taken at; any other camera redraws
   markerKey: string // what the markers were last time, so an unchanged set doesn't redraw
+  regions: Region[] // pins' areas, drawn under the names
+  draftRegion: Region | null // the area of a pin being made, still being drawn
+  regionKey: string // what the areas were last time, likewise
 
   tileUrl: string | null
   sources: Map<string, SourceEntry>
@@ -856,7 +859,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, moved: false, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
+    fade: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', regions: [], draftRegion: null, regionKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {}, onLongPress: () => {},
     route: null, onRoute: () => {},
@@ -2845,6 +2848,182 @@ function strokeRoute(c: CanvasRenderingContext2D, t: MapTheme, points: number[],
 }
 
 //
+// Areas: the stretch of city a pin is about, marked out the way game maps mark
+// out their districts. Drawn under the names; the app opens a pin when its area
+// is tapped, and names it when you walk in.
+//
+
+export type Region = {
+  id: string // the pin's
+  name: string
+  color: string
+  lng: number // the pin
+  lat: number
+  area: { r: number } | { ring: [number, number][] } // metres round the pin, or corners (lng, lat)
+  selected: boolean
+}
+
+// A region in world units: a circle's centre and radius, or its ring of corners.
+function shapeOf(region: Region) {
+  const x = lngToX(region.lng)
+  const y = latToY(region.lat)
+  if ('r' in region.area) return { x, y, r: region.area.r / metersPerWorld(y), ring: null }
+  return { x, y, r: 0, ring: region.area.ring.flatMap(([lng, lat]) => [lngToX(lng), latToY(lat)]) }
+}
+
+export function setRegions(m: MapState, regions: Region[], draft: Region | null) {
+  const key = JSON.stringify([regions, draft])
+  if (key === m.regionKey) return
+  m.regionKey = key
+  m.regions = regions
+  m.draftRegion = draft
+  m.baseDirty = true
+  requestFrame(m)
+}
+
+// The smallest area holding the spot, so a block inside a park wins over the park.
+export function regionAt(m: MapState, lng: number, lat: number) {
+  const px = lngToX(lng)
+  const py = latToY(lat)
+  let best: Region | null = null
+  let bestSize = Infinity
+  for (const region of m.regions) {
+    const s = shapeOf(region)
+    let inside = false
+    let size = 0
+    if (s.ring) {
+      // Crossings of a line going right from the spot, and the shoelace for the size.
+      const g = s.ring
+      for (let i = 0, j = g.length - 2; i < g.length; j = i, i += 2) {
+        if (g[i + 1] > py !== g[j + 1] > py && px < ((g[j] - g[i]) * (py - g[i + 1])) / (g[j + 1] - g[i + 1]) + g[i]) inside = !inside
+        size += g[j] * g[i + 1] - g[i] * g[j + 1]
+      }
+      size = Math.abs(size) / 2
+    } else {
+      inside = Math.hypot(px - s.x, py - s.y) <= s.r
+      size = Math.PI * s.r * s.r
+    }
+    if (inside && size < bestSize) {
+      best = region
+      bestSize = size
+    }
+  }
+  return best
+}
+
+// Each style marks a district its own way: a faint wash and a line in the plain
+// ones, a solid territory patch on the 2004 radar, an inked and hatched boundary on
+// the survey map, a glowing edge on the screens. The open pin's area is stronger.
+function drawRegions(m: MapState) {
+  const c = m.ctx
+  const t = m.theme
+  const scale = worldSize(m)
+  const ox = m.width / 2 - m.x * scale
+  const oy = m.height / 2 - m.y * scale
+
+  for (const region of m.draftRegion ? [...m.regions, m.draftRegion] : m.regions) {
+    const s = shapeOf(region)
+    const strong = region.selected || region === m.draftRegion
+    const drawing = !!s.ring && s.ring.length < 6 // a ring of fewer than three corners is still being drawn
+    const ink = t.blip === 'stamp' ? (strong ? '#8f2b1c' : '#3f2e1e') : t.blip === 'ring' ? t.blipInk : region.color
+    const outline = () => {
+      c.beginPath()
+      if (s.ring) {
+        for (let i = 0; i < s.ring.length; i += 2) c.lineTo(ox + s.ring[i] * scale, oy + s.ring[i + 1] * scale)
+        if (!drawing) c.closePath()
+      } else c.arc(ox + s.x * scale, oy + s.y * scale, s.r * scale, 0, Math.PI * 2)
+    }
+
+    c.save()
+    if (!drawing) {
+      outline()
+      if (t.blip === 'stamp') {
+        // Hatching, clipped to the area.
+        c.clip()
+        const x0 = s.ring ? ox + Math.min(...s.ring.filter((_, i) => i % 2 === 0)) * scale : ox + (s.x - s.r) * scale
+        const y0 = s.ring ? oy + Math.min(...s.ring.filter((_, i) => i % 2 === 1)) * scale : oy + (s.y - s.r) * scale
+        const x1 = s.ring ? ox + Math.max(...s.ring.filter((_, i) => i % 2 === 0)) * scale : ox + (s.x + s.r) * scale
+        const y1 = s.ring ? oy + Math.max(...s.ring.filter((_, i) => i % 2 === 1)) * scale : oy + (s.y + s.r) * scale
+        const h = y1 - y0
+        c.beginPath()
+        for (let d = 0; d < x1 - x0 + h; d += 9) {
+          c.moveTo(x0 + d, y0)
+          c.lineTo(x0 + d - h, y1)
+        }
+        c.globalAlpha = strong ? 0.35 : 0.2
+        c.strokeStyle = ink
+        c.lineWidth = 1
+        c.stroke()
+      } else {
+        const alpha = { pin: 0.1, square: 0.3, round: 0.16, ring: 0.06, stamp: 0 }[t.blip]
+        c.globalAlpha = strong ? Math.min(0.5, alpha * 1.7) : alpha
+        c.fillStyle = ink
+        c.fill()
+      }
+      c.restore()
+      c.save()
+    }
+
+    outline()
+    c.lineJoin = 'round'
+    if (t.glow) {
+      c.globalAlpha = strong ? 0.35 : 0.2
+      c.strokeStyle = ink
+      c.lineWidth = 8
+      c.stroke()
+    }
+    c.globalAlpha = strong ? 1 : 0.75
+    c.strokeStyle = t.blip === 'square' ? '#111111' : ink
+    c.lineWidth = t.blip === 'square' ? 1.5 : strong ? 3 : 2
+    if (t.blip === 'stamp' || drawing) c.setLineDash([8, 5])
+    c.stroke()
+    c.restore()
+
+    // The corners of one being drawn, as handles.
+    if (region === m.draftRegion && s.ring) {
+      for (let i = 0; i < s.ring.length; i += 2) {
+        c.beginPath()
+        c.arc(ox + s.ring[i] * scale, oy + s.ring[i + 1] * scale, 5, 0, Math.PI * 2)
+        c.fillStyle = '#ffffff'
+        c.fill()
+        c.lineWidth = 2
+        c.strokeStyle = ink
+        c.stroke()
+      }
+    }
+  }
+}
+
+// Areas big enough on screen carry their name across them, faint and spaced out,
+// the way a game map names its districts. Under the pin, so the pin stays clear.
+function drawRegionNames(m: MapState) {
+  const c = m.ctx
+  const t = m.theme
+  const scale = worldSize(m)
+  for (const region of m.regions) {
+    const s = shapeOf(region)
+    const span = (s.ring ? Math.max(...s.ring.filter((_, i) => i % 2 === 0)) - Math.min(...s.ring.filter((_, i) => i % 2 === 0)) : 2 * s.r) * scale
+    if (span < 160 || span > 1600) continue
+    const p = project(m, s.x, s.y)
+    const size = Math.round(clamp(span / 14, 13, 22))
+    const text = region.name.length > 28 ? region.name.slice(0, 27).trimEnd() + '…' : region.name
+    c.save()
+    c.font = `${t.italic ? 'italic ' : ''}700 ${size}px ${t.font}`
+    c.letterSpacing = `${Math.round(size * 0.18)}px`
+    c.textAlign = 'center'
+    c.textBaseline = 'middle'
+    c.globalAlpha = region.selected ? 0.85 : 0.6
+    c.lineJoin = 'round'
+    c.lineWidth = 4
+    c.strokeStyle = t.labelHalo
+    c.strokeText(t.caps || t.blip !== 'pin' ? text.toUpperCase() : text, p.x, p.y + 34)
+    c.fillStyle = t.labelColor
+    c.fillText(t.caps || t.blip !== 'pin' ? text.toUpperCase() : text, p.x, p.y + 34)
+    c.restore()
+  }
+}
+
+//
 // The frame.
 //
 
@@ -2897,6 +3076,7 @@ function frame(m: MapState, time: number) {
     c.fillRect(0, 0, m.width, m.height)
 
     let unsettled = drawTiles(m, view)
+    drawRegions(m)
     if (m.route?.points.length) {
       const scale = worldSize(m)
       strokeRoute(c, m.theme, m.route.points, m.width / 2 - m.x * scale, m.height / 2 - m.y * scale, scale, 5)
@@ -2912,6 +3092,7 @@ function frame(m: MapState, time: number) {
     }
 
     if (drawLabels(m, view, placed, dt)) unsettled = true
+    drawRegionNames(m)
 
     // Once nothing is moving, loading or fading, keep this picture.
     if (unsettled || keepGoing) keepGoing = true

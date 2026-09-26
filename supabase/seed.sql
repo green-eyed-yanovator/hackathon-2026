@@ -185,5 +185,19 @@ begin
     (maya, tom, 'Not yet, Ben thinks he saw him by the courts.', now() - interval '2 hours', now() - interval '2 hours'),
     (tom, maya, 'I''ll ride past on the way home and have a look.', now() - interval '110 minutes', null),
     (priya, maya, 'Dumplings at 7, don''t be late!', now() - interval '50 minutes', null);
+
+  -- Some pins are about a stretch of the city, not a spot: a few blocks drawn
+  -- round, or a circle of so many metres.
+  update public.posts set area = v.area::jsonb
+  from (values
+    ('Street clean-up, Saturday 9am', '{"ring": [[138.6098, -34.9346], [138.6150, -34.9346], [138.6150, -34.9377], [138.6098, -34.9377]]}'),
+    ('Pickup soccer, Tuesday 6pm', '{"ring": [[138.6118, -34.9215], [138.6158, -34.9215], [138.6158, -34.9252], [138.6118, -34.9252]]}'),
+    ('Power out on Hutt St?', '{"r": 300}'),
+    ('Lost: grey tabby called Miso', '{"r": 400}'),
+    ('The busker on Rundle Mall is incredible', '{"r": 60}'),
+    ('Outdoor cinema in the park, Friday', '{"r": 120}'),
+    ('Farmers market this Sunday', '{"r": 90}')
+  ) as v (title, area)
+  where posts.title = v.title and posts.author_id in (maya, tom, priya, lucas, hannah, ben);
 end;
 $$;
