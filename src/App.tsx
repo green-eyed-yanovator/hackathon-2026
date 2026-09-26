@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import {
-  S, useStore, changed, start, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
+  S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, conversations, describeNotification, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, toggleInterest, toggleSave, saveProfile,
   requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
@@ -170,13 +170,13 @@ function needAccount(mode: AuthMode = 'signup') {
 // Formatting.
 //
 
-function ago(iso: string) {
-  const seconds = (Date.now() - time(iso)) / 1000
+function ago(when: string | number) {
+  const seconds = (Date.now() - (typeof when === 'number' ? when : time(when))) / 1000
   if (seconds < 60) return 'now'
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`
   if (seconds < 604800) return `${Math.floor(seconds / 86400)}d`
-  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  return new Date(when).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
 // "right now", "5m ago", "3h ago", or "on 12 Sep".
@@ -202,6 +202,8 @@ function hue(id: string) {
   return h % 360
 }
 
+const firstName = (id: string) => nameOf(id).split(' ')[0]
+
 function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?'
 }
@@ -219,25 +221,10 @@ function dayLabel(iso: string) {
 // Derived data.
 //
 
-function lastActivity(post: Post) {
-  let latest = time(post.created_at)
-  for (const r of S.replies) if (r.post_id === post.id) latest = Math.max(latest, time(r.created_at))
-  return latest
-}
-
-function unreadPostIds() {
-  const ids = new Set<string>()
-  for (const n of S.notifications) if (!n.read_at && n.post_id) ids.add(n.post_id)
-  return ids
-}
-
 // The feed and the map always show the same pins.
 function visiblePosts() {
-  const me = S.userId
   const friends = new Set(friendIds())
-  const saved = new Set(S.saved.map((s) => s.post_id))
-  const mine = (p: Post) =>
-    p.author_id === me || saved.has(p.id) || S.replies.some((r) => r.post_id === p.id && r.author_id === me) || S.interests.some((i) => i.post_id === p.id && i.user_id === me)
+  const joined = stats().joined
 
   return S.posts.filter((p) => {
     if (UI.flair && p.flair !== UI.flair) return false
@@ -248,7 +235,7 @@ function visiblePosts() {
       case 'friends':
         return !!p.author_id && friends.has(p.author_id)
       case 'mine':
-        return !!me && mine(p)
+        return joined.has(p.id)
       case 'past':
         return !!p.resolved_at
     }
@@ -256,9 +243,10 @@ function visiblePosts() {
 }
 
 function sortedFeed(posts: Post[]) {
+  const active = stats().active
   const withMeta = posts.map((post) => ({
     post,
-    active: lastActivity(post),
+    active: active.get(post.id) ?? 0,
     away: distance(UI.view.lat, UI.view.lng, post.latitude, post.longitude),
   }))
   if (UI.tab === 'around') withMeta.sort((a, b) => a.away - b.away)
@@ -268,7 +256,7 @@ function sortedFeed(posts: Post[]) {
 
 function buildMarkers(posts: Post[]): Marker[] {
   const markers: Marker[] = []
-  const unread = unreadPostIds()
+  const unread = stats().unread
   const saved = new Set(S.saved.map((s) => s.post_id))
   const route = UI.route
 
@@ -338,8 +326,10 @@ function openArea() {
   const w = window.innerWidth
   const h = window.innerHeight
   if (narrow()) {
-    const sheetOpen = UI.route.kind !== '' || UI.feed
-    return { left: 0, top: 64, right: w, bottom: sheetOpen ? h * 0.42 : h - 80 }
+    // Sheet heights match the phone layout in App.css.
+    const kind = UI.route.kind
+    const sheet = kind === 'pin' || kind === 'place' || kind === 'new' ? h * 0.58 : kind ? h * 0.86 : UI.feed ? h * 0.56 : 0
+    return { left: 0, top: 64, right: w, bottom: h - 60 - sheet }
   }
   const left = UI.feed ? 392 : 0
   const right = UI.route.kind ? w - 436 : w
@@ -373,8 +363,7 @@ async function locate() {
 
 function startCompose() {
   if (needAccount()) return
-  const c = map ? center(map) : { lat: UI.view.lat, lng: UI.view.lng }
-  UI.draft = S.here ? { latitude: S.here.latitude, longitude: S.here.longitude } : { latitude: c.lat, longitude: c.lng }
+  UI.draft = S.here ? { latitude: S.here.latitude, longitude: S.here.longitude } : viewCenter()
   go('new')
   // Get a real fix in the background; move the draft there if it arrives before the user moves it.
   const first = UI.draft
@@ -537,9 +526,10 @@ const TABS: [Tab, string][] = [
 ]
 
 function PostRow({ post, away, active }: { post: Post; away: number; active: number }) {
-  const replies = S.replies.filter((r) => r.post_id === post.id).length
-  const interested = S.interests.filter((i) => i.post_id === post.id).length
-  const unread = S.notifications.some((n) => !n.read_at && n.post_id === post.id)
+  const st = stats()
+  const replies = st.replies.get(post.id) ?? 0
+  const interested = st.interested.get(post.id) ?? 0
+  const unread = st.unread.has(post.id)
   const key = placeKey(post)
 
   return (
@@ -563,7 +553,7 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
       <div className="row-main">
         <div className="row-top">
           <strong className="clip">{post.title}</strong>
-          <span className="muted small nowrap">{ago(new Date(active).toISOString())}</span>
+          <span className="muted small nowrap">{ago(active)}</span>
         </div>
         {post.description && <div className="clip muted">{post.description}</div>}
         <div className="row-meta">
@@ -738,7 +728,7 @@ function PostView({ post }: { post: Post }) {
       foot={
         me ? (
           <Composer
-            placeholder={`Reply to ${post.author_id ? nameOf(post.author_id, post.author_name).split(' ')[0] : 'this pin'}…`}
+            placeholder={`Reply to ${post.author_id ? firstName(post.author_id) : 'this pin'}…`}
             onSend={async (text) => {
               const ok = await reply(post.id, text)
               if (ok) setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
@@ -1004,7 +994,7 @@ function ProfileView({ id }: { id: string }) {
   const own = id === S.userId
   const posts = S.posts.filter((p) => p.author_id === id)
   const replyCount = S.replies.filter((r) => r.author_id === id).length
-  const friendCount = S.friendships.filter((f) => f.accepted_at && (f.requester === id || f.addressee === id)).length
+  const joinedCount = S.interests.filter((i) => i.user_id === id).length
   const loc = S.locations.get(id)
 
   async function save() {
@@ -1016,7 +1006,7 @@ function ProfileView({ id }: { id: string }) {
   }
 
   return (
-    <Panel title={own ? 'You' : 'Profile'} icon={<Icon name="user" />}>
+    <Panel title={own ? 'You' : 'Profile'} icon={<Icon name="user" />} className="tall">
       <div className="profile-card">
         <Avatar id={id} size={64} dot />
         <div>
@@ -1066,8 +1056,8 @@ function ProfileView({ id }: { id: string }) {
           <span>replies</span>
         </div>
         <div>
-          <b>{friendCount}</b>
-          <span>friends</span>
+          <b>{joinedCount}</b>
+          <span>joined</span>
         </div>
       </div>
 
@@ -1146,6 +1136,7 @@ function ChatView({ id }: { id: string }) {
   }, [thread.length])
 
   if (!S.userId) return <SignInFirst title="Messages" icon="chat" why="Sign in to message your neighbours." />
+  if (id === S.userId) return <Missing what="conversation" />
 
   return (
     <Panel
@@ -1163,16 +1154,16 @@ function ChatView({ id }: { id: string }) {
       }
       onBack={() => go('inbox')}
       className="chat"
-      foot={<Composer placeholder={`Message ${nameOf(id).split(' ')[0]}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} />}
+      foot={<Composer placeholder={`Message ${firstName(id)}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} />}
     >
       {loc && (
         <button className="btn wide" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
-          <Icon name="locate" size={16} /> Show {nameOf(id).split(' ')[0]} on the map
+          <Icon name="locate" size={16} /> Show {firstName(id)} on the map
         </button>
       )}
       {thread.length === 0 && (
         <Empty icon="chat">
-          Say hi to {nameOf(id).split(' ')[0]}. Messages are private between you two.
+          Say hi to {firstName(id)}. Messages are private between you two.
         </Empty>
       )}
       <div className="bubbles">
@@ -1225,7 +1216,7 @@ function InboxView() {
   }
 
   return (
-    <Panel title="Inbox" icon={<Icon name="bell" />}>
+    <Panel title="Inbox" icon={<Icon name="bell" />} className="tall">
       <div className="tabs">
         <button className={tab === 'activity' ? 'tab on' : 'tab'} onClick={() => setTab('activity')}>
           Activity {unreadCount > 0 && <b className="count">{unreadCount}</b>}
@@ -1318,7 +1309,7 @@ function FriendsView() {
     .slice(0, 30)
 
   return (
-    <Panel title="Friends" icon={<Icon name="users" />}>
+    <Panel title="Friends" icon={<Icon name="users" />} className="tall">
       <div className={S.sharing ? 'share-card on' : 'share-card'}>
         <div>
           <strong>{S.sharing ? 'Sharing your location' : 'Location sharing is off'}</strong>
@@ -1463,7 +1454,7 @@ function SettingsView() {
   }
 
   return (
-    <Panel title="Settings" icon={<Icon name="sliders" />}>
+    <Panel title="Settings" icon={<Icon name="sliders" />} className="tall">
       <div className="section">Map style</div>
       <ThemeGrid />
 
@@ -1992,7 +1983,7 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
   const posts = S.posts.filter((p) => placeKey(p) === id)
   if (!posts.length || (UI.route.kind === 'pin' && posts.some((p) => p.id === UI.route.id))) return null
   const post = posts[0]
-  const replies = S.replies.filter((r) => r.post_id === post.id).length
+  const replies = stats().replies.get(post.id) ?? 0
 
   return (
     <div className="hover-card" ref={cardRef}>

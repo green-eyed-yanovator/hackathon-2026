@@ -2298,17 +2298,18 @@ textarea::placeholder {
     height: 56dvh;
   }
 
+  /* Pins keep some map in view; list-like pages take most of the screen. */
   .detail {
-    height: min(80dvh, calc(100dvh - 130px));
+    height: 58dvh;
     z-index: 16;
+  }
+
+  .detail.tall {
+    height: min(86dvh, calc(100dvh - 124px));
   }
 
   .detail.chat {
     height: calc(100dvh - 64px - 60px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
-  }
-
-  .detail.compose {
-    height: 60dvh;
   }
 
   @keyframes sheet {

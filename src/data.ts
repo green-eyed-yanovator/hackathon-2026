@@ -123,6 +123,41 @@ export function useStore() {
   return S
 }
 
+// Counts every view needs, worked out once per change instead of once per row.
+type Stats = {
+  replies: Map<string, number>
+  interested: Map<string, number>
+  active: Map<string, number> // last reply, or when it was posted
+  unread: Set<string> // pins with unread notifications
+  joined: Set<string> // pins I posted, saved, replied to or said I'm in
+}
+
+let statsVersion = -1
+let statsCache: Stats
+
+export function stats() {
+  if (statsVersion === version) return statsCache
+  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set() }
+  for (const p of S.posts) {
+    st.active.set(p.id, time(p.created_at))
+    if (p.author_id && p.author_id === S.userId) st.joined.add(p.id)
+  }
+  for (const r of S.replies) {
+    st.replies.set(r.post_id, (st.replies.get(r.post_id) ?? 0) + 1)
+    st.active.set(r.post_id, Math.max(st.active.get(r.post_id) ?? 0, time(r.created_at)))
+    if (r.author_id && r.author_id === S.userId) st.joined.add(r.post_id)
+  }
+  for (const i of S.interests) {
+    st.interested.set(i.post_id, (st.interested.get(i.post_id) ?? 0) + 1)
+    if (i.user_id === S.userId) st.joined.add(i.post_id)
+  }
+  for (const saved of S.saved) st.joined.add(saved.post_id)
+  for (const n of S.notifications) if (!n.read_at && n.post_id) st.unread.add(n.post_id)
+  statsCache = st
+  statsVersion = version
+  return st
+}
+
 // Where something went wrong, in words for a toast. Set by actions, read by the UI.
 export let lastError = ''
 function fail(what: string, error: { message: string } | null) {
