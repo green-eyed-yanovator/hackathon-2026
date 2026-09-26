@@ -284,8 +284,10 @@ async function loadPublic() {
     supabase.from('reply_likes').select('user_id, reply_id, created_at'),
   ])
 
-  if (posts.error) {
-    fail('Loading pins', posts.error)
+  // All or nothing: a half-loaded map (pins without their replies) is worse than the one we had.
+  const failed = [posts, replies, media, interests, profiles, likes].find((r) => r.error)
+  if (failed) {
+    fail('Loading pins', failed.error)
     S.offline = true
     changed()
     if (!retrying) {
@@ -534,7 +536,8 @@ function checkOutNow() {
 // After a friendship starts: their position and presence, which we couldn't read before.
 async function refreshFriendsNow() {
   await refreshLocations()
-  const { data } = await supabase.from('presence').select('user_id, device, here, seen_at')
+  const { data, error } = await supabase.from('presence').select('user_id, device, here, seen_at')
+  if (error) return
   S.seen = new Map()
   for (const p of (data ?? []) as Presence[]) rememberPresence(p)
   changed()
@@ -935,7 +938,8 @@ export async function markNotificationsRead(ids: string[]) {
 export async function loadOlderNotifications() {
   const oldest = S.notifications[0]
   if (!oldest) return
-  const { data } = await supabase.from('notifications').select('*').lt('created_at', oldest.created_at).order('created_at', { ascending: false }).limit(60)
+  const { data, error } = await supabase.from('notifications').select('*').lt('created_at', oldest.created_at).order('created_at', { ascending: false }).limit(60)
+  if (error) return // the button stays, to try again
   S.notifications = [...(data ?? []).reverse(), ...S.notifications]
   S.hasOlderNotifications = (data?.length ?? 0) === 60
   changed()
