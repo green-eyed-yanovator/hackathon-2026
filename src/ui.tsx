@@ -80,6 +80,12 @@ export const noticeStyle: CSSProperties = {
   color: '#333',
 }
 
+// Sort comparator, newest first. Parses dates rather than comparing strings,
+// because API and realtime timestamps aren't always formatted the same way.
+export function newestFirst(a: string, b: string) {
+  return new Date(b).getTime() - new Date(a).getTime()
+}
+
 // "now", "5m", "3h", "2d", then a short date.
 export function ago(iso: string) {
   const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
@@ -123,4 +129,30 @@ export function avatar(id: string | null, name: string | null, size = 32) {
       {initials}
     </span>
   )
+}
+
+// "Today", "Yesterday", "This week" or "Earlier", for grouping lists by day.
+export function dayLabel(iso: string) {
+  const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  const days = Math.round((startOfDay(new Date()) - startOfDay(new Date(iso))) / 86_400_000)
+
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return 'This week'
+  return 'Earlier'
+}
+
+// Splits an already-sorted list into consecutive day groups.
+export function groupByDay<T>(items: T[], dateOf: (item: T) => string) {
+  const groups: { label: string; items: T[] }[] = []
+
+  for (const item of items) {
+    const label = dayLabel(dateOf(item))
+    const last = groups.at(-1)
+
+    if (last?.label === label) last.items.push(item)
+    else groups.push({ label, items: [item] })
+  }
+
+  return groups
 }

@@ -1,24 +1,42 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 
 import { supabase } from './lib/supabase'
 import type { Message, NotificationRow } from './types'
+import { newestFirst } from './ui'
 
 type Inbox = {
   owner: string | null
   notifications: NotificationRow[]
   messages: Message[]
+  // True when the last page came back full, so older notifications may exist.
+  hasOlder: boolean
+  mutedKinds: string[]
 }
 
-const empty: Inbox = { owner: null, notifications: [], messages: [] }
+const empty: Inbox = { owner: null, notifications: [], messages: [], hasOlder: false, mutedKinds: [] }
 
-function addOnce<T extends { id: string }>(rows: T[], row: T) {
-  return rows.some((existing) => existing.id === row.id) ? rows : [...rows, row]
+const PAGE = 50
+
+// Something new arrived for the signed-in user, e.g. to raise a desktop alert.
+export type Incoming =
+  | { type: 'notification'; notification: NotificationRow }
+  | { type: 'message'; message: Message }
+
+// Adds a realtime row once, keeping the list oldest-first even when rows
+// arrive late or out of order.
+function addOnce<T extends { id: string; created_at: string }>(rows: T[], row: T) {
+  if (rows.some((existing) => existing.id === row.id)) {
+    return rows
+  }
+
+  return [...rows, row].sort((a, b) => newestFirst(b.created_at, a.created_at))
 }
 
 // The signed-in user's notifications and messages, kept live over realtime.
 // RLS makes both tables return only the caller's own rows.
-export function useInbox(userId: string | null) {
+export function useInbox(userId: string | null, onIncoming?: (incoming: Incoming) => void) {
   const [inbox, setInbox] = useState<Inbox>(empty)
+  const announce = useEffectEvent((incoming: Incoming) => onIncoming?.(incoming))
 
   useEffect(() => {
     if (!userId) {
@@ -27,18 +45,20 @@ export function useInbox(userId: string | null) {
 
     let ignore = false
 
+    // Newest first so the limit keeps the most recent, then oldest-first for display.
     Promise.all([
       supabase
         .from('notifications')
         .select('*')
-        .order('created_at', { ascending: true })
-        .limit(100),
+        .order('created_at', { ascending: false })
+        .limit(PAGE),
       supabase
         .from('messages')
         .select('*')
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
         .limit(500),
-    ]).then(([notifications, messages]) => {
+      supabase.from('notification_settings').select('muted_kinds').maybeSingle(),
+    ]).then(([notifications, messages, settings]) => {
       if (ignore) {
         return
       }
@@ -48,7 +68,13 @@ export function useInbox(userId: string | null) {
         return
       }
 
-      setInbox({ owner: userId, notifications: notifications.data, messages: messages.data })
+      setInbox({
+        owner: userId,
+        notifications: notifications.data.reverse(),
+        messages: messages.data.reverse(),
+        hasOlder: notifications.data.length === PAGE,
+        mutedKinds: settings.data?.muted_kinds ?? [],
+      })
     })
 
     const channel = supabase
@@ -56,20 +82,28 @@ export function useInbox(userId: string | null) {
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
-        (payload) =>
+        (payload) => {
+          const notification = payload.new as NotificationRow
           setInbox((current) => ({
             ...current,
-            notifications: addOnce(current.notifications, payload.new as NotificationRow),
-          })),
+            notifications: addOnce(current.notifications, notification),
+          }))
+          announce({ type: 'notification', notification })
+        },
       )
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) =>
+        (payload) => {
+          const message = payload.new as Message
           setInbox((current) => ({
             ...current,
-            messages: addOnce(current.messages, payload.new as Message),
-          })),
+            messages: addOnce(current.messages, message),
+          }))
+          if (message.sender_id !== userId) {
+            announce({ type: 'message', message })
+          }
+        },
       )
       .subscribe()
 
@@ -129,6 +163,44 @@ export function useInbox(userId: string | null) {
       .is('read_at', null)
   }
 
+  async function loadOlder() {
+    const oldest = current.notifications[0]
+
+    if (!oldest) {
+      return
+    }
+
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .lt('created_at', oldest.created_at)
+      .order('created_at', { ascending: false })
+      .limit(PAGE)
+
+    if (error) {
+      console.error('Failed to load older notifications:', error)
+      return
+    }
+
+    setInbox((state) => ({
+      ...state,
+      notifications: [...data.reverse(), ...state.notifications],
+      hasOlder: data.length === PAGE,
+    }))
+  }
+
+  async function setMutedKinds(mutedKinds: string[]) {
+    setInbox((state) => ({ ...state, mutedKinds }))
+
+    const { error } = await supabase
+      .from('notification_settings')
+      .upsert({ muted_kinds: mutedKinds }, { onConflict: 'user_id' })
+
+    if (error) {
+      console.error('Failed to save notification settings:', error)
+    }
+  }
+
   async function sendMessage(recipientId: string, body: string) {
     const { data, error } = await supabase
       .from('messages')
@@ -152,6 +224,10 @@ export function useInbox(userId: string | null) {
   return {
     notifications: current.notifications,
     messages: current.messages,
+    hasOlder: current.hasOlder,
+    mutedKinds: current.mutedKinds,
+    loadOlder,
+    setMutedKinds,
     unreadNotifications,
     unreadMessages,
     markNotificationsRead,
@@ -184,6 +260,10 @@ export function describeNotification(notification: NotificationRow) {
       return { icon: '💬', text: `replied to your pin ${title}` }
     case 'saved_reply':
       return { icon: '🔔', text: `replied to ${title}, a pin you saved` }
+    case 'thread_reply':
+      return { icon: '💭', text: `also replied to ${title}` }
+    case 'resolved':
+      return { icon: '✅', text: `marked ${title} as resolved` }
     case 'save':
       return { icon: '⭐', text: `saved your pin ${title}` }
     case 'interest':

@@ -20,7 +20,9 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import './App.css'
 import type { Session } from '@supabase/supabase-js'
 import AuthPanel from './AuthPanel'
-import { useInbox, useNames } from './inbox'
+import { describeNotification, useInbox, type Incoming } from './inbox'
+import NotificationCenter from './NotificationCenter'
+import PostPanel from './PostPanel'
 import ProfilePanel from './ProfilePanel'
 import SearchBox from './SearchBox'
 import { supabase } from './lib/supabase'
@@ -32,8 +34,9 @@ import type {
   Post,
   Profile,
   Reply,
+  Saved,
 } from './types'
-import { ago, avatar, linkButtonStyle, rightPanelStyle } from './ui'
+import { ago, avatar } from './ui'
 
 setWorkerUrl(workerUrl)
 
@@ -49,21 +52,13 @@ function readRoute() {
   return { kind, id }
 }
 
-// "You", "You and Sam", "You, Sam and 3 others" ... are interested.
-function describeInterested(names: string[]) {
-  const verb = names.length === 1 && names[0] !== 'You' ? 'is' : 'are'
-
-  if (names.length <= 2) return `${names.join(' and ')} ${verb} interested`
-
-  return `${names.slice(0, 2).join(', ')} and ${names.length - 2} ${names.length === 3 ? 'other' : 'others'} are interested`
-}
-
 const filterLabels: Record<Exclude<MapFilter['kind'], 'author'>, string> = {
   mine: 'Your pins',
   saved: 'Saved pins',
   replied: "Pins you've replied to",
   others: "Neighbours' pins",
   new: 'Pins with new activity',
+  past: 'Resolved pins',
 }
 
 function App() {
@@ -79,7 +74,6 @@ function App() {
   const [posts, setPosts] = useState<Post[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
 const [replies, setReplies] = useState<Reply[]>([])
-const [replyText, setReplyText] = useState('')
   const [interests, setInterests] = useState<Interest[]>([])
   const [route, setRoute] = useState(readRoute)
   const [mapFilter, setMapFilter] = useState<MapFilter | null>(null)
@@ -103,9 +97,16 @@ const [replyText, setReplyText] = useState('')
   const [session, setSession] = useState<Session | null>(null)
   const [myProfile, setMyProfile] = useState<Profile | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode | null>(null)
-  const [saved, setSaved] = useState<{ owner: string | null; ids: string[] }>({
+  const [saved, setSaved] = useState<{ owner: string | null; rows: Saved[] }>({
     owner: null,
-    ids: [],
+    rows: [],
+  })
+  const [desktopAlerts, setDesktopAlerts] = useState(() => {
+    try {
+      return localStorage.getItem('aroundhere.desktopAlerts') === 'on'
+    } catch {
+      return false
+    }
   })
 
   const userId = session?.user.id ?? null
@@ -145,12 +146,63 @@ const [replyText, setReplyText] = useState('')
   // Ignore a profile or saved pins left over from a previous session.
   const me = myProfile?.id === userId ? myProfile : null
   const savedIds = useMemo(
-    () => (saved.owner === userId ? saved.ids : []),
+    () => (saved.owner === userId ? saved.rows.map((row) => row.post_id) : []),
     [saved, userId],
   )
+  const savedRows = saved.owner === userId ? saved.rows : []
 
-  const inbox = useInbox(userId)
+  // A notification or message arrived: pop a desktop alert if the tab isn't in view.
+  function handleIncoming(incoming: Incoming) {
+    if (
+      !desktopAlerts ||
+      typeof Notification === 'undefined' ||
+      Notification.permission !== 'granted' ||
+      document.visibilityState === 'visible'
+    ) {
+      return
+    }
+
+    const alert =
+      incoming.type === 'notification'
+        ? new Notification(
+            `${incoming.notification.actor_name ?? 'Someone'} ${describeNotification(incoming.notification).text}`,
+            { body: incoming.notification.preview ?? '', tag: incoming.notification.id },
+          )
+        : new Notification('New message on AroundHere', {
+            body: incoming.message.body,
+            tag: incoming.message.id,
+          })
+
+    alert.onclick = () => {
+      window.focus()
+      if (incoming.type === 'message') go(`chat/${incoming.message.sender_id}`)
+      else if (incoming.notification.post_id) go(`pin/${incoming.notification.post_id}`)
+      alert.close()
+    }
+  }
+
+  async function toggleDesktopAlerts() {
+    let enabled = !desktopAlerts
+
+    if (enabled && Notification.permission !== 'granted') {
+      enabled = (await Notification.requestPermission()) === 'granted'
+    }
+
+    setDesktopAlerts(enabled)
+    try {
+      localStorage.setItem('aroundhere.desktopAlerts', enabled ? 'on' : 'off')
+    } catch {
+      // Private mode: the choice just won't be remembered.
+    }
+    showToast(enabled ? 'Desktop alerts on' : 'Desktop alerts off')
+  }
+
+  const inbox = useInbox(userId, handleIncoming)
   const unreadTotal = inbox.unreadNotifications + inbox.unreadMessages
+
+  useEffect(() => {
+    document.title = unreadTotal > 0 ? `(${unreadTotal}) AroundHere` : 'AroundHere'
+  }, [unreadTotal])
 
   // Pins with unread notifications get a red dot on the map.
   const newActivityIds = useMemo(
@@ -172,7 +224,7 @@ const [replyText, setReplyText] = useState('')
 
     supabase
       .from('saved_posts')
-      .select('post_id')
+      .select('post_id, created_at')
       .then(({ data, error }) => {
         if (ignore) {
           return
@@ -183,7 +235,7 @@ const [replyText, setReplyText] = useState('')
           return
         }
 
-        setSaved({ owner: userId, ids: data.map((row) => row.post_id) })
+        setSaved({ owner: userId, rows: data })
       })
 
     return () => {
@@ -266,7 +318,7 @@ const [replyText, setReplyText] = useState('')
     async function loadInterests() {
       const { data, error } = await supabase
         .from('post_interest')
-        .select('user_id, post_id')
+        .select('user_id, post_id, created_at')
 
       if (error) {
         console.error('Failed to load interest:', error)
@@ -308,6 +360,9 @@ const [replyText, setReplyText] = useState('')
     }
   }, [])
 
+  const handlePostChangedLive = useEffectEvent((post: Post) => handlePostChanged(post))
+  const forgetPostLive = useEffectEvent((postId: string) => forgetPost(postId))
+
   useEffect(() => {
   const channel = supabase
     .channel('posts-realtime')
@@ -334,6 +389,17 @@ const [replyText, setReplyText] = useState('')
           return [newPost, ...currentPosts]
         })
       },
+    )
+    // Edits, resolves and renames from anyone show up live.
+    .on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'posts' },
+      (payload) => handlePostChangedLive(payload.new as Post),
+    )
+    .on(
+      'postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'posts' },
+      (payload) => forgetPostLive((payload.old as Post).id),
     )
     .subscribe()
 
@@ -433,7 +499,9 @@ const [replyText, setReplyText] = useState('')
   function matchesFilter(post: Post, filter: MapFilter | null) {
     switch (filter?.kind) {
       case undefined:
-        return true
+        return !post.resolved_at
+      case 'past':
+        return !!post.resolved_at
       case 'mine':
         return post.author_id === userId
       case 'saved':
@@ -441,9 +509,9 @@ const [replyText, setReplyText] = useState('')
       case 'replied':
         return repliedByMe.has(post.id)
       case 'others':
-        return post.author_id !== userId
+        return post.author_id !== userId && !post.resolved_at
       case 'new':
-        return newActivityIds.has(post.id)
+        return newActivityIds.has(post.id) && !post.resolved_at
       case 'author':
         return post.author_id === filter.authorId
     }
@@ -484,6 +552,7 @@ const [replyText, setReplyText] = useState('')
           userId && post.author_id === userId && 'mine',
           savedIds.includes(post.id) && 'saved',
           newActivityIds.has(post.id) && 'new',
+          post.resolved_at && 'resolved',
         ]
           .filter(Boolean)
           .join(' ')
@@ -609,32 +678,45 @@ const [replyText, setReplyText] = useState('')
     applyFilter(mapFilter?.kind === filter.kind ? null : filter)
   }
 
-async function handleCreateReply() {
-  if (!selectedPost || !replyText.trim()) {
-    return
-  }
-
+async function createReply(postId: string, content: string) {
   const { data, error } = await supabase
     .from('replies')
-    .insert({
-      post_id: selectedPost.id,
-      content: replyText.trim(),
-    })
+    .insert({ post_id: postId, content })
     .select()
     .single()
 
   if (error) {
     console.error('Failed to create reply:', error)
-    alert('Failed to post reply.')
-    return
+    showToast("Couldn't post your reply, try again")
+    return false
   }
 
-  setReplies((currentReplies) => [
-    ...currentReplies,
-    data,
-  ])
+  // Realtime may have delivered it first.
+  setReplies((currentReplies) =>
+    currentReplies.some((reply) => reply.id === data.id)
+      ? currentReplies
+      : [...currentReplies, data],
+  )
+  return true
+}
 
-  setReplyText('')
+// After the author edits or resolves a pin (realtime tells everyone else).
+function handlePostChanged(post: Post) {
+  setPosts((currentPosts) =>
+    currentPosts.map((current) => (current.id === post.id ? post : current)),
+  )
+}
+
+function forgetPost(postId: string) {
+  setPosts((currentPosts) => currentPosts.filter((post) => post.id !== postId))
+  setReplies((currentReplies) => currentReplies.filter((reply) => reply.post_id !== postId))
+  setInterests((current) => current.filter((interest) => interest.post_id !== postId))
+}
+
+function handlePostDeleted(postId: string) {
+  forgetPost(postId)
+  go('')
+  showToast('Pin deleted')
 }
 
   function setLocation(location: Location) {
@@ -802,9 +884,9 @@ async function handleCreateReply() {
 
     setSaved({
       owner: userId,
-      ids: isSaved
-        ? savedIds.filter((id) => id !== postId)
-        : [...savedIds, postId],
+      rows: isSaved
+        ? savedRows.filter((row) => row.post_id !== postId)
+        : [...savedRows, { post_id: postId, created_at: new Date().toISOString() }],
     })
     showToast(isSaved ? 'Removed from your saved pins' : 'Saved to your pins ★')
   }
@@ -823,7 +905,7 @@ async function handleCreateReply() {
     setInterests((current) =>
       wasInterested
         ? current.filter((interest) => !mine(interest))
-        : [...current, { user_id: userId, post_id: postId }],
+        : [...current, { user_id: userId, post_id: postId, created_at: new Date().toISOString() }],
     )
 
     const { error } = wasInterested
@@ -834,7 +916,7 @@ async function handleCreateReply() {
       console.error('Failed to update interest:', error)
       setInterests((current) =>
         wasInterested
-          ? [...current, { user_id: userId, post_id: postId }]
+          ? [...current, { user_id: userId, post_id: postId, created_at: new Date().toISOString() }]
           : current.filter((interest) => !mine(interest)),
       )
       showToast("Couldn't update, try again")
@@ -944,8 +1026,6 @@ async function handleCreateReply() {
         .filter((interest) => interest.post_id === selectedPost.id)
         .map((interest) => interest.user_id)
     : []
-  const interestedHere = userId !== null && interestedIds.includes(userId)
-  const interestedNames = useNames(interestedIds)
 
   const threadReplies = selectedPost
     ? replies.filter((reply) => reply.post_id === selectedPost.id)
@@ -1001,6 +1081,23 @@ async function handleCreateReply() {
 
           {session && (
             <button
+              onClick={() => go(route.kind === 'notifications' ? '' : 'notifications')}
+              className="bell"
+              aria-label={unreadTotal > 0 ? `Notifications, ${unreadTotal} unread` : 'Notifications'}
+              aria-pressed={route.kind === 'notifications'}
+              title="Notifications"
+            >
+              🔔
+              {unreadTotal > 0 && (
+                <span className="bell-badge" title={`${unreadTotal} unread`}>
+                  {unreadTotal > 99 ? '99+' : unreadTotal}
+                </span>
+              )}
+            </button>
+          )}
+
+          {session && (
+            <button
               onClick={() => openMenu()}
               title="Your profile, pins and messages"
               className="row"
@@ -1008,23 +1105,6 @@ async function handleCreateReply() {
             >
               {avatar(userId, me?.display_name ?? null, 28)}
               {me?.display_name ?? session.user.email}
-              {unreadTotal > 0 && (
-                <span
-                  title={`${unreadTotal} unread`}
-                  style={{
-                    marginLeft: '6px',
-                    padding: '1px 7px',
-                    borderRadius: '999px',
-                    background: '#dc2626',
-                    color: 'white',
-                    fontSize: '12px',
-                    fontWeight: 700,
-                    display: 'inline-block',
-                  }}
-                >
-                  {unreadTotal}
-                </span>
-              )}
             </button>
           )}
 
@@ -1054,6 +1134,7 @@ async function handleCreateReply() {
               ['saved', 'Saved', '#f59e0b'],
               ['others', 'Neighbours', '#2563eb'],
               ['new', 'New activity', '#dc2626'],
+              ['past', 'Past', '#9ca3af'],
             ] as const
           ).map(([kind, label, color]) => (
             <button
@@ -1122,226 +1203,40 @@ async function handleCreateReply() {
       )}
       {/* Thread details */}
 {selectedPost && (
-  <aside className="menu" style={rightPanelStyle}>
-    <button
-      onClick={() => go('')}
-      aria-label="Close"
-      style={{
-        float: 'right',
-        border: 'none',
-        background: 'transparent',
-        fontSize: '24px',
-        lineHeight: 1,
-        cursor: 'pointer',
-        padding: 0,
-      }}
-    >
-      ×
-    </button>
+  <PostPanel
+    key={selectedPost.id}
+    post={selectedPost}
+    replies={threadReplies}
+    userId={userId}
+    saved={savedIds.includes(selectedPost.id)}
+    interestedIds={interestedIds}
+    onClose={() => go('')}
+    onOpenProfile={openProfile}
+    onMessage={(authorId) => openMenu(authorId)}
+    onToggleSave={() => toggleSave(selectedPost.id)}
+    onToggleInterest={() => toggleInterest(selectedPost.id)}
+    onCopyLink={copyLink}
+    onSignUp={() => setAuthMode('signup')}
+    onReply={(text) => createReply(selectedPost.id, text)}
+    onChanged={handlePostChanged}
+    onDeleted={handlePostDeleted}
+  />
+)}
 
-    {selectedPost.author_id ? (
-      <button
-        className="row"
-        onClick={() => openProfile(selectedPost.author_id!)}
-        style={{ width: 'auto', padding: '4px 10px 4px 4px', marginBottom: '12px' }}
-      >
-        {avatar(selectedPost.author_id, selectedPost.author_name, 36)}
-        <div className="row-main">
-          <div style={{ fontWeight: 600 }}>{selectedPost.author_name}</div>
-          <div className="row-meta">Posted {ago(selectedPost.created_at)}</div>
-        </div>
-      </button>
-    ) : (
-      <div className="row-meta" style={{ marginBottom: '12px' }}>
-        Posted {ago(selectedPost.created_at)}
-      </div>
-    )}
-
-    <h2 style={{ margin: '0 0 8px', fontSize: '24px', color: '#111' }}>
-      {selectedPost.title}
-    </h2>
-
-    <p
-      style={{
-        margin: '0 0 16px',
-        fontSize: '16px',
-        lineHeight: 1.5,
-        color: '#444',
-        whiteSpace: 'pre-wrap',
-      }}
-    >
-      {selectedPost.description}
-    </p>
-
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-      <button
-        className={interestedHere ? 'pill on-blue' : 'pill'}
-        aria-pressed={interestedHere}
-        onClick={() => toggleInterest(selectedPost.id)}
-        title={session ? undefined : 'Sign up to show interest'}
-      >
-        👍 Interested{interestedIds.length > 0 && ` · ${interestedIds.length}`}
-      </button>
-
-      {session && (
-        <button
-          className={savedIds.includes(selectedPost.id) ? 'pill on-gold' : 'pill'}
-          aria-pressed={savedIds.includes(selectedPost.id)}
-          onClick={() => toggleSave(selectedPost.id)}
-        >
-          {savedIds.includes(selectedPost.id) ? '★ Saved' : '☆ Save'}
-        </button>
-      )}
-
-      {session && selectedPost.author_id && selectedPost.author_id !== userId && (
-        <button className="pill" onClick={() => openMenu(selectedPost.author_id)}>
-          ✉️ Message
-        </button>
-      )}
-
-      <button className="pill" onClick={copyLink} title="Copy a link to this pin">
-        🔗 Copy link
-      </button>
-    </div>
-
-    {interestedIds.length > 0 && (
-      <div className="row-meta" style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ display: 'flex' }}>
-          {interestedIds.slice(0, 4).map((id, index) => (
-            <span key={id} style={{ marginLeft: index ? '-8px' : 0, borderRadius: '50%', boxShadow: '0 0 0 2px white' }}>
-              {avatar(id, interestedNames[id] ?? null, 22)}
-            </span>
-          ))}
-        </span>
-        <span>
-          {describeInterested(interestedIds.map((id) => (id === userId ? 'You' : (interestedNames[id] ?? '…'))))}
-        </span>
-      </div>
-    )}
-
-    <div className="section-title">
-      <span>
-        {threadReplies.length === 0
-          ? 'Replies'
-          : `${threadReplies.length} ${threadReplies.length === 1 ? 'reply' : 'replies'}`}
-      </span>
-    </div>
-
-    {threadReplies.length === 0 ? (
-      <p className="empty">No replies yet. Be the first.</p>
-    ) : (
-      threadReplies.map((reply) => (
-        <div key={reply.id} style={{ display: 'flex', gap: '10px', padding: '8px 0' }}>
-          {avatar(reply.author_id, reply.author_name, 30)}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="row-meta" style={{ marginTop: 0 }}>
-              {reply.author_id ? (
-                <button
-                  onClick={() => openProfile(reply.author_id!)}
-                  style={{
-                    ...linkButtonStyle,
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    color: '#222',
-                    textDecoration: 'none',
-                  }}
-                >
-                  {reply.author_name}
-                </button>
-              ) : (
-                <strong>Anonymous</strong>
-              )}
-              {' · '}
-              {ago(reply.created_at)}
-            </div>
-            <div
-              style={{
-                marginTop: '2px',
-                fontSize: '14px',
-                lineHeight: 1.45,
-                color: '#333',
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
-              }}
-            >
-              {reply.content}
-            </div>
-          </div>
-        </div>
-      ))
-    )}
-
-    <div
-      style={{
-        position: 'sticky',
-        bottom: '-24px',
-        margin: '16px -24px -24px',
-        padding: '12px 24px 24px',
-        background: 'white',
-        borderTop: '1px solid #eee',
-      }}
-    >
-      {session ? (
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
-          <textarea
-            value={replyText}
-            onChange={(event) => setReplyText(event.target.value)}
-            placeholder="Write a reply..."
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault()
-                handleCreateReply()
-              }
-            }}
-            title="Ctrl+Enter to send"
-            rows={2}
-            style={{
-              flex: 1,
-              boxSizing: 'border-box',
-              padding: '10px 14px',
-              border: '1px solid #ddd',
-              borderRadius: '16px',
-              fontSize: '14px',
-              fontFamily: 'inherit',
-              resize: 'none',
-            }}
-          />
-          <button
-            onClick={handleCreateReply}
-            disabled={!replyText.trim()}
-            style={{
-              padding: '10px 16px',
-              border: 'none',
-              borderRadius: '20px',
-              background: replyText.trim() ? '#111' : '#ccc',
-              color: 'white',
-              fontWeight: 600,
-              cursor: replyText.trim() ? 'pointer' : 'not-allowed',
-            }}
-          >
-            Reply
-          </button>
-        </div>
-      ) : (
-        <button
-          onClick={() => setAuthMode('signup')}
-          style={{
-            width: '100%',
-            border: '1px solid #ccc',
-            background: 'white',
-            color: '#222',
-            padding: '12px',
-            borderRadius: '10px',
-            fontSize: '15px',
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
-          Sign up to reply
-        </button>
-      )}
-    </div>
-  </aside>
+{route.kind === 'notifications' && userId && (
+  <NotificationCenter
+    userId={userId}
+    inbox={inbox}
+    desktop={{
+      permission: typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+      enabled: desktopAlerts,
+      onToggle: toggleDesktopAlerts,
+    }}
+    onOpenNotification={openNotification}
+    onChat={(otherId) => go(`chat/${otherId}`)}
+    onHoverPost={setHoveredPostId}
+    onClose={() => go('')}
+  />
 )}
 
       {/* Location selection message */}
@@ -1576,6 +1471,7 @@ async function handleCreateReply() {
                     go(otherId ? `chat/${otherId}` : `user/${userId}`),
                   onOpenNotification: openNotification,
                   onOpenProfile: openProfile,
+                  onSeeAllNotifications: () => go('notifications'),
                   onChangePassword: () => setAuthMode('new-password'),
                   onSignOut: handleSignOut,
                 }
@@ -1584,7 +1480,7 @@ async function handleCreateReply() {
           posts={posts}
           replies={replies}
           interests={interests}
-          savedIds={savedIds}
+          saved={savedRows}
           onOpenPost={openPostFromProfile}
           onHoverPost={setHoveredPostId}
           onFilter={applyFilter}

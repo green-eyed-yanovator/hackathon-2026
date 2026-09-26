@@ -6,11 +6,12 @@ import {
   useNames,
   type InboxApi,
 } from './inbox'
+import Activity from './Activity'
 import InlineEdit from './InlineEdit'
 import { supabase } from './lib/supabase'
 import Chat, { ConversationList } from './Messages'
-import type { Interest, MapFilter, NotificationRow, Post, Profile, Reply } from './types'
-import { ago, avatar, linkButtonStyle, primaryButtonStyle, rightPanelStyle } from './ui'
+import type { Interest, MapFilter, NotificationRow, Post, Profile, Reply, Saved } from './types'
+import { ago, avatar, linkButtonStyle, newestFirst, primaryButtonStyle, rightPanelStyle } from './ui'
 
 // Present only on the signed-in user's own profile.
 export type OwnMenu = {
@@ -20,6 +21,7 @@ export type OwnMenu = {
   onChat: (otherId: string | null) => void
   onOpenNotification: (notification: NotificationRow) => void
   onOpenProfile: (id: string) => void
+  onSeeAllNotifications: () => void
   onChangePassword: () => void
   onSignOut: () => void
 }
@@ -33,7 +35,8 @@ type Props = {
   posts: Post[]
   replies: Reply[]
   interests: Interest[]
-  savedIds: string[]
+  // The viewer's own saved pins.
+  saved: Saved[]
   onOpenPost: (post: Post) => void
   // Hovering a row lights up its pin on the map.
   onHoverPost: (postId: string | null) => void
@@ -62,7 +65,7 @@ export default function ProfilePanel({
   posts,
   replies,
   interests,
-  savedIds,
+  saved,
   onOpenPost,
   onHoverPost,
   onFilter,
@@ -71,6 +74,7 @@ export default function ProfilePanel({
   onClose,
 }: Props) {
   const [profile, setProfile] = useState<Profile | null>(seed)
+  const savedIds = saved.map((save) => save.post_id)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -129,7 +133,7 @@ export default function ProfilePanel({
         post.author_id === profileId ||
         (own && (savedIds.includes(post.id) || repliedIds.has(post.id))),
     )
-    .sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)))
+    .sort((a, b) => newestFirst(lastActivity(a), lastActivity(b)))
 
   async function saveField(patch: Partial<Pick<Profile, 'display_name' | 'neighbourhood' | 'bio'>>) {
     const { data, error } = await supabase
@@ -228,11 +232,7 @@ export default function ProfilePanel({
               postId: null,
               onClick: () => own.onChat(conversation.other),
             })),
-        ].sort((a, b) => b.time.localeCompare(a.time))
-      : []
-
-    const earlier = own
-      ? own.inbox.notifications.filter((notification) => notification.read_at).slice(-10).reverse()
+        ].sort((a, b) => newestFirst(a.time, b.time))
       : []
 
     return (
@@ -319,18 +319,12 @@ export default function ProfilePanel({
           <>
             <div className="section-title">
               <span>New for you{feed.length > 0 && ` · ${feed.length}`}</span>
-              {own.inbox.unreadNotifications > 0 && (
-                <button
-                  onClick={() =>
-                    own.inbox.markNotificationsRead(
-                      own.inbox.notifications.map((notification) => notification.id),
-                    )
-                  }
-                  style={{ ...linkButtonStyle, fontSize: '12px', textTransform: 'none', letterSpacing: 0 }}
-                >
-                  Mark all read
-                </button>
-              )}
+              <button
+                onClick={own.onSeeAllNotifications}
+                style={{ ...linkButtonStyle, fontSize: '12px', textTransform: 'none', letterSpacing: 0 }}
+              >
+                See all notifications →
+              </button>
             </div>
 
             {feed.length === 0 ? (
@@ -374,6 +368,7 @@ export default function ProfilePanel({
                     {own && post.author_id !== profileId && repliedIds.has(post.id) && (
                       <span className="chip replied">Replied</span>
                     )}
+                    {post.resolved_at && <span className="chip resolved">Resolved</span>}
                     {count === 0 ? 'No replies' : plural(count, 'reply', 'replies')}
                     {interested > 0 && ` · 👍 ${interested}`}
                   </div>
@@ -383,6 +378,19 @@ export default function ProfilePanel({
             )
           })
         )}
+
+        <div className="section-title">
+          <span>Activity</span>
+        </div>
+        <Activity
+          profileId={profileId}
+          posts={posts}
+          replies={replies}
+          interests={interests}
+          saved={own ? saved : null}
+          onOpenPost={onOpenPost}
+          onHoverPost={onHoverPost}
+        />
 
         {own && (
           <>
@@ -395,32 +403,6 @@ export default function ProfilePanel({
               names={names}
               onOpen={own.onChat}
             />
-
-            {earlier.length > 0 && (
-              <details>
-                <summary className="section-title">
-                  <span>Earlier notifications ▾</span>
-                </summary>
-                {earlier.map((notification) => {
-                  const { icon, text } = describeNotification(notification)
-
-                  return (
-                    <button
-                      key={notification.id}
-                      className="row"
-                      onClick={() => own.onOpenNotification(notification)}
-                      {...hoverProps(notification.post_id)}
-                    >
-                      <span className="row-icon">{icon}</span>
-                      <div className="row-main" style={{ color: '#555', lineHeight: 1.35 }}>
-                        <strong>{notification.actor_name ?? 'Someone'}</strong> {text}
-                      </div>
-                      <span className="row-time">{ago(notification.created_at)}</span>
-                    </button>
-                  )
-                })}
-              </details>
-            )}
 
             <div className="footer-links">
               <span className="row-meta" title={own.email}>
