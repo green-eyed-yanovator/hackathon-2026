@@ -104,6 +104,7 @@ const UI = {
   sounds: stored('aroundhere.sounds') !== 'off',
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
   banner: null as { title: string; sub: string } | null,
+  objective: null as { verb: string; place: string } | null, // "Go to the Street clean-up.", in the game styles
   follow: false, // the camera keeps you in the middle until you move the map
   sheetFull: false, // phones: the open sheet is pulled up to full height
   legend: false,
@@ -301,6 +302,17 @@ function celebrate(title: string, sub: string) {
     UI.banner = null
     changed()
   }, 2600)
+}
+
+// Setting off somewhere, the game styles say so the way their games do: a line of
+// subtitle at the bottom with the place picked out. Day and Night have the walk bar.
+let objectiveTimer = 0
+function objective(verb: string, place: string) {
+  if (shown() === 'day' || shown() === 'night') return
+  UI.objective = { verb, place }
+  changed()
+  window.clearTimeout(objectiveTimer)
+  objectiveTimer = window.setTimeout(() => ui({ objective: null }), 4000)
 }
 
 function failed(fallback: string) {
@@ -709,6 +721,7 @@ async function walkTo(to: string) {
   UI.walk = to
   UI.follow = false
   play('tick') // a waypoint set, in the style's own voice
+  if (there) objective('Go to', there.name)
   // Phones put the map first, so the way is what you see.
   if (narrow()) {
     UI.feed = false
@@ -3520,6 +3533,11 @@ export default function App() {
       </div>
       <WalkBar />
       <HoverCard cardRef={cardRef} />
+      {UI.objective && (
+        <div className="objective" key={UI.objective.place}>
+          {UI.objective.verb} <b>{UI.objective.place}</b>.
+        </div>
+      )}
       {UI.banner && (
         <div className="banner-big" role="status" key={UI.banner.title + UI.banner.sub}>
           <strong>{UI.banner.title}</strong>

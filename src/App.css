@@ -2490,6 +2490,42 @@ textarea::placeholder {
 
 /* The big-moment banner: every game style shouts in its own voice. */
 
+/* The game styles' mission line: white type with a hard shadow, the place in colour. */
+.objective {
+  position: absolute;
+  z-index: 60;
+  left: 50%;
+  bottom: 100px;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(680px, calc(100vw - 32px));
+  text-align: center;
+  font-family: var(--font-head);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #fff;
+  text-shadow: 0 2px 0 #000, 0 0 10px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+  animation: objective 4s ease both;
+}
+
+.objective b {
+  color: var(--objective);
+}
+
+@keyframes objective {
+  0% { opacity: 0; transform: translate(-50%, 6px); }
+  8%, 85% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; }
+}
+
+[data-theme='coast'] { --objective: #f5c542; }
+[data-theme='metro'] { --objective: #f0c850; }
+[data-theme='frontier'] { --objective: #e6c37a; }
+[data-theme='radar'] { --objective: #b4ffd2; }
+[data-theme='neon'] { --objective: #8af6ff; }
+
 .banner-big {
   position: absolute;
   z-index: 65;
@@ -3068,6 +3104,12 @@ textarea::placeholder {
   .hint-bar,
   .walk {
     top: calc(62px + env(safe-area-inset-top));
+  }
+
+  .objective {
+    bottom: 230px; /* above the radar, clear of the map buttons */
+    max-width: calc(100vw - 150px);
+    font-size: 18px;
   }
 
   .walk {
