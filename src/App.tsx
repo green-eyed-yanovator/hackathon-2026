@@ -371,7 +371,8 @@ function since(iso: string) {
 function meters(m: number) {
   if (m < 50) return 'here'
   if (m < 1000) return `${Math.round(m / 10) * 10} m`
-  return `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`
+  if (m < 10000) return `${(m / 1000).toFixed(1)} km`
+  return `${Math.round(m / 1000).toLocaleString()} km`
 }
 
 // "Today, 7:00 pm", "Tomorrow, 9:00 am", "Saturday, 9:00 am", or a date further out.
@@ -1119,6 +1120,22 @@ function Feed() {
         )}
 
         <GettingStarted />
+
+        {/* Somewhere with nothing yet: say so, and point at where things are. */}
+        {S.ready && UI.tab === 'around' && rows.length > 0 && rows[0].away > 5000 && (
+          <div className="welcome quiet">
+            <strong>Nothing pinned within {meters(rows[0].away)} of here yet</strong>
+            <p>Be the first on your street, or have a look at where people are already busy.</p>
+            <div className="btn-row">
+              <button className="btn primary" onClick={startCompose}>
+                Pin something here
+              </button>
+              <button className="btn" onClick={() => reveal(rows[0].post.latitude, rows[0].post.longitude, 15, true)}>
+                Go to the nearest
+              </button>
+            </div>
+          </div>
+        )}
 
         {S.offline ? (
           <Empty icon="map">Can't reach AroundHere right now. Trying again…</Empty>
