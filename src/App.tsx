@@ -94,7 +94,7 @@ const UI = {
   toast: '',
   auth: null as AuthMode | null,
   palette: false,
-  hover: null as string | null, // marker id under the mouse or under a hovered list row
+  hover: null as string | null, // marker id under the mouse, for the hover card
   tab: 'around' as Tab,
   flair: null as Flair | null,
   feed: !narrow(),
@@ -388,10 +388,11 @@ function meters(m: number) {
   return `${Math.round(m / 1000).toLocaleString()} km`
 }
 
+const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+
 // "Today, 7:00 pm", "Tomorrow, 9:00 am", "Saturday, 9:00 am", or a date further out.
 function whenText(iso: string) {
   const d = new Date(iso)
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
   const days = Math.round((startOfDay(d) - startOfDay(new Date())) / 86400000)
   const day =
     days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days === -1 ? 'Yesterday'
@@ -438,12 +439,14 @@ function hue(id: string) {
 
 const firstName = (id: string) => nameOf(id).split(' ')[0]
 
+// Who wrote a pin or a reply; pins from before accounts have no one.
+const authorName = (row: { author_id: string | null; author_name: string | null }) => (row.author_id ? nameOf(row.author_id, row.author_name) : 'Anonymous')
+
 function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?'
 }
 
 function dayLabel(iso: string) {
-  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
   const days = Math.round((startOfDay(new Date()) - startOfDay(new Date(iso))) / 86400000)
   if (days <= 0) return 'Today'
   if (days === 1) return 'Yesterday'
@@ -855,7 +858,6 @@ function Panel({ title, icon, onBack, children, foot, className = '' }: PanelPro
   )
 }
 
-// Text with its web addresses turned into links.
 // Text with its web addresses turned into links. A link to one of our own pins
 // becomes a little card for it that opens here, rather than a bare address.
 function Linked({ text }: { text: string }) {
@@ -1046,6 +1048,20 @@ const TABS: [Tab, string][] = [
   ['past', 'Past'],
 ]
 
+// What each tab says when it has nothing, and how it's sorted.
+const EMPTY_TAB: Record<Tab, string> = {
+  around: 'No pins here yet. Be the first: press N or tap +.',
+  latest: 'No pins here yet. Be the first: press N or tap +.',
+  soon: 'Nothing planned this week. Give a pin a time and it shows up here.',
+  friends: 'Nothing from friends yet. Add people from their profiles.',
+  mine: 'Pins you post, save, reply to or join show up here.',
+  past: 'Nothing here yet: resolved pins, and ones quiet for a month, end up in Past.',
+}
+const TAB_ORDER: Record<Tab, string> = {
+  around: 'nearest first', latest: 'latest activity first', soon: 'soonest first',
+  friends: 'latest activity first', mine: 'latest activity first', past: 'latest activity first',
+}
+
 function PostRow({ post, away, active }: { post: Post; away: number; active: number }) {
   const st = stats()
   const replies = st.replies.get(post.id) ?? 0
@@ -1080,7 +1096,7 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
         </div>
         {post.description && <div className="clip muted">{post.description}</div>}
         <div className="row-meta">
-          <span className="clip">{post.author_id ? nameOf(post.author_id, post.author_name) : 'Anonymous'}</span>
+          <span className="clip">{authorName(post)}</span>
           {replies > 0 && (
             <span>
               <Icon name="chat" size={12} /> {replies}
@@ -1224,17 +1240,7 @@ function Feed() {
         ) : !S.ready ? (
           <div className="skeleton">{[0, 1, 2, 3].map((i) => <div key={i} />)}</div>
         ) : rows.length === 0 ? (
-          <Empty icon="pin">
-            {UI.tab === 'friends'
-              ? 'Nothing from friends yet. Add people from their profiles.'
-              : UI.tab === 'mine'
-                ? 'Pins you post, save, reply to or join show up here.'
-                : UI.tab === 'past'
-                  ? 'Nothing here yet: resolved pins, and ones quiet for a month, end up in Past.'
-                  : UI.tab === 'soon'
-                    ? 'Nothing planned this week. Give a pin a time and it shows up here.'
-                    : 'No pins here yet. Be the first: press N or tap +.'}
-          </Empty>
+          <Empty icon="pin">{EMPTY_TAB[UI.tab]}</Empty>
         ) : (
           rows.map(({ post, away, active }, i) => {
             // In Latest, a line where the new stuff since your last visit ends.
@@ -1249,8 +1255,7 @@ function Feed() {
         )}
       </div>
       <footer className="feed-foot muted small">
-        {plural(rows.length, 'pin')}
-        {UI.tab === 'around' ? ' · nearest first' : UI.tab === 'soon' ? ' · soonest first' : ' · latest activity first'}
+        {plural(rows.length, 'pin')} · {TAB_ORDER[UI.tab]}
       </footer>
     </aside>
   )
@@ -1372,7 +1377,7 @@ function PostView({ post }: { post: Post }) {
         <button className="person" onClick={() => post.author_id && go(`user/${post.author_id}`)} disabled={!post.author_id}>
           <Avatar id={post.author_id} size={38} dot />
           <div>
-            <strong>{post.author_id ? nameOf(post.author_id, post.author_name) : 'Anonymous'}</strong>
+            <strong>{authorName(post)}</strong>
             <div className="muted small">
               {ago(post.created_at)}
               {street && ` · ${street}`}
@@ -1600,7 +1605,7 @@ function PostView({ post }: { post: Post }) {
               <div>
                 <div className="small">
                   <button className="plain name" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
-                    {r.author_id ? nameOf(r.author_id, r.author_name) : 'Anonymous'}
+                    {authorName(r)}
                   </button>
                   {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
                   <span className="muted"> · {ago(r.created_at)}</span>
@@ -3156,17 +3161,17 @@ function onKey(e: KeyboardEvent) {
 function WalkBar() {
   const target = walkTarget()
   if (!target || UI.route.kind === 'new') return null
-  const route = map?.route
-  const minutes = route?.points.length ? Math.max(1, Math.round(route.meters / 80)) : 0 // 80 m a minute
+  const way = map?.route
+  const minutes = way?.points.length ? Math.max(1, Math.round(way.meters / 80)) : 0 // 80 m a minute
 
   let status = 'Finding you…'
-  if (!route) {
+  if (!way) {
     if (noFix && !S.here) status = "Can't see where you are; your maps app can help"
   } else if (minutes) {
-    const length = route.meters < 1000 ? `${Math.round(route.meters / 10) * 10} m` : `${(route.meters / 1000).toFixed(1)} km`
-    status = `${minutes} min walk · ${length}${route.via ? ` · via ${route.via}` : ''}`
-  } else if (route.state === 'waiting') status = 'Working out the way…'
-  else if (route.state === 'far') status = 'Too far to walk from here'
+    const length = way.meters < 1000 ? `${Math.round(way.meters / 10) * 10} m` : `${(way.meters / 1000).toFixed(1)} km`
+    status = `${minutes} min walk · ${length}${way.via ? ` · via ${way.via}` : ''}`
+  } else if (way.state === 'waiting') status = 'Working out the way…'
+  else if (way.state === 'far') status = 'Too far to walk from here'
   else status = "Can't find a way there on foot"
   return (
     <div className="walk" role="status">
@@ -3317,7 +3322,7 @@ export default function App() {
   useEffect(() => {
     if (!map) return
     map.draftMode = UI.route.kind === 'new'
-    // "Sun" turns to Night at dusk by itself (the clock redraws every minute).
+    // "Sun" turns to Night at dusk by itself (the clock redraws every 30 s).
     if (map.themeName !== shown()) {
       setTheme(map, shown())
       paintChrome(shown())
@@ -3450,7 +3455,7 @@ export default function App() {
           <span>Inbox</span>
           {unread > 0 && <b className="badge">{unread}</b>}
         </button>
-        <button className={route.kind === 'user' && route.id === me ? 'on' : route.kind === 'friends' ? 'on' : ''} onClick={() => (me ? go(`user/${me}`) : needAccount('signin'))}>
+        <button className={(route.kind === 'user' && route.id === me) || route.kind === 'friends' ? 'on' : ''} onClick={() => (me ? go(`user/${me}`) : needAccount('signin'))}>
           <Icon name="user" />
           <span>{me ? 'Me' : 'Sign in'}</span>
           {incomingRequests > 0 && <b className="badge">{incomingRequests}</b>}

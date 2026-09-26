@@ -413,7 +413,7 @@ async function loadPrivate(userId: string, attempt = 0) {
   for (const p of (presence.data ?? []) as Presence[]) rememberPresence(p)
   checkIn()
   S.locations = new Map((locations.data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
-  const remembered = remembersSharing()
+  const remembered = recallSharing()
   S.sharing = remembered.on
   S.sharingUntil = remembered.until
   changed()
@@ -780,19 +780,17 @@ export async function deleteReply(id: string) {
 
 async function flipInterest(postId: string) {
   const userId = S.userId!
-  const mine = (i: Interest) => i.post_id === postId && i.user_id === userId
-  const was = S.interests.some(mine)
+  const mine = { user_id: userId, post_id: postId, created_at: new Date().toISOString() }
+  const was = S.interests.some((i) => sameInterest(i, mine))
   // Show it straight away; undo if the database says no.
-  if (was) S.interests = S.interests.filter((i) => !mine(i))
-  else S.interests.push({ user_id: userId, post_id: postId, created_at: new Date().toISOString() })
+  S.interests = was ? S.interests.filter((i) => !sameInterest(i, mine)) : [...S.interests, mine]
   changed()
-
   const { error } = was
     ? await supabase.from('post_interest').delete().eq('post_id', postId).eq('user_id', userId)
     : await supabase.from('post_interest').insert({ post_id: postId })
-  if (error) {
-    if (was) S.interests.push({ user_id: userId, post_id: postId, created_at: new Date().toISOString() })
-    else S.interests = S.interests.filter((i) => !mine(i))
+  // In already (on another device, say): that's the state we wanted.
+  if (error && error.code !== '23505') {
+    S.interests = was ? [...S.interests, mine] : S.interests.filter((i) => !sameInterest(i, mine))
     changed()
     return fail("Couldn't update", error)
   }
@@ -878,7 +876,7 @@ export async function deleteAccount() {
   return true
 }
 
-// One change at a time per person, like the toggles below.
+// One change at a time per person, like the toggles above.
 export const requestFriend = (id: string) => once(`friend/${id}`, () => sendRequest(id))
 export const acceptFriend = (id: string) => once(`friend/${id}`, () => acceptRequest(id))
 export const removeFriend = (id: string) => once(`friend/${id}`, () => endFriendship(id))
@@ -1128,12 +1126,12 @@ export async function enableCompass() {
   window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onTurn as EventListener)
 }
 
-// Sharing is a choice remembered on this device. The row friends read exists
-// only while the app is open and in view, so nobody sees a "here" from hours ago.
+// Sharing is a choice remembered on this device. The row friends read is only
+// shared while the app is open and in view, so nobody sees a "here" from hours ago.
 const sharingKey = () => `aroundhere.sharing.${S.userId}`
 
 // Stored as 'on', or as the time a "for an hour" share ends.
-function remembersSharing() {
+function recallSharing() {
   try {
     const value = localStorage.getItem(sharingKey())
     if (value === 'on') return { on: true, until: null, expired: false }
