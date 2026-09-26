@@ -861,7 +861,9 @@ export function flyTo(m: MapState, lng: number, lat: number, zoom = m.zoom, offs
   const distance = Math.hypot(x1 - m.x, y1 - m.y) * worldSize(m)
   // Far jumps zoom out on the way, so you see where you're going.
   const bump = distance > m.width * 1.5 ? Math.min(Math.log2(distance / m.width) + 0.5, 6) : 0
-  m.fly = { x0: m.x, y0: m.y, z0: m.zoom, x1, y1, z1, start: performance.now(), duration: bump ? 1100 : 550, bump }
+  // People who asked for less motion get there straight away.
+  const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  m.fly = { x0: m.x, y0: m.y, z0: m.zoom, x1, y1, z1, start: performance.now(), duration: still ? 1 : bump ? 1100 : 550, bump: still ? 0 : bump }
   m.zoomTarget = null
   m.vx = m.vy = 0
   requestFrame(m)

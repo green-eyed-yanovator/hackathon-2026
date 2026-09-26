@@ -2366,6 +2366,29 @@ textarea::placeholder {
   background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px), radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.75));
 }
 
+[data-theme='radar'] .fx {
+  animation: flicker 7s infinite steps(1);
+}
+
+@keyframes flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  47% {
+    opacity: 0.86;
+  }
+  48% {
+    opacity: 1;
+  }
+  83% {
+    opacity: 0.93;
+  }
+  84% {
+    opacity: 1;
+  }
+}
+
 [data-theme='radar'] .fx::before {
   /* The sweep. */
   content: '';
