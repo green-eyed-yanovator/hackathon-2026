@@ -43,6 +43,7 @@ export type Profile = {
   display_name: string
   neighbourhood: string | null
   bio: string | null
+  avatar_url: string | null
   created_at: string
 }
 
@@ -549,7 +550,7 @@ export async function toggleSave(postId: string) {
 // People.
 //
 
-export async function saveProfile(patch: Partial<Pick<Profile, 'display_name' | 'neighbourhood' | 'bio'>>) {
+export async function saveProfile(patch: Partial<Pick<Profile, 'display_name' | 'neighbourhood' | 'bio' | 'avatar_url'>>) {
   const { data, error } = await supabase.from('profiles').update(patch).eq('id', S.userId!).select().single()
   if (error) return fail("Couldn't save your profile", error)
   const profile = data as Profile
@@ -559,6 +560,24 @@ export async function saveProfile(patch: Partial<Pick<Profile, 'display_name' | 
   for (const r of S.replies) if (r.author_id === profile.id) r.author_name = profile.display_name
   changed()
   return true
+}
+
+// Crops the middle square of a photo, shrinks it to 256 px and uploads it as a JPEG.
+export async function uploadAvatar(file: File) {
+  const bitmap = await createImageBitmap(file).catch(() => null)
+  if (!bitmap) return fail("That file isn't a photo we can read", null)
+  const size = 256
+  const side = Math.min(bitmap.width, bitmap.height)
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  canvas.getContext('2d')!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size)
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+  if (!blob) return fail("Couldn't read that photo", null)
+
+  const path = `${S.userId}/${crypto.randomUUID()}.jpg`
+  const { error } = await supabase.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg' })
+  if (error) return fail("Couldn't upload the photo", error)
+  return saveProfile({ avatar_url: supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl })
 }
 
 export async function requestFriend(id: string) {

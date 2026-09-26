@@ -851,6 +851,39 @@ button.row:hover,
   border-radius: 2px;
 }
 
+.avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.photo-pick {
+  position: relative;
+  cursor: pointer;
+  flex: none;
+}
+
+.photo-pick input {
+  display: none;
+}
+
+.photo-pick > span:last-of-type {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 0 0 2px var(--bg-solid);
+}
+
 .avatar .online {
   position: absolute;
   right: -1px;
@@ -2561,4 +2594,8 @@ textarea::placeholder {
   .composer textarea {
     font-size: 16px; /* Stops iOS zooming into fields. */
   }
+}
+
+[data-theme='radar'] .avatar img {
+  filter: grayscale(1) sepia(1) hue-rotate(80deg) saturate(3) brightness(0.9);
 }

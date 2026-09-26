@@ -649,6 +649,7 @@ export type Marker = {
   name: string // shown under people
   accuracy: number // metres, for 'me'
   heading: number | null
+  image: string | null // a person's photo
 }
 
 type SourceEntry = { state: 'loading' | 'ready' | 'error'; tile: SourceTile | null; used: number }
@@ -702,6 +703,7 @@ export type MapState = {
   rasters: Map<string, Raster>
   sprites: Map<string, Sprite>
   textures: Map<string, CanvasPattern>
+  images: Map<string, HTMLImageElement>
   frameCount: number
   frameRequested: boolean
   destroyed: boolean
@@ -745,7 +747,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(),
+    fade: null, tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
   }
@@ -1867,7 +1869,26 @@ function cluster(m: MapState) {
   return out
 }
 
-function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean) {
+// A person's photo, loaded once; null until it has arrived.
+function photo(m: MapState, url: string) {
+  let img = m.images.get(url)
+  if (!img) {
+    img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => requestFrame(m)
+    img.src = url
+    m.images.set(url, img)
+  }
+  return img.complete && img.naturalWidth > 0 ? img : null
+}
+
+// Photos take on the map's look: sepia ink, green phosphor.
+const PHOTO_FILTER: Partial<Record<BlipStyle, string>> = {
+  stamp: 'sepia(0.8) contrast(0.95)',
+  ring: 'grayscale(1) sepia(1) hue-rotate(80deg) saturate(3) brightness(0.9)',
+}
+
+function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean, img: HTMLImageElement | null) {
   const r = hover ? 17 : 15
   c.save()
   if (marker.flags & MARK_STALE) c.globalAlpha = 0.5
@@ -1884,11 +1905,19 @@ function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx
   else c.arc(sx, sy, r - 2.5, 0, Math.PI * 2)
   c.fillStyle = t.blip === 'ring' ? '#0b3a22' : marker.color
   c.fill()
-  c.fillStyle = t.blip === 'ring' ? t.blipInk : '#fff'
-  c.font = `700 ${Math.round(r * 0.75)}px ${sans}`
   c.textAlign = 'center'
   c.textBaseline = 'middle'
-  c.fillText(marker.text, sx, sy + 0.5)
+  if (img) {
+    c.save()
+    c.clip()
+    c.filter = PHOTO_FILTER[t.blip] ?? 'none'
+    c.drawImage(img, sx - r + 2.5, sy - r + 2.5, 2 * r - 5, 2 * r - 5)
+    c.restore()
+  } else {
+    c.fillStyle = t.blip === 'ring' ? t.blipInk : '#fff'
+    c.font = `700 ${Math.round(r * 0.75)}px ${sans}`
+    c.fillText(marker.text, sx, sy + 0.5)
+  }
 
   // Name tag under the avatar.
   c.font = `600 11px ${t.font}`
@@ -2198,7 +2227,7 @@ function frame(m: MapState, time: number) {
     } else if (marker.kind === 'cluster') {
       drawCluster(c, t, marker, p.x, p.y, hover)
     } else if (marker.kind === 'person') {
-      drawPerson(c, t, marker, p.x, p.y, hover)
+      drawPerson(c, t, marker, p.x, p.y, hover, marker.image ? photo(m, marker.image) : null)
     } else if (marker.kind === 'me') {
       drawMe(c, t, marker, p.x, p.y, metersPerPixel, time)
       animated = true

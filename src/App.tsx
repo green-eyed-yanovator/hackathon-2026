@@ -8,7 +8,7 @@ import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, toggleInterest, toggleSave, saveProfile,
-  requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
+  uploadAvatar, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
   type Flair, type Post, type Revision, type Notification,
 } from './data'
@@ -288,7 +288,7 @@ function buildMarkers(posts: Post[]): Marker[] {
     if ((route.kind === 'pin' && list.some((p) => p.id === route.id)) || (route.kind === 'place' && route.id === key)) flags |= MARK_SELECTED
     markers.push({
       id: key, kind: 'pin', x: lngToX(newest.longitude), y: latToY(newest.latitude), icon: f.icon, color: f.color,
-      count: list.length, flags, text: '', name: newest.title, accuracy: 0, heading: null,
+      count: list.length, flags, text: '', name: newest.title, accuracy: 0, heading: null, image: null,
     })
   }
 
@@ -300,21 +300,21 @@ function buildMarkers(posts: Post[]): Marker[] {
       color: `hsl(${hue(userId)} 55% 45%)`, count: 0,
       flags: (Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0) | (S.online.has(userId) ? MARK_ONLINE : 0),
       text: initials(name), name: name.split(' ')[0],
-      accuracy: loc.accuracy ?? 0, heading: loc.heading,
+      accuracy: loc.accuracy ?? 0, heading: loc.heading, image: S.profiles.get(userId)?.avatar_url ?? null,
     })
   }
 
   if (S.here) {
     markers.push({
       id: 'me', kind: 'me', x: lngToX(S.here.longitude), y: latToY(S.here.latitude), icon: 'user', color: '', count: 0,
-      flags: 0, text: '', name: 'You', accuracy: S.here.accuracy, heading: S.here.heading,
+      flags: 0, text: '', name: 'You', accuracy: S.here.accuracy, heading: S.here.heading, image: null,
     })
   }
 
   if (UI.route.kind === 'new' && UI.draft) {
     markers.push({
       id: 'draft', kind: 'draft', x: lngToX(UI.draft.longitude), y: latToY(UI.draft.latitude), icon: 'pin', color: '',
-      count: 0, flags: 0, text: '', name: '', accuracy: 0, heading: null,
+      count: 0, flags: 0, text: '', name: '', accuracy: 0, heading: null, image: null,
     })
   }
 
@@ -419,9 +419,10 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 
 function Avatar({ id, size = 32, dot = false }: { id: string | null; size?: number; dot?: boolean }) {
   const name = nameOf(id)
+  const photo = id ? S.profiles.get(id)?.avatar_url : null
   return (
     <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, background: id ? `hsl(${hue(id)} 52% 44%)` : '#8a8f98' }}>
-      {id ? initials(name) : '?'}
+      {photo ? <img src={photo} alt="" /> : id ? initials(name) : '?'}
       {dot && id && S.online.has(id) && <i className="online" />}
     </span>
   )
@@ -1098,7 +1099,24 @@ function ProfileView({ id }: { id: string }) {
   return (
     <Panel title={own ? 'You' : 'Profile'} icon={<Icon name="user" />} className="tall">
       <div className="profile-card">
-        <Avatar id={id} size={64} dot />
+        {own ? (
+          <label className="photo-pick" title="Change your photo">
+            <Avatar id={id} size={64} />
+            <span>
+              <Icon name="image" size={14} />
+            </span>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) uploadAvatar(file).then((ok) => (ok ? toast('Photo updated') : failed("Couldn't update your photo")))
+              }}
+            />
+          </label>
+        ) : (
+          <Avatar id={id} size={64} dot />
+        )}
         <div>
           <h1>{profile.display_name}</h1>
           <div className="muted small">
