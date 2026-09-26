@@ -44,7 +44,8 @@ Already have a local database you want to keep? Apply new migrations with
 docker exec -i supabase_db_hackathon-2026 psql -U postgres < supabase/seed.sql
 ```
 
-Demo accounts (password `neighbour`): `maya@aroundhere.demo`,
+In development the sign-in sheet has one-tap buttons for these (never in a
+production build). Demo accounts (password `neighbour`): `maya@aroundhere.demo`,
 `tom@aroundhere.demo`, `priya@aroundhere.demo`, `lucas@aroundhere.demo`,
 `hannah@aroundhere.demo`, `ben@aroundhere.demo`. Maya has friends on the map,
 a friend request waiting and unread messages.

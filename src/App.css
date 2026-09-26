@@ -2560,6 +2560,21 @@ textarea::placeholder {
   font-size: 13px;
 }
 
+.demo-people {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line2);
+}
+
+.demo-people .chip-person {
+  padding: 4px 12px;
+}
+
 .or {
   display: flex;
   align-items: center;

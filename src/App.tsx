@@ -2698,6 +2698,27 @@ function AuthView() {
           )}
         </div>
 
+        {/* Local development only: the seeded neighbours, one tap each (see supabase/seed.sql). */}
+        {import.meta.env.DEV && mode === 'signin' && (
+          <div className="demo-people">
+            <span className="muted small">Demo neighbours</span>
+            {['maya', 'tom', 'priya', 'ben'].map((who) => (
+              <button
+                key={who}
+                type="button"
+                className="chip-person"
+                onClick={async () => {
+                  const { error } = await supabase.auth.signInWithPassword({ email: `${who}@aroundhere.demo`, password: 'neighbour' })
+                  if (error) setMessage("The demo neighbourhood isn't loaded here (see the README).")
+                  else close()
+                }}
+              >
+                {who[0].toUpperCase() + who.slice(1)}
+              </button>
+            ))}
+          </div>
+        )}
+
         {social.length > 0 && (mode === 'signin' || mode === 'signup') && (
           <div className="stack">
             <div className="or">or</div>
