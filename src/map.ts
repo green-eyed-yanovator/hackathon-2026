@@ -125,7 +125,7 @@ export type MapTheme = {
   land: string
   texture: 'none' | 'parchment' | 'grain'
   water: string
-  waterShore: string | null // old-map concentric lines around coasts
+  waterShore: string | null // lines along coasts: ink rings in Frontier, a glow in the dark styles
   waterHatch: string | null
   wood: string
   woodMarks: string | null // little tree marks on forests
