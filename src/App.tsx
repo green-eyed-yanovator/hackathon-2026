@@ -2992,24 +2992,25 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
         .map((p) => ({ key: p.id, icon: <Avatar id={p.id} size={22} />, label: p.display_name, hint: p.neighbourhood ?? undefined, run: () => go(`user/${p.id}`) }))
     : []
 
-  // "walk rundle": places match what comes after, and the way there comes first.
+  // Places the tiles know by that name. "walk rundle" makes each one a way there.
   const walking = /^(walk( to)?|go to|get to)\s+/i.exec(q)
   const found = q && map ? findPlaces(map, walking ? q.slice(walking[0].length) : q) : []
   const places = found.map((p) => ({
     key: `place:${p.kind}:${p.name}`, icon: <Icon name={p.kind === 'Street' ? 'map' : 'pin'} />, label: p.name, hint: p.kind,
     run: () => reveal(p.lat, p.lng, p.kind === 'Area' ? 15 : 17, true),
   }))
-  const way = found[0] ? [{
-    key: 'walk-place', icon: <Icon name="arrow" />, label: `Walk to ${found[0].name}`,
-    run: () => walkTo(`spot/${found[0].lat.toFixed(6)},${found[0].lng.toFixed(6)}/${found[0].name}`),
-  }] : []
+  const ways = (walking ? found : found.slice(0, 1)).map((p) => ({
+    key: `walk:${p.kind}:${p.name}`, icon: <Icon name="arrow" />, label: `Walk to ${p.name}`, hint: walking ? p.kind : undefined,
+    run: () => walkTo(`spot/${p.lat.toFixed(6)},${p.lng.toFixed(6)}/${p.name}`),
+  }))
 
+  // Pins still match the whole query ("walk to school" may be a pin's title).
   return [
-    { group: 'Get there', items: walking ? way : [] },
-    { group: q ? 'Pins' : 'Recent pins', items: walking ? [] : pins },
+    { group: 'Get there', items: walking ? ways : [] },
+    { group: q ? 'Pins' : 'Recent pins', items: pins },
     { group: 'People', items: people },
-    { group: 'On the map', items: places },
-    { group: 'Get there', items: walking ? [] : way },
+    { group: 'On the map', items: walking ? [] : places },
+    { group: 'Get there', items: walking ? [] : ways },
     { group: 'Commands', items: shownCommands },
   ].filter((g) => g.items.length)
 }
