@@ -15,7 +15,8 @@ begin
 
   perform public.notify(person.id, 'mention', new.author_id, post, new.content)
   from public.profiles person
-  where position(lower('@' || person.display_name) in lower(new.content)) > 0
+  -- "@Name" followed by anything but a letter or digit, so @Ben isn't @Benjamin.
+  where lower(new.content) ~ ('@' || regexp_replace(lower(person.display_name), '([.^$*+?()\[\]{}|\\])', '\\\1', 'g') || '([^[:alnum:]]|$)')
     and person.id is distinct from post.author_id -- the author already hears about every reply
     and not exists (select 1 from public.replies r where r.post_id = post.id and r.author_id = person.id and r.id <> new.id)
     and not exists (select 1 from public.saved_posts s where s.post_id = post.id and s.user_id = person.id);
