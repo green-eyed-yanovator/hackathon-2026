@@ -8,7 +8,7 @@ import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, isOnline, locationOf, conversations, readable, unreadMessages, visibleNotifications, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleLike, report, toggleInterest, toggleSave, saveProfile,
-  uploadAvatar, changeEmail, deleteAccount, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
+  uploadAvatar, changeEmail, deleteAccount, checkOut, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
   type Flair, type Post, type Revision, type Notification,
 } from './data'
@@ -1822,6 +1822,7 @@ function Activity({ id }: { id: string }) {
 
 async function signOut() {
   if (S.sharing) await setSharing(false)
+  await checkOut()
   await supabase.auth.signOut()
   UI.tab = 'around'
   go('')

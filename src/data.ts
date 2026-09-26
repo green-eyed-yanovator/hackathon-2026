@@ -104,7 +104,7 @@ export const S = {
   friendships: [] as Friendship[],
   blocked: new Set<string>(), // people I've blocked: their pins, replies and messages stay out of sight
   locations: new Map<string, Location>(),
-  online: new Set<string>(),
+  seen: new Map<string, number>(), // friends' last sign of life, from the presence table
 
   here: null as Here | null,
   sharing: false,
@@ -215,9 +215,10 @@ export function visibleNotifications() {
   return S.notifications.filter((n) => !(n.actor_id && S.blocked.has(n.actor_id)))
 }
 
-// Online dots are for friends only; strangers don't learn when you're around.
+// Online dots come from the presence table, which only friends can read.
 export function isOnline(id: string) {
-  return S.online.has(id) && (id === S.userId || friendIds().includes(id))
+  if (id === S.userId) return document.visibilityState === 'visible'
+  return Date.now() - (S.seen.get(id) ?? 0) < 150000 // they check in every minute
 }
 
 // A friend's shared position, unless it's too old to mean anything.
@@ -332,7 +333,6 @@ function subscribePublic() {
 
 type Channel = ReturnType<typeof supabase.channel>
 let privateChannel: Channel | null = null
-let presenceChannel: Channel | null = null
 
 // Something arrived for the signed-in user; the UI may raise a desktop alert.
 export let onIncoming: (title: string, body: string, route: string) => void = () => {}
@@ -341,7 +341,7 @@ export function setIncomingHandler(handler: typeof onIncoming) {
 }
 
 async function loadPrivate(userId: string) {
-  const [saved, notifications, messages, settings, friendships, locations, blocks] = await Promise.all([
+  const [saved, notifications, messages, settings, friendships, locations, blocks, presence] = await Promise.all([
     supabase.from('saved_posts').select('post_id, created_at'),
     supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(60),
     supabase.from('messages').select('*').order('created_at', { ascending: false }).limit(1000),
@@ -349,6 +349,7 @@ async function loadPrivate(userId: string) {
     supabase.from('friendships').select('*'),
     supabase.from('locations').select('*'),
     supabase.from('blocks').select('blocked'),
+    supabase.from('presence').select('user_id, seen_at'),
   ])
   if (S.userId !== userId) return
 
@@ -363,6 +364,8 @@ async function loadPrivate(userId: string) {
   S.mutedKinds = settings.data?.muted_kinds ?? []
   S.friendships = friendships.data ?? []
   S.blocked = new Set((blocks.data ?? []).map((b: { blocked: string }) => b.blocked))
+  S.seen = new Map((presence.data ?? []).map((p: { user_id: string; seen_at: string }) => [p.user_id, time(p.seen_at)]))
+  checkIn()
   S.locations = new Map((locations.data ?? []).map((l: Location) => [l.user_id, l]))
   const remembered = remembersSharing()
   S.sharing = remembered.on
@@ -421,6 +424,17 @@ function subscribePrivate(userId: string) {
       }
       changed()
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'presence' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        // Deletes carry only the key; it's a friend's if we knew them.
+        const id = (payload.old as { user_id: string }).user_id
+        if (!S.seen.delete(id)) return
+      } else {
+        const row = payload.new as { user_id: string; seen_at: string }
+        S.seen.set(row.user_id, time(row.seen_at))
+      }
+      changed()
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'locations' }, (payload) => {
       if (payload.eventType === 'DELETE') S.locations.delete((payload.old as Location).user_id)
       else S.locations.set((payload.new as Location).user_id, payload.new as Location)
@@ -428,16 +442,29 @@ function subscribePrivate(userId: string) {
     })
     .subscribe()
 
-  // Who's got the app open right now.
-  presenceChannel = supabase.channel('online', { config: { presence: { key: userId } } })
-  presenceChannel
-    .on('presence', { event: 'sync' }, () => {
-      S.online = new Set(Object.keys(presenceChannel!.presenceState()))
-      changed()
-    })
-    .subscribe((status) => {
-      if (status === 'SUBSCRIBED') presenceChannel!.track({ at: new Date().toISOString() })
-    })
+}
+
+// Saying "I'm here" to friends: a presence row, refreshed every minute while
+// the app is in view, and removed as it goes out of view.
+function checkIn() {
+  if (!S.userId || document.visibilityState !== 'visible') return
+  supabase.from('presence').upsert({ seen_at: new Date().toISOString() }, { onConflict: 'user_id' }).then(({ error }) => {
+    if (error) console.error('Presence', error)
+  })
+}
+
+// Signing out: off friends' lists straight away.
+export async function checkOut() {
+  if (S.userId) await supabase.from('presence').delete().eq('user_id', S.userId)
+}
+
+function checkOutNow() {
+  if (!S.userId || !S.session) return
+  fetch(`${supabaseUrl}/rest/v1/presence?user_id=eq.${S.userId}`, {
+    method: 'DELETE',
+    keepalive: true,
+    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}` },
+  }).catch(() => {})
 }
 
 async function refreshLocations() {
@@ -448,8 +475,7 @@ async function refreshLocations() {
 
 function resetPrivate() {
   if (privateChannel) supabase.removeChannel(privateChannel)
-  if (presenceChannel) supabase.removeChannel(presenceChannel)
-  privateChannel = presenceChannel = null
+  privateChannel = null
   S.saved = []
   S.notifications = []
   S.messages = []
@@ -457,7 +483,7 @@ function resetPrivate() {
   S.friendships = []
   S.blocked = new Set()
   S.locations = new Map()
-  S.online = new Set()
+  S.seen = new Map()
   S.sharing = false
   S.sharingUntil = null
 }
@@ -478,8 +504,10 @@ export function start() {
     if (document.visibilityState === 'hidden') {
       hiddenAt = Date.now()
       if (S.userId && S.sharing) withdrawNow()
+      checkOutNow()
       return
     }
+    checkIn()
     if (hiddenAt && Date.now() - hiddenAt > 30000) {
       loadPublic()
       if (S.userId) loadPrivate(S.userId) // which also puts my dot back, if I share
@@ -487,7 +515,9 @@ export function start() {
   })
   window.addEventListener('pagehide', () => {
     if (S.userId && S.sharing) withdrawNow()
+    checkOutNow()
   })
+  setInterval(checkIn, 60000)
 
   // A share for a while ends by itself, even if nothing moves.
   setInterval(endSharingIfTimeIsUp, 15000)
