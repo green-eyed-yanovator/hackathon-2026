@@ -24,7 +24,7 @@ import './App.css'
 //
 
 type AuthMode = 'signin' | 'signup' | 'code' | 'reset' | 'new-password'
-type Tab = 'around' | 'latest' | 'friends' | 'mine' | 'past'
+type Tab = 'around' | 'latest' | 'soon' | 'friends' | 'mine' | 'past'
 
 const THEMES = [
   { id: 'day', name: 'Day', note: 'Clean and bright' },
@@ -268,6 +268,9 @@ function visiblePosts() {
       case 'around':
       case 'latest':
         return !p.resolved_at
+      case 'soon':
+        // Happening now (started within 3 hours) or in the coming week.
+        return !p.resolved_at && !!p.starts_at && time(p.starts_at) > Date.now() - 3 * 3600000 && time(p.starts_at) < Date.now() + 7 * 86400000
       case 'friends':
         return !!p.author_id && friends.has(p.author_id)
       case 'mine':
@@ -286,6 +289,7 @@ function sortedFeed(posts: Post[]) {
     away: distance(UI.view.lat, UI.view.lng, post.latitude, post.longitude),
   }))
   if (UI.tab === 'around') withMeta.sort((a, b) => a.away - b.away)
+  else if (UI.tab === 'soon') withMeta.sort((a, b) => time(a.post.starts_at!) - time(b.post.starts_at!))
   else withMeta.sort((a, b) => b.active - a.active)
   return withMeta
 }
@@ -639,6 +643,7 @@ function Composer({ placeholder, onSend, onType, autoFocus = false }: { placehol
 const TABS: [Tab, string][] = [
   ['around', 'Around'],
   ['latest', 'Latest'],
+  ['soon', 'Soon'],
   ['friends', 'Friends'],
   ['mine', 'Mine'],
   ['past', 'Past'],
@@ -811,7 +816,9 @@ function Feed() {
                 ? 'Pins you post, save, reply to or join show up here.'
                 : UI.tab === 'past'
                   ? 'No resolved pins.'
-                  : 'No pins here yet. Be the first: press N or tap +.'}
+                  : UI.tab === 'soon'
+                    ? 'Nothing planned this week. Give a pin a time and it shows up here.'
+                    : 'No pins here yet. Be the first: press N or tap +.'}
           </Empty>
         ) : (
           rows.map(({ post, away, active }) => <PostRow key={post.id} post={post} away={away} active={active} />)
@@ -819,7 +826,7 @@ function Feed() {
       </div>
       <footer className="feed-foot muted small">
         {plural(rows.length, 'pin')}
-        {UI.tab === 'around' ? ' · nearest first' : ' · latest activity first'}
+        {UI.tab === 'around' ? ' · nearest first' : UI.tab === 'soon' ? ' · soonest first' : ' · latest activity first'}
       </footer>
     </aside>
   )

@@ -583,7 +583,8 @@ kbd {
 
 .tab {
   flex: 1;
-  padding: 6px 4px;
+  min-width: 0;
+  padding: 6px 2px;
   border-radius: calc(var(--radius-sm) - 2px);
   font-size: 13px;
   font-weight: 550;
