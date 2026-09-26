@@ -90,7 +90,9 @@ Press `T` to cycle, or pick one in Settings.
 Each style changes the map, the blips and people, the whole interface, and the
 screen effect on top. The game styles cover the map in place blips from
 further out, like a pause-menu map; the legend (the `i` button) says what
-they mean.
+they mean. They also get a radar in the corner: the streets around you, your
+arrow, north on the rim, friends and live pins waiting on the edge in their
+direction. Tap it to go back to where you are.
 
 ## Keys
 
