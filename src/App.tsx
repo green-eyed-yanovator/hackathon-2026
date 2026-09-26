@@ -1921,6 +1921,23 @@ function SettingsView() {
               <Icon name="logout" size={16} /> Sign out
             </button>
           </div>
+          {S.blocked.size > 0 && (
+            <>
+              <div className="section">Blocked</div>
+              {[...S.blocked].map((id) => (
+                <div key={id} className="row">
+                  <button className="plain person" onClick={() => go(`user/${id}`)}>
+                    <Avatar id={id} size={28} />
+                    <span>{nameOf(id)}</span>
+                  </button>
+                  <button className="btn small" onClick={() => unblock(id)}>
+                    Unblock
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+
           <div className="danger-zone">
             <button className={confirmDelete ? 'btn danger' : 'btn'} onClick={removeAccount} onBlur={() => setConfirmDelete(false)}>
               <Icon name="trash" size={16} /> {confirmDelete ? 'Delete everything, for good?' : 'Delete account'}
