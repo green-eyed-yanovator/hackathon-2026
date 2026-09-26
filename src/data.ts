@@ -413,6 +413,7 @@ function resetPrivate() {
   S.locations = new Map()
   S.online = new Set()
   S.sharing = false
+  S.sharingUntil = null
 }
 
 let started = false
@@ -968,7 +969,6 @@ function withdrawNow() {
   }).catch(() => {})
 }
 
-// Share until switched off, or for a while (in ms) after which it stops by itself.
 // A share for a while ends when its time is up; checked on the timer and before every send.
 function endSharingIfTimeIsUp() {
   if (!S.sharing || !S.sharingUntil || Date.now() < S.sharingUntil) return false
@@ -977,6 +977,7 @@ function endSharingIfTimeIsUp() {
   return true
 }
 
+// Share until switched off, or for a while (in ms) after which it stops by itself.
 export async function setSharing(on: boolean, forMs: number | null = null) {
   if (!S.userId) return false
   if (on) {
