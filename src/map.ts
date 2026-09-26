@@ -3,7 +3,8 @@
 // Vector tiles (OpenMapTiles schema, served free by OpenFreeMap) are fetched,
 // decoded here, painted once per zoom level into tile bitmaps, and composited
 // every frame. Labels, blips and people are placed per frame in screen space,
-// so they never get cut at tile edges and never overlap each other.
+// so they never get cut at tile edges and never overlap each other. Walking
+// routes are worked out from the same tiles, near the end of the file.
 //
 // Coordinates: "world" is Web Mercator squashed into [0, 1] on both axes, y down.
 // Zoom z means the world is TILE * 2^z css pixels wide.

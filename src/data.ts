@@ -4,7 +4,9 @@
 // people) is loaded once and kept live over realtime. The signed-in user's
 // private rows (inbox, friends, saved pins, blocks) load on sign-in. Actions
 // below write to Supabase and then to the store; changed() re-renders the UI.
-// At the bottom: where I am, sharing it with friends, and telling them I'm around.
+// At the bottom: where I am, sharing it with friends, telling them I'm around, and
+// the few things worth a word that are worked out here (a friend a street away,
+// something I'm in on starting soon).
 //
 // Privacy rule for realtime: every client hears every DELETE with the row's
 // key, whatever the row security says, so rows keyed by a person (locations,
