@@ -1797,10 +1797,10 @@ function ProfileView({ id }: { id: string }) {
 // What someone has been up to on the map, newest first, from what's already loaded.
 function Activity({ id }: { id: string }) {
   const [limit, setLimit] = useState(6)
-  const byId = new Map(S.posts.map((p) => [p.id, p]))
+  const byId = new Map(S.posts.filter((p) => !(p.author_id && S.blocked.has(p.author_id))).map((p) => [p.id, p]))
   const items: { key: string; time: number; icon: IconName; verb: string; post: Post; quote?: string }[] = []
 
-  for (const post of S.posts) {
+  for (const post of byId.values()) {
     if (post.author_id !== id) continue
     items.push({ key: `p${post.id}`, time: time(post.created_at), icon: 'pin', verb: 'Pinned', post })
     if (post.resolved_at) items.push({ key: `r${post.id}`, time: time(post.resolved_at), icon: 'check', verb: 'Resolved', post })
@@ -2972,7 +2972,7 @@ export default function App() {
   // A clock: "5m ago", "in 3h" and the map's live and stale cues move on by
   // themselves, even when nothing else happens.
   useEffect(() => {
-    const tick = window.setInterval(changed, 60000)
+    const tick = window.setInterval(changed, 30000)
     return () => window.clearInterval(tick)
   }, [])
 

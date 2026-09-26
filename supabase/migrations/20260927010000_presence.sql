@@ -1,6 +1,6 @@
 -- Who has the app open, for friends' eyes only. (A shared realtime presence
--- channel would tell every client who's online.) A row is refreshed every
--- minute while the app is in view and removed when it isn't.
+-- channel would tell every client who's online.) Replaced by a per-device
+-- table in 20260927040000_presence_per_device.sql.
 
 create table public.presence (
   user_id uuid primary key default auth.uid() references auth.users (id) on delete cascade,

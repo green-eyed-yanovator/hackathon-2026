@@ -77,6 +77,7 @@ export type Message = { id: string; sender_id: string; recipient_id: string; bod
 export type Friendship = { id: string; requester: string; addressee: string; created_at: string; accepted_at: string | null }
 export type Location = { user_id: string; latitude: number; longitude: number; accuracy: number | null; heading: number | null; updated_at: string; shared: boolean }
 export type Here = { latitude: number; longitude: number; accuracy: number; heading: number | null }
+export type Presence = { user_id: string; device: string; here: boolean; seen_at: string }
 
 export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert'; color: string }> = {
   general: { label: 'General', icon: 'chat', color: '#4f7cff' },
@@ -109,7 +110,7 @@ export const S = {
   friendships: [] as Friendship[],
   blocked: new Set<string>(), // people I've blocked: their pins, replies and messages stay out of sight
   locations: new Map<string, Location>(),
-  seen: new Map<string, number>(), // friends' last sign of life, from the presence table
+  seen: new Map<string, Map<string, Presence>>(), // friends' devices and when each was last here
 
   here: null as Here | null,
   sharing: false,
@@ -154,6 +155,7 @@ export function stats() {
   if (statsVersion === version) return statsCache
   const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set(), photo: new Map(), likes: new Map(), liked: new Set() }
   for (const like of S.likes) {
+    if (S.blocked.has(like.user_id)) continue
     st.likes.set(like.reply_id, (st.likes.get(like.reply_id) ?? 0) + 1)
     if (like.user_id === S.userId) st.liked.add(like.reply_id)
   }
@@ -220,10 +222,23 @@ export function visibleNotifications() {
   return S.notifications.filter((n) => !(n.actor_id && S.blocked.has(n.actor_id)))
 }
 
+// How far the server's clock is ahead of ours, learnt from our own check-ins.
+let clockSkew = 0
+
+function rememberPresence(p: Presence) {
+  let devices = S.seen.get(p.user_id)
+  if (!devices) S.seen.set(p.user_id, (devices = new Map()))
+  devices.set(p.device, p)
+}
+
 // Online dots come from the presence table, which only friends can read.
 export function isOnline(id: string) {
   if (id === S.userId) return document.visibilityState === 'visible'
-  return Date.now() - (S.seen.get(id) ?? 0) < 150000 // they check in every minute
+  if (!friendIds().includes(id)) return false
+  // Devices check in every minute; times are the server's, so compare on its clock.
+  const now = Date.now() + clockSkew
+  for (const p of S.seen.get(id)?.values() ?? []) if (p.here && now - time(p.seen_at) < 150000) return true
+  return false
 }
 
 // A friend's shared position, unless it's too old to mean anything.
@@ -354,7 +369,7 @@ async function loadPrivate(userId: string) {
     supabase.from('friendships').select('*'),
     supabase.from('locations').select('*'),
     supabase.from('blocks').select('blocked'),
-    supabase.from('presence').select('user_id, seen_at'),
+    supabase.from('presence').select('user_id, device, here, seen_at'),
   ])
   if (S.userId !== userId) return
 
@@ -369,7 +384,8 @@ async function loadPrivate(userId: string) {
   S.mutedKinds = settings.data?.muted_kinds ?? []
   S.friendships = friendships.data ?? []
   S.blocked = new Set((blocks.data ?? []).map((b: { blocked: string }) => b.blocked))
-  S.seen = new Map((presence.data ?? []).map((p: { user_id: string; seen_at: string }) => [p.user_id, time(p.seen_at)]))
+  S.seen = new Map()
+  for (const p of (presence.data ?? []) as Presence[]) rememberPresence(p)
   checkIn()
   S.locations = new Map((locations.data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
   const remembered = remembersSharing()
@@ -420,24 +436,21 @@ function subscribePrivate(userId: string) {
         const gone = S.friendships.find((f) => f.id === (payload.old as Friendship).id)
         if (!gone) return
         S.friendships = S.friendships.filter((f) => f !== gone)
-        // Their dot leaves the map with the friendship.
-        S.locations.delete(gone.requester === userId ? gone.addressee : gone.requester)
+        // Their dot and their online light go with the friendship.
+        const other = gone.requester === userId ? gone.addressee : gone.requester
+        S.locations.delete(other)
+        S.seen.delete(other)
       } else {
         upsert(S.friendships, payload.new as Friendship, byId)
-        // A new friend may already be sharing.
-        if ((payload.new as Friendship).accepted_at) refreshLocations()
+        // A new friend may already be sharing, and around.
+        if ((payload.new as Friendship).accepted_at) refreshFriendsNow()
       }
       changed()
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'presence' }, (payload) => {
-      if (payload.eventType === 'DELETE') {
-        // Deletes carry only the key; it's a friend's if we knew them.
-        const id = (payload.old as { user_id: string }).user_id
-        if (!S.seen.delete(id)) return
-      } else {
-        const row = payload.new as { user_id: string; seen_at: string }
-        S.seen.set(row.user_id, time(row.seen_at))
-      }
+      // Rows are only ever deleted with their account; otherwise it's an arrival or a departure.
+      if (payload.eventType === 'DELETE') S.seen.delete((payload.old as Presence).user_id)
+      else rememberPresence(payload.new as Presence)
       changed()
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'locations' }, (payload) => {
@@ -451,32 +464,57 @@ function subscribePrivate(userId: string) {
 
 }
 
-// Saying "I'm here" to friends: a presence row, refreshed every minute while
-// the app is in view, and removed as it goes out of view.
+// Saying "I'm here" to friends: a row per device, which the server stamps with
+// its own time. Refreshed every minute while the app is in view; leaving sets
+// here = false (never a delete: realtime would announce it to everyone).
+const device = (() => {
+  try {
+    let id = localStorage.getItem('aroundhere.device')
+    if (!id) localStorage.setItem('aroundhere.device', (id = crypto.randomUUID()))
+    return id
+  } catch {
+    return crypto.randomUUID()
+  }
+})()
+
+let leaving = false // signing out: no more check-ins from this session
+
 function checkIn() {
-  if (!S.userId || document.visibilityState !== 'visible') return
-  supabase.from('presence').upsert({ seen_at: new Date().toISOString() }, { onConflict: 'user_id' }).then(({ error }) => {
-    if (error) console.error('Presence', error)
-  })
+  if (!S.userId || leaving || document.visibilityState !== 'visible') return
+  const sent = Date.now()
+  supabase
+    .from('presence')
+    .upsert({ device, here: true }, { onConflict: 'user_id,device' })
+    .select('seen_at')
+    .single()
+    .then(({ data, error }) => {
+      if (error) console.error('Presence', error)
+      else clockSkew = time(data.seen_at) - (sent + Date.now()) / 2
+    })
 }
 
-// Signing out: off friends' lists straight away.
-// Leaving sets the time far back rather than deleting the row: deletes are
-// announced to every client, and this one would say who just left.
-const GONE = { seen_at: new Date(0).toISOString() }
-
 export async function checkOut() {
-  if (S.userId) await supabase.from('presence').update(GONE).eq('user_id', S.userId)
+  leaving = true
+  if (S.userId) await supabase.from('presence').update({ here: false }).eq('user_id', S.userId).eq('device', device)
 }
 
 function checkOutNow() {
   if (!S.userId || !S.session) return
-  fetch(`${supabaseUrl}/rest/v1/presence?user_id=eq.${S.userId}`, {
+  fetch(`${supabaseUrl}/rest/v1/presence?user_id=eq.${S.userId}&device=eq.${device}`, {
     method: 'PATCH',
     keepalive: true,
     headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(GONE),
+    body: JSON.stringify({ here: false }),
   }).catch(() => {})
+}
+
+// After a friendship starts: their position and presence, which we couldn't read before.
+async function refreshFriendsNow() {
+  await refreshLocations()
+  const { data } = await supabase.from('presence').select('user_id, device, here, seen_at')
+  S.seen = new Map()
+  for (const p of (data ?? []) as Presence[]) rememberPresence(p)
+  changed()
 }
 
 async function refreshLocations() {
@@ -519,11 +557,13 @@ export function start() {
       checkOutNow()
       return
     }
-    checkIn()
     if (hiddenAt && Date.now() - hiddenAt > 30000) {
       loadPublic()
-      if (S.userId) loadPrivate(S.userId) // which also puts my dot back, if I share
-    } else if (S.userId && S.sharing) pushLocation(true)
+      if (S.userId) loadPrivate(S.userId) // which also checks in, and puts my dot back if I share
+    } else {
+      checkIn()
+      if (S.userId && S.sharing) pushLocation(true)
+    }
   })
   window.addEventListener('pagehide', () => {
     if (S.userId && S.sharing) withdrawNow()
@@ -542,6 +582,7 @@ export function start() {
     if (userId !== S.userId) {
       resetPrivate()
       S.userId = userId
+      leaving = false
       if (userId) {
         // Outside the callback: supabase-js deadlocks if we query from inside it.
         setTimeout(() => {
@@ -660,7 +701,19 @@ export async function report(postId: string, reason: 'spam' | 'unkind' | 'unsafe
   return true
 }
 
+const liking = new Set<string>() // replies with a heart on its way; taps wait for it
+
 export async function toggleLike(replyId: string) {
+  if (liking.has(replyId)) return true
+  liking.add(replyId)
+  try {
+    return await flipLike(replyId)
+  } finally {
+    liking.delete(replyId)
+  }
+}
+
+async function flipLike(replyId: string) {
   const userId = S.userId!
   const mine = { user_id: userId, reply_id: replyId, created_at: new Date().toISOString() }
   const was = S.likes.some((l) => sameLike(l, mine))
@@ -670,7 +723,8 @@ export async function toggleLike(replyId: string) {
   const { error } = was
     ? await supabase.from('reply_likes').delete().eq('reply_id', replyId).eq('user_id', userId)
     : await supabase.from('reply_likes').insert({ reply_id: replyId })
-  if (error) {
+  // Liked already (on another device, say): that's the state we wanted.
+  if (error && error.code !== '23505') {
     S.likes = was ? [...S.likes, mine] : S.likes.filter((l) => !sameLike(l, mine))
     changed()
     return fail("Couldn't update", error)
@@ -799,7 +853,7 @@ export async function acceptFriend(id: string) {
   if (error) return fail("Couldn't accept", error)
   upsert(S.friendships, data as Friendship, byId)
   changed()
-  refreshLocations()
+  refreshFriendsNow()
   readFriendRequestsFrom(id)
   return true
 }
@@ -816,6 +870,7 @@ export async function removeFriend(id: string) {
   if (error) return fail("Couldn't remove", error)
   S.friendships = S.friendships.filter((x) => x.id !== f.id)
   S.locations.delete(id)
+  S.seen.delete(id)
   changed()
   readFriendRequestsFrom(id)
   return true
