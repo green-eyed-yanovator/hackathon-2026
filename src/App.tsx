@@ -2384,7 +2384,7 @@ function Palette() {
           />
           <kbd>esc</kbd>
         </div>
-        <div className="palette-list" ref={listRef}>
+        <div className="palette-list" ref={listRef} role="listbox" aria-label="Results">
           {flat.length === 0 && <div className="muted pad">Nothing matches “{query}”.</div>}
           {groups.map((g) => (
             <div key={g.group}>
@@ -2393,7 +2393,14 @@ function Palette() {
                 n++
                 const mine = n
                 return (
-                  <button key={c.key} className={mine === at ? 'palette-item on' : 'palette-item'} onMouseMove={() => mine !== at && setIndex(mine)} onClick={() => run(c)}>
+                  <button
+                    key={c.key}
+                    role="option"
+                    aria-selected={mine === at}
+                    className={mine === at ? 'palette-item on' : 'palette-item'}
+                    onMouseMove={() => mine !== at && setIndex(mine)}
+                    onClick={() => run(c)}
+                  >
                     {c.icon}
                     <span className="clip">{c.label}</span>
                     {c.hint && <kbd>{c.hint}</kbd>}
