@@ -1698,6 +1698,23 @@ function FriendButton({ id }: { id: string }) {
   )
 }
 
+// A friend who shares where they are: look, or go.
+function FriendWhere({ id }: { id: string }) {
+  const loc = locationOf(id)
+  if (!loc) return null
+  const going = UI.walk === `user/${id}`
+  return (
+    <div className="btn-row">
+      <button className="btn grow" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
+        <Icon name="locate" size={16} /> Show on the map
+      </button>
+      <button className={going ? 'btn grow on' : 'btn grow'} aria-pressed={going} onClick={() => walkTo(`user/${id}`)}>
+        <Icon name="arrow" size={16} /> Get there
+      </button>
+    </div>
+  )
+}
+
 function ProfileView({ id }: { id: string }) {
   const profile = S.profiles.get(id)
   const [editing, setEditing] = useState(false)
@@ -1711,7 +1728,6 @@ function ProfileView({ id }: { id: string }) {
   const posts = S.posts.filter((p) => p.author_id === id)
   const replyCount = S.replies.filter((r) => r.author_id === id).length
   const joinedCount = S.interests.filter((i) => i.user_id === id).length
-  const loc = locationOf(id)
 
   async function save() {
     const ok = await saveProfile({ display_name: name.trim(), neighbourhood: area.trim() || null, bio: bio.trim() || null })
@@ -1831,19 +1847,10 @@ function ProfileView({ id }: { id: string }) {
               </button>
             )}
             <FriendButton id={id} />
-            {loc && (
-              <button className="btn" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
-                <Icon name="locate" size={16} /> Find
-              </button>
-            )}
-            {loc && (
-              <button className={UI.walk === `user/${id}` ? 'btn on' : 'btn'} aria-pressed={UI.walk === `user/${id}`} onClick={() => walkTo(`user/${id}`)} title="The way there on foot">
-                <Icon name="arrow" size={16} /> Get there
-              </button>
-            )}
           </>
         )}
       </div>
+      {!own && <FriendWhere id={id} />}
 
       {!own && S.userId && (
         <div className="actions">
@@ -1994,16 +2001,7 @@ function ChatView({ id }: { id: string }) {
       className="chat"
       foot={<Composer placeholder={`Message ${firstName(id)}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} onType={() => typing.current?.ping()} />}
     >
-      {loc && (
-        <div className="btn-row">
-          <button className="btn grow" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
-            <Icon name="locate" size={16} /> Show on the map
-          </button>
-          <button className={UI.walk === `user/${id}` ? 'btn grow on' : 'btn grow'} aria-pressed={UI.walk === `user/${id}`} onClick={() => walkTo(`user/${id}`)}>
-            <Icon name="arrow" size={16} /> Get there
-          </button>
-        </div>
-      )}
+      <FriendWhere id={id} />
       {thread.length === 0 && (
         <Empty icon="chat">
           Say hi to {firstName(id)}. Messages are private between you two.
