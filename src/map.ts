@@ -655,7 +655,7 @@ export type Marker = {
 }
 
 type SourceEntry = { state: 'loading' | 'ready' | 'error'; tile: SourceTile | null; used: number }
-type Raster = { canvas: HTMLCanvasElement; used: number }
+type Raster = { canvas: HTMLCanvasElement; used: number; born: number }
 type Sprite = { canvas: HTMLCanvasElement; width: number; height: number; used: number }
 
 export type MapState = {
@@ -1523,12 +1523,12 @@ function sourceFor(z: number) {
 
 // Returns the bitmap for display tile z/x/y, painting it if its data is here.
 // Painting is budgeted per frame, so a zoom never stalls on a pile of tiles.
-function tileBitmap(m: MapState, z: number, x: number, y: number, allowPaint: boolean) {
+function tileRaster(m: MapState, z: number, x: number, y: number, allowPaint: boolean) {
   const key = `${z}/${x}/${y}`
   const raster = m.rasters.get(key)
   if (raster) {
     raster.used = m.frameCount
-    return raster.canvas
+    return raster
   }
 
   const sz = sourceFor(z)
@@ -1540,8 +1540,9 @@ function tileBitmap(m: MapState, z: number, x: number, y: number, allowPaint: bo
   const canvas = document.createElement('canvas')
   canvas.width = canvas.height = size
   paintTile(m, canvas.getContext('2d')!, size, entry.tile!, z, x, y)
-  m.rasters.set(key, { canvas, used: m.frameCount })
-  return canvas
+  const fresh = { canvas, used: m.frameCount, born: performance.now() }
+  m.rasters.set(key, fresh)
+  return fresh
 }
 
 //
@@ -2093,25 +2094,32 @@ function frame(m: MapState, time: number) {
   for (const w of wanted) {
     const sx = w.x * tileSize - left
     const sy = w.y * tileSize - top
-    // Pad by a hair so seams between scaled tiles don't show.
-    const bitmap = tileBitmap(m, z, w.x, w.y, performance.now() < budgetEnd)
-    if (bitmap) {
-      c.drawImage(bitmap, sx, sy, tileSize + 0.5, tileSize + 0.5)
-      continue
+    const raster = tileRaster(m, z, w.x, w.y, performance.now() < budgetEnd)
+    const fading = raster ? Math.min(1, (performance.now() - raster.born) / 180) : 0
+
+    if (fading < 1) {
+      // Stand-in: the nearest ancestor we already painted, cropped and scaled up.
+      // A fresh tile fades in over it rather than popping.
+      if (!raster) missing++
+      else keepGoing = true
+      for (let up = 1; up <= 6 && z - up >= 0; up++) {
+        const pz = z - up
+        const px = w.x >> up
+        const py = w.y >> up
+        const parent = m.rasters.get(`${pz}/${px}/${py}`)
+        if (!parent) continue
+        parent.used = m.frameCount
+        const part = parent.canvas.width / 2 ** up
+        c.drawImage(parent.canvas, (w.x - (px << up)) * part, (w.y - (py << up)) * part, part, part, sx, sy, tileSize + 0.5, tileSize + 0.5)
+        break
+      }
     }
 
-    missing++
-    // Stand-in: the nearest ancestor we already painted, cropped and scaled up.
-    for (let up = 1; up <= 6 && z - up >= 0; up++) {
-      const pz = z - up
-      const px = w.x >> up
-      const py = w.y >> up
-      const parent = m.rasters.get(`${pz}/${px}/${py}`)
-      if (!parent) continue
-      parent.used = m.frameCount
-      const part = parent.canvas.width / 2 ** up
-      c.drawImage(parent.canvas, (w.x - (px << up)) * part, (w.y - (py << up)) * part, part, part, sx, sy, tileSize + 0.5, tileSize + 0.5)
-      break
+    if (raster) {
+      // Pad by a hair so seams between scaled tiles don't show.
+      c.globalAlpha = fading
+      c.drawImage(raster.canvas, sx, sy, tileSize + 0.5, tileSize + 0.5)
+      c.globalAlpha = 1
     }
   }
   if (missing > 0) keepGoing = true
