@@ -71,11 +71,13 @@ where you are (the locate button, Get there, friends nearby): browsers only
 say that to secure pages, so for those use a deployed build or an HTTPS tunnel.
 
 Shared locations only count while they're fresh (a real phone refreshes its
-own), so the demo neighbours fade off the map after half a day. To put them
-back before a demo:
+own), so the demo neighbours fade after half an hour and leave the map after
+half a day. Before a demo, put the whole neighbourhood back (friends on the
+map, Maya's unread messages and waiting friend request, hearts on replies); it
+touches only the demo accounts:
 
 ```sh
-docker exec supabase_db_hackathon-2026 psql -U postgres -c "update locations set updated_at = now() where user_id::text like 'd0000000%'"
+docker exec -i supabase_db_hackathon-2026 psql -U postgres < supabase/demo-reset.sql
 ```
 
 ## Putting it online
