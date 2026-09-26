@@ -9,7 +9,7 @@ pin on what's going on:
 
 What you can do:
 
-- **Pins are threads.** Reply (mention people with `@`), say you're in, save,
+- **Pins are threads.** Reply (mention people with `@`, heart a good reply), say you're in, save,
   share, or get directions in your own maps app. Give a pin a time and it
   counts down in the feed, shows under Soon, and ripples on the map while it's on.
 - **Friends.** People around here suggests neighbours whose pins are close.

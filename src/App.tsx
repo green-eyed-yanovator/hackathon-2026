@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, isOnline, locationOf, conversations, readable, unreadMessages, visibleNotifications, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
-  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, report, toggleInterest, toggleSave, saveProfile,
+  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleLike, report, toggleInterest, toggleSave, saveProfile,
   uploadAvatar, changeEmail, deleteAccount, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
   type Flair, type Post, type Revision, type Notification,
@@ -1168,6 +1168,7 @@ function PostView({ post }: { post: Post }) {
   const me = S.userId
   const mine = !!me && post.author_id === me
   const replies = S.replies.filter((r) => r.post_id === post.id && !(r.author_id && S.blocked.has(r.author_id)))
+  const { likes, liked } = stats()
   const media = S.media.filter((m) => m.post_id === post.id)
   const interested = S.interests.filter((i) => i.post_id === post.id).map((i) => i.user_id)
   const iAmIn = !!me && interested.includes(me)
@@ -1493,6 +1494,15 @@ function PostView({ post }: { post: Post }) {
             <div className="reply-text">
               <Mentions text={r.content} />
             </div>
+            <button
+              className={liked.has(r.id) ? 'like on' : 'like'}
+              aria-pressed={liked.has(r.id)}
+              aria-label={liked.has(r.id) ? 'Unlike' : 'Like'}
+              onClick={() => !needAccount() && toggleLike(r.id).then((ok) => ok || failed("Couldn't update"))}
+            >
+              <Icon name="heart" size={13} />
+              {(likes.get(r.id) ?? 0) > 0 && <span>{likes.get(r.id)}</span>}
+            </button>
           </div>
         </div>
       ))}

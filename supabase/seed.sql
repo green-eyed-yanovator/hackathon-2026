@@ -148,6 +148,17 @@ begin
   from (values (maya, 'Farmers market this Sunday'), (tom, 'Looking for a drummer'), (hannah, 'Lost: grey tabby called Miso')) as s (who, title)
   join public.posts post on post.title = s.title and post.author_id in (maya, tom, priya, lucas, hannah, ben);
 
+  -- A few hearts on replies.
+  insert into public.reply_likes (user_id, reply_id)
+  select who, r.id
+  from (values
+    (priya, 'Yes please! I can bring a salad.'), (lucas, 'Yes please! I can bring a salad.'),
+    (maya, 'Count me in. I''ll bring the trailer for the big stuff.'), (hannah, 'Count me in. I''ll bring the trailer for the big stuff.'), (ben, 'Count me in. I''ll bring the trailer for the big stuff.'),
+    (tom, 'Flickers during minor chords. Otherwise fine.'), (maya, 'Flickers during minor chords. Otherwise fine.'), (priya, 'Flickers during minor chords. Otherwise fine.'),
+    (hannah, 'I think I saw a grey cat near the tennis courts this morning?')
+  ) as l (who, body)
+  join public.replies r on r.content = l.body and r.author_id in (maya, tom, priya, lucas, hannah, ben);
+
   -- Friends, one request still waiting for Maya, and a few shared locations.
   insert into public.friendships (requester, addressee, created_at, accepted_at) values
     (maya, tom, now() - interval '20 days', now() - interval '19 days'),

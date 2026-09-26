@@ -1624,6 +1624,35 @@ textarea::placeholder {
   overflow-wrap: anywhere;
 }
 
+.like {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  transition: color 0.12s, transform 0.12s;
+}
+
+.like:hover {
+  color: #ef3b5d;
+}
+
+.like:active {
+  transform: scale(0.9);
+}
+
+.like.on {
+  color: #ef3b5d;
+}
+
+.like.on .icon {
+  animation: pop 0.25s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
 .tag {
   margin-left: 6px;
   padding: 1px 6px;

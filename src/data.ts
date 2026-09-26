@@ -50,6 +50,7 @@ export type Profile = {
 
 export type Media = { id: string; post_id: string; media_type: 'image' | 'video'; url: string; created_at: string }
 export type Interest = { user_id: string; post_id: string; created_at: string }
+export type Like = { user_id: string; reply_id: string; created_at: string }
 export type Saved = { post_id: string; created_at: string }
 export type Revision = { id: string; title: string; description: string; replaced_at: string }
 
@@ -92,6 +93,7 @@ export const S = {
   replies: [] as Reply[], // oldest first
   media: [] as Media[],
   interests: [] as Interest[],
+  likes: [] as Like[],
   profiles: new Map<string, Profile>(),
 
   saved: [] as Saved[],
@@ -136,6 +138,8 @@ type Stats = {
   unread: Set<string> // pins with unread notifications
   joined: Set<string> // pins I posted, saved, replied to or said I'm in
   photo: Map<string, Media> // each pin's first photo
+  likes: Map<string, number> // hearts per reply
+  liked: Set<string> // replies I've hearted
 }
 
 let statsVersion = -1
@@ -143,7 +147,11 @@ let statsCache: Stats
 
 export function stats() {
   if (statsVersion === version) return statsCache
-  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set(), photo: new Map() }
+  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set(), photo: new Map(), likes: new Map(), liked: new Set() }
+  for (const like of S.likes) {
+    st.likes.set(like.reply_id, (st.likes.get(like.reply_id) ?? 0) + 1)
+    if (like.user_id === S.userId) st.liked.add(like.reply_id)
+  }
   for (const m of S.media) if (m.media_type === 'image' && !st.photo.has(m.post_id)) st.photo.set(m.post_id, m)
   for (const p of S.posts) {
     st.active.set(p.id, time(p.created_at))
@@ -234,16 +242,18 @@ function upsert<T>(list: T[], row: T, same: (a: T, b: T) => boolean, atStart = f
 
 const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
 const sameInterest = (a: Interest, b: Interest) => a.user_id === b.user_id && a.post_id === b.post_id
+const sameLike = (a: Like, b: Like) => a.user_id === b.user_id && a.reply_id === b.reply_id
 
 let retrying = false // a reload is already waiting
 
 async function loadPublic() {
-  const [posts, replies, media, interests, profiles] = await Promise.all([
+  const [posts, replies, media, interests, profiles, likes] = await Promise.all([
     supabase.from('posts').select('*').order('created_at', { ascending: false }),
     supabase.from('replies').select('*').order('created_at', { ascending: true }),
     supabase.from('post_media').select('*').order('created_at', { ascending: true }),
     supabase.from('post_interest').select('user_id, post_id, created_at'),
     supabase.from('profiles').select('*'),
+    supabase.from('reply_likes').select('user_id, reply_id, created_at'),
   ])
 
   if (posts.error) {
@@ -264,6 +274,7 @@ async function loadPublic() {
   S.replies = replies.data ?? []
   S.media = media.data ?? []
   S.interests = interests.data ?? []
+  S.likes = likes.data ?? []
   S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, p]))
   S.ready = true
   changed()
@@ -301,6 +312,14 @@ function subscribePublic() {
     })
     .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'post_interest' }, ({ old }) => {
       S.interests = S.interests.filter((i) => !sameInterest(i, old as Interest))
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reply_likes' }, ({ new: row }) => {
+      upsert(S.likes, row as Like, sameLike)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reply_likes' }, ({ old }) => {
+      S.likes = S.likes.filter((l) => !sameLike(l, old as Like))
       changed()
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
@@ -596,6 +615,24 @@ export async function report(postId: string, reason: 'spam' | 'unkind' | 'unsafe
   const { error } = await supabase.from('reports').insert({ post_id: postId, reason })
   // Reporting the same pin twice is fine: the first report stands.
   if (error && error.code !== '23505') return fail("Couldn't send the report", error)
+  return true
+}
+
+export async function toggleLike(replyId: string) {
+  const userId = S.userId!
+  const mine = { user_id: userId, reply_id: replyId, created_at: new Date().toISOString() }
+  const was = S.likes.some((l) => sameLike(l, mine))
+  // Show it straight away; undo if the database says no.
+  S.likes = was ? S.likes.filter((l) => !sameLike(l, mine)) : [...S.likes, mine]
+  changed()
+  const { error } = was
+    ? await supabase.from('reply_likes').delete().eq('reply_id', replyId).eq('user_id', userId)
+    : await supabase.from('reply_likes').insert({ reply_id: replyId })
+  if (error) {
+    S.likes = was ? [...S.likes, mine] : S.likes.filter((l) => !sameLike(l, mine))
+    changed()
+    return fail("Couldn't update", error)
+  }
   return true
 }
 
