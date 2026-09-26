@@ -13,7 +13,9 @@ under Soon, and ripples on the map while it's on. Add friends (People around
 here suggests neighbours whose pins are close), share your location with
 them, until you stop or just for an hour, and see each other on the map with
 your photos. Tap a friend to talk; you'll see when they're typing. Your dot
-only shows while you have the app open.
+only shows while you have the app open. Mention people in replies with `@`,
+send a pin to a friend (it shows in your chat as a card), and get directions
+to any pin in your own maps app.
 
 Looking after each other: block someone (they can't message or add you,
 and their pins and replies disappear for you), or report a pin; reports
