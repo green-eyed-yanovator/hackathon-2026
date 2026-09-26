@@ -8,10 +8,10 @@
 // Coordinates: "world" is Web Mercator squashed into [0, 1] on both axes, y down.
 // Zoom z means the world is TILE * 2^z css pixels wide.
 
-export const TILE = 256
+const TILE = 256
 const SOURCE_MAX_ZOOM = 14
-export const MIN_ZOOM = 3
-export const MAX_ZOOM = 20
+const MIN_ZOOM = 3
+const MAX_ZOOM = 20
 const TILEJSON_URL = 'https://tiles.openfreemap.org/planet'
 const FALLBACK_TILES = 'https://tiles.openfreemap.org/planet/20260913_164504_pt/{z}/{x}/{y}.pbf'
 
@@ -30,15 +30,6 @@ export function xToLng(x: number) {
 
 export function yToLat(y: number) {
   return (360 / Math.PI) * Math.atan(Math.exp((1 - 2 * y) * Math.PI)) - 90
-}
-
-// Great-circle distance in metres.
-export function metersBetween(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const r = Math.PI / 180
-  const dLat = (lat2 - lat1) * r
-  const dLng = (lng2 - lng1) * r
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLng / 2) ** 2
-  return 12742000 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
 }
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
