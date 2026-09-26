@@ -138,8 +138,9 @@ they mean. They also get a radar in the corner: the streets around you, your
 arrow, north on the rim, friends and live pins waiting on the edge in their
 direction, and the route when you're walking somewhere. Tap it to go back to
 where you are. Setting off somewhere, they say so the way their games do, with
-a mission line at the bottom ("Go to the street clean-up."), and Palm Coast,
-Metro and Frontier show messages the way their games do, top left.
+a mission line at the bottom ("Go to the street clean-up."), and messages go
+up top left, each style in its own way: a help box, an inked band, a line of
+terminal output, a neon-edged box.
 
 Sounds are synthesized in the browser, no audio files: each style plays its
 own short sting when you post, resolve or make a friend (a plucked-string

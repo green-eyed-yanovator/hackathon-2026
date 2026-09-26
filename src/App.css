@@ -2948,20 +2948,20 @@ button.toast {
   }
 }
 
-/* The console styles, on wide screens: a toast is the games' help box, a dark
-   panel of plain text at the top left of the map, not a pill at the bottom. */
+/* The game styles, on wide screens: a toast is the way their games put a message
+   up, top left of the map, not a pill at the bottom. Same place, each its own look. */
 @media (min-width: 761px) {
   [data-theme='coast'] .toast,
-  [data-theme='metro'] .toast {
+  [data-theme='metro'] .toast,
+  [data-theme='frontier'] .toast,
+  [data-theme='radar'] .toast,
+  [data-theme='neon'] .toast {
     top: 140px; /* under the walk bar's line, when there is one */
     bottom: auto;
     left: 16px;
     transform: none;
     max-width: 340px;
     padding: 12px 16px;
-    border-radius: 2px;
-    background: rgba(0, 0, 0, 0.82);
-    font-family: var(--font);
     font-size: 14px;
     font-weight: 500;
     line-height: 1.4;
@@ -2975,28 +2975,52 @@ button.toast {
 
   [data-theme='coast'] .has-feed .toast,
   [data-theme='metro'] .has-feed .toast,
-  [data-theme='frontier'] .has-feed .toast {
+  [data-theme='frontier'] .has-feed .toast,
+  [data-theme='radar'] .has-feed .toast,
+  [data-theme='neon'] .has-feed .toast {
     left: 408px;
   }
 
-  /* The frontier's is a band of dark fading off to the right, in the book face. */
+  /* The console games' help box: a plain dark panel. */
+  [data-theme='coast'] .toast,
+  [data-theme='metro'] .toast {
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.82);
+    font-family: var(--font);
+  }
+
+  /* The frontier's: a band of dark fading off to the right, in the book face. */
   [data-theme='frontier'] .toast {
-    top: 140px;
-    bottom: auto;
-    left: 16px;
-    transform: none;
-    max-width: 360px;
-    padding: 12px 40px 12px 16px;
+    padding-right: 40px;
     border-radius: 0;
     background: linear-gradient(90deg, rgba(20, 14, 8, 0.92) 60%, rgba(20, 14, 8, 0));
     color: #f3e6c8;
     font-family: var(--font-head);
     font-size: 15px;
-    font-weight: 500;
-    text-align: left;
-    white-space: normal;
-    box-shadow: none;
-    animation: none;
+  }
+
+  /* The tracking screen's: a line of terminal output. */
+  [data-theme='radar'] .toast {
+    border: 1px solid #1f7c46;
+    border-radius: 0;
+    background: rgba(3, 11, 6, 0.92);
+    color: #6dffaa;
+    font-family: var(--font-head);
+    font-size: 13px;
+    text-shadow: 0 0 6px rgba(45, 255, 136, 0.5);
+  }
+
+  [data-theme='radar'] .toast::before {
+    content: '> ';
+  }
+
+  /* The beachfront's: a neon-edged box. */
+  [data-theme='neon'] .toast {
+    border: 1px solid #ff5ad9;
+    border-radius: 6px;
+    background: rgba(26, 11, 46, 0.9);
+    color: #ffd8f4;
+    box-shadow: 0 0 16px rgba(255, 90, 217, 0.45), inset 0 0 10px rgba(255, 90, 217, 0.2);
   }
 }
 
