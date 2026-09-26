@@ -13,7 +13,7 @@ import {
   type Flair, type Post, type Revision, type Notification,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, project, center, requestFrame, nearestStreet, findPlaces,
+  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, panBy, project, center, requestFrame, nearestStreet, findPlaces,
   lngToX, latToY, icons, mapThemes, LEGEND, poiColor, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
@@ -1855,6 +1855,7 @@ function SettingsView() {
           ['F', 'Friends'],
           ['I', 'Inbox'],
           ['+ −', 'Zoom'],
+          ['← → ↑ ↓', 'Move the map'],
           ['Esc', 'Close'],
         ].map(([key, what]) => (
           <div key={key}>
@@ -2613,6 +2614,9 @@ export default function App() {
         const at = rows.findIndex((r) => r.post.id === UI.route.id)
         const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (k === 'j' ? 1 : -1)))]
         if (next) openPin(next.post)
+      } else if (k.startsWith('arrow') && map) {
+        const step = e.shiftKey ? 300 : 100
+        panBy(map, k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0)
       } else if ((k === '=' || k === '+') && map) zoomBy(map, 1)
       else if (k === '-' && map) zoomBy(map, -1)
       else return
