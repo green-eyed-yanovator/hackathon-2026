@@ -1,12 +1,14 @@
 -- Friends, and live locations shared only with them.
 
 -- One row per pair. The requester sends it; it's a friendship once the addressee accepts.
+-- The key is a random id on purpose: realtime sends DELETE events to everyone,
+-- without row security, and an id says nothing about who stopped being friends.
 create table public.friendships (
+  id uuid primary key default gen_random_uuid(),
   requester uuid not null default auth.uid() references auth.users (id) on delete cascade,
   addressee uuid not null references auth.users (id) on delete cascade,
   created_at timestamptz not null default now(),
   accepted_at timestamptz,
-  primary key (requester, addressee),
   check (requester <> addressee)
 );
 
@@ -22,7 +24,9 @@ create policy "people see their own friendships" on public.friendships
 create policy "people send requests as themselves" on public.friendships
   for insert to authenticated with check (requester = (select auth.uid()) and accepted_at is null);
 create policy "addressees accept requests" on public.friendships
-  for update to authenticated using (addressee = (select auth.uid()));
+  for update to authenticated
+  using (addressee = (select auth.uid()))
+  with check (addressee = (select auth.uid()) and accepted_at is not null);
 create policy "either side can end it" on public.friendships
   for delete to authenticated using ((select auth.uid()) in (requester, addressee));
 

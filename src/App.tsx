@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 
 import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
-  friendIds, friendshipWith, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
+  friendIds, friendshipWith, isOnline, locationOf, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, toggleInterest, toggleSave, saveProfile,
   uploadAvatar, changeEmail, deleteAccount, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
@@ -327,14 +327,15 @@ function buildMarkers(posts: Post[]): Marker[] {
     })
   }
 
-  for (const [userId, loc] of S.locations) {
-    if (userId === S.userId) continue
+  for (const userId of S.locations.keys()) {
+    const loc = locationOf(userId)
+    if (userId === S.userId || !loc) continue
     const name = nameOf(userId)
     const unreadFrom = S.messages.filter((m) => m.sender_id === userId && m.recipient_id === S.userId && !m.read_at).length
     markers.push({
       id: `person:${userId}`, kind: 'person', x: lngToX(loc.longitude), y: latToY(loc.latitude), icon: 'user',
       color: `hsl(${hue(userId)} 55% 45%)`, count: unreadFrom,
-      flags: (Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0) | (S.online.has(userId) ? MARK_ONLINE : 0),
+      flags: (Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0) | (isOnline(userId) ? MARK_ONLINE : 0),
       text: initials(name), name: name.split(' ')[0],
       accuracy: loc.accuracy ?? 0, heading: loc.heading, image: S.profiles.get(userId)?.avatar_url ?? null,
     })
@@ -460,7 +461,7 @@ function Avatar({ id, size = 32, dot = false }: { id: string | null; size?: numb
   return (
     <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, background: id ? `hsl(${hue(id)} 52% 44%)` : '#8a8f98' }}>
       {photo ? <img src={photo} alt="" /> : id ? initials(name) : '?'}
-      {dot && id && S.online.has(id) && <i className="online" />}
+      {dot && id && isOnline(id) && <i className="online" />}
     </span>
   )
 }
@@ -1177,9 +1178,9 @@ function FriendButton({ id }: { id: string }) {
 function ProfileView({ id }: { id: string }) {
   const profile = S.profiles.get(id)
   const [editing, setEditing] = useState(false)
-  const [name, setName] = useState(profile?.display_name ?? '')
-  const [area, setArea] = useState(profile?.neighbourhood ?? '')
-  const [bio, setBio] = useState(profile?.bio ?? '')
+  const [name, setName] = useState('')
+  const [area, setArea] = useState('')
+  const [bio, setBio] = useState('')
 
   if (!profile) return <Missing what="person" />
 
@@ -1187,7 +1188,7 @@ function ProfileView({ id }: { id: string }) {
   const posts = S.posts.filter((p) => p.author_id === id)
   const replyCount = S.replies.filter((r) => r.author_id === id).length
   const joinedCount = S.interests.filter((i) => i.user_id === id).length
-  const loc = S.locations.get(id)
+  const loc = locationOf(id)
 
   async function save() {
     const ok = await saveProfile({ display_name: name.trim(), neighbourhood: area.trim() || null, bio: bio.trim() || null })
@@ -1223,7 +1224,7 @@ function ProfileView({ id }: { id: string }) {
           <div className="muted small">
             {profile.neighbourhood && <>{profile.neighbourhood} · </>}
             Joined {new Date(profile.created_at).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
-            {S.online.has(id) && <span className="online-text"> · online</span>}
+            {isOnline(id) && <span className="online-text"> · online</span>}
           </div>
         </div>
       </div>
@@ -1278,7 +1279,16 @@ function ProfileView({ id }: { id: string }) {
         {own ? (
           !editing && (
             <>
-              <button className="btn" onClick={() => setEditing(true)}>
+              <button
+                className="btn"
+                onClick={() => {
+                  // Fill the form from the profile as it is now, not as it was on first render.
+                  setName(profile.display_name)
+                  setArea(profile.neighbourhood ?? '')
+                  setBio(profile.bio ?? '')
+                  setEditing(true)
+                }}
+              >
                 <Icon name="pencil" size={16} /> Edit profile
               </button>
               <button className="btn" onClick={() => go('friends')}>
@@ -1355,7 +1365,7 @@ function ChatView({ id }: { id: string }) {
 
   const thread = S.messages.filter((m) => (m.sender_id === id && m.recipient_id === S.userId) || (m.recipient_id === id && m.sender_id === S.userId))
   const unread = thread.some((m) => m.sender_id === id && !m.read_at)
-  const loc = S.locations.get(id)
+  const loc = locationOf(id)
   const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
 
   useEffect(() => {
@@ -1377,7 +1387,7 @@ function ChatView({ id }: { id: string }) {
           <span>
             {nameOf(id)}
             <small className="muted">
-              {typingAt ? <em className="typing">typing…</em> : S.online.has(id) ? 'online' : 'offline'}
+              {typingAt ? <em className="typing">typing…</em> : isOnline(id) ? 'online' : 'offline'}
               {loc && ` · ${away !== null ? awayText(away) : 'on the map'} ${since(loc.updated_at)}`}
             </small>
           </span>
@@ -1530,7 +1540,7 @@ function FriendsView() {
   const [query, setQuery] = useState('')
   if (!S.userId) return <SignInFirst title="Friends" icon="users" why="Add friends to see them on the map and chat." />
 
-  const friends = friendIds().sort((a, b) => Number(S.online.has(b)) - Number(S.online.has(a)) || nameOf(a).localeCompare(nameOf(b)))
+  const friends = friendIds().sort((a, b) => Number(isOnline(b)) - Number(isOnline(a)) || nameOf(a).localeCompare(nameOf(b)))
   const incoming = S.friendships.filter((f) => !f.accepted_at && f.addressee === S.userId).map((f) => f.requester)
   const outgoing = S.friendships.filter((f) => !f.accepted_at && f.requester === S.userId).map((f) => f.addressee)
   const q = query.trim().toLowerCase()
@@ -1576,7 +1586,7 @@ function FriendsView() {
       <div className="section">{friends.length ? plural(friends.length, 'friend') : 'Friends'}</div>
       {friends.length === 0 && <p className="muted">No friends yet. Find people below, or from anyone's profile.</p>}
       {friends.map((id) => {
-        const loc = S.locations.get(id)
+        const loc = locationOf(id)
         const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
         return (
           <div key={id} className="row">
@@ -1585,7 +1595,7 @@ function FriendsView() {
               <div>
                 <strong>{nameOf(id)}</strong>
                 <div className="muted small">
-                  {S.online.has(id) ? 'online' : 'offline'}
+                  {isOnline(id) ? 'online' : 'offline'}
                   {loc && ` · ${away !== null ? awayText(away) : 'on the map'}`}
                 </div>
               </div>
@@ -1649,6 +1659,7 @@ const MUTABLE: [string, string][] = [
   ['save', 'People saving your pins'],
   ['resolved', 'Pins you follow getting resolved'],
   ['friend_request', 'Friend requests'],
+  ['friend_accept', 'Friend requests accepted'],
   ['friend_post', 'Friends pinning something new'],
 ]
 
@@ -2287,7 +2298,7 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
 
   if (id.startsWith('person:')) {
     const userId = id.slice('person:'.length)
-    const loc = S.locations.get(userId)
+    const loc = locationOf(userId)
     const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
     return (
       <div className="hover-card person-card" ref={cardRef}>
@@ -2332,6 +2343,13 @@ export default function App() {
   useStore()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+
+  // A clock: "5m ago", "in 3h" and the map's live and stale cues move on by
+  // themselves, even when nothing else happens.
+  useEffect(() => {
+    const tick = window.setInterval(changed, 60000)
+    return () => window.clearInterval(tick)
+  }, [])
 
   useEffect(() => {
     start()

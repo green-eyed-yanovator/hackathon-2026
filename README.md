@@ -44,6 +44,14 @@ a friend request waiting and unread messages.
 
 Emails (sign-in codes, password resets) land in Mailpit at http://127.0.0.1:54324.
 
+Shared locations only count while they're fresh (a real phone refreshes its
+own), so the demo neighbours fade off the map after half a day. To put them
+back before a demo:
+
+```sh
+docker exec supabase_db_hackathon-2026 psql -U postgres -c "update locations set updated_at = now() where user_id::text like 'd0000000%'"
+```
+
 ## Map styles
 
 Press `T` to cycle, or pick one in Settings.

@@ -68,7 +68,7 @@ export type Notification = {
 }
 
 export type Message = { id: string; sender_id: string; recipient_id: string; body: string; created_at: string; read_at: string | null }
-export type Friendship = { requester: string; addressee: string; created_at: string; accepted_at: string | null }
+export type Friendship = { id: string; requester: string; addressee: string; created_at: string; accepted_at: string | null }
 export type Location = { user_id: string; latitude: number; longitude: number; accuracy: number | null; heading: number | null; updated_at: string }
 export type Here = { latitude: number; longitude: number; accuracy: number; heading: number | null }
 
@@ -193,6 +193,17 @@ export function friendIds() {
   return ids
 }
 
+// Online dots are for friends only; strangers don't learn when you're around.
+export function isOnline(id: string) {
+  return S.online.has(id) && (id === S.userId || friendIds().includes(id))
+}
+
+// A friend's shared position, unless it's too old to mean anything.
+export function locationOf(id: string) {
+  const loc = S.locations.get(id)
+  return loc && Date.now() - time(loc.updated_at) < 12 * 3600000 ? loc : null
+}
+
 // Posts without a place (older ones) each count as their own place.
 export const placeKey = (post: Post) => post.place_id ?? post.id
 
@@ -209,7 +220,6 @@ function upsert<T>(list: T[], row: T, same: (a: T, b: T) => boolean, atStart = f
 
 const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
 const sameInterest = (a: Interest, b: Interest) => a.user_id === b.user_id && a.post_id === b.post_id
-const samePair = (a: Friendship, b: Friendship) => a.requester === b.requester && a.addressee === b.addressee
 
 async function loadPublic() {
   const [posts, replies, media, interests, profiles] = await Promise.all([
@@ -307,9 +317,10 @@ async function loadPrivate(userId: string) {
   S.mutedKinds = settings.data?.muted_kinds ?? []
   S.friendships = friendships.data ?? []
   S.locations = new Map((locations.data ?? []).map((l: Location) => [l.user_id, l]))
-  S.sharing = S.locations.has(userId)
+  S.sharing = remembersSharing()
   changed()
-  // Still sharing from last time: keep the position fresh.
+  // Sharing from last time on this device picks up again. A row without it may
+  // be another device of yours sharing right now, so it's left alone.
   if (S.sharing) watchHere().then(() => pushLocation(true))
 }
 
@@ -340,13 +351,14 @@ function subscribePrivate(userId: string) {
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, (payload) => {
       if (payload.eventType === 'DELETE') {
-        const old = payload.old as Friendship
-        S.friendships = S.friendships.filter((f) => !samePair(f, old))
+        // Deletes reach everyone and carry only the id, so act only on our own.
+        const gone = S.friendships.find((f) => f.id === (payload.old as Friendship).id)
+        if (!gone) return
+        S.friendships = S.friendships.filter((f) => f !== gone)
         // Their dot leaves the map with the friendship.
-        const other = old.requester === userId ? old.addressee : old.requester
-        if (other) S.locations.delete(other)
+        S.locations.delete(gone.requester === userId ? gone.addressee : gone.requester)
       } else {
-        upsert(S.friendships, payload.new as Friendship, samePair)
+        upsert(S.friendships, payload.new as Friendship, byId)
         // A new friend may already be sharing.
         if ((payload.new as Friendship).accepted_at) refreshLocations()
       }
@@ -398,6 +410,16 @@ export function start() {
   started = true
   loadPublic()
   subscribePublic()
+
+  // Sharing only while the app is in view.
+  document.addEventListener('visibilitychange', () => {
+    if (!S.userId || !S.sharing) return
+    if (document.visibilityState === 'hidden') withdrawNow()
+    else pushLocation(true)
+  })
+  window.addEventListener('pagehide', () => {
+    if (S.userId && S.sharing) withdrawNow()
+  })
 
   // Fires once with the stored session, then on every sign-in and sign-out.
   supabase.auth.onAuthStateChange((_event, session) => {
@@ -579,10 +601,18 @@ export async function uploadAvatar(file: File) {
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85))
   if (!blob) return fail("Couldn't read that photo", null)
 
+  const previous = storagePath(S.profiles.get(S.userId!)?.avatar_url, 'avatars')
   const path = `${S.userId}/${crypto.randomUUID()}.jpg`
   const { error } = await supabase.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg' })
   if (error) return fail("Couldn't upload the photo", error)
-  return saveProfile({ avatar_url: supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl })
+  const saved = await saveProfile({ avatar_url: supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl })
+  if (saved && previous) supabase.storage.from('avatars').remove([previous])
+  return saved
+}
+
+// The path inside a bucket, from one of its public URLs.
+function storagePath(url: string | null | undefined, bucket: string) {
+  return url?.split(`/object/public/${bucket}/`)[1] ?? null
 }
 
 // Supabase emails both the old and the new address; the change happens once both confirm.
@@ -592,9 +622,17 @@ export async function changeEmail(email: string) {
   return true
 }
 
-// Everything you made goes with you; the database cascades it.
+// Everything you made goes with you: the database cascades the rows, and the
+// photos in storage are removed first, while we still own them.
 export async function deleteAccount() {
-  if (S.sharing) await setSharing(false)
+  const me = S.userId!
+  const mine = new Set(S.posts.filter((p) => p.author_id === me).map((p) => p.id))
+  const media = S.media.filter((m) => mine.has(m.post_id)).map((m) => storagePath(m.url, 'post-media')).filter((p) => p !== null)
+  if (media.length) await supabase.storage.from('post-media').remove(media)
+  const { data: avatars } = await supabase.storage.from('avatars').list(me)
+  if (avatars?.length) await supabase.storage.from('avatars').remove(avatars.map((f) => `${me}/${f.name}`))
+
+  rememberSharing(false)
   const { error } = await supabase.rpc('delete_my_account')
   if (error) return fail("Couldn't delete your account", error)
   await supabase.auth.signOut({ scope: 'local' })
@@ -605,7 +643,7 @@ export async function deleteAccount() {
 export async function requestFriend(id: string) {
   const { data, error } = await supabase.from('friendships').insert({ addressee: id }).select().single()
   if (error) return fail("Couldn't send the request", error)
-  upsert(S.friendships, data as Friendship, samePair)
+  upsert(S.friendships, data as Friendship, byId)
   changed()
   return true
 }
@@ -613,7 +651,7 @@ export async function requestFriend(id: string) {
 export async function acceptFriend(id: string) {
   const { data, error } = await supabase.from('friendships').update({ accepted_at: new Date().toISOString() }).eq('requester', id).eq('addressee', S.userId!).select().single()
   if (error) return fail("Couldn't accept", error)
-  upsert(S.friendships, data as Friendship, samePair)
+  upsert(S.friendships, data as Friendship, byId)
   changed()
   refreshLocations()
   readFriendRequestsFrom(id)
@@ -628,9 +666,9 @@ function readFriendRequestsFrom(id: string) {
 export async function removeFriend(id: string) {
   const f = friendshipWith(id)
   if (!f) return true
-  const { error } = await supabase.from('friendships').delete().eq('requester', f.requester).eq('addressee', f.addressee)
+  const { error } = await supabase.from('friendships').delete().eq('id', f.id)
   if (error) return fail("Couldn't remove", error)
-  S.friendships = S.friendships.filter((x) => !samePair(x, f))
+  S.friendships = S.friendships.filter((x) => x.id !== f.id)
   S.locations.delete(id)
   changed()
   readFriendRequestsFrom(id)
@@ -745,20 +783,24 @@ export function distance(lat1: number, lng1: number, lat2: number, lng2: number)
   return 12742000 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
 }
 
-// Starts following the device's position. Resolves with the first fix, or null if we can't get one.
+// Everyone waiting for the first fix; they all hear about it together.
+let waiting: ((here: Here | null) => void)[] = []
+
+function answerWaiting(here: Here | null) {
+  for (const resolve of waiting) resolve(here)
+  waiting = []
+}
+
+// Starts following the device's position (once). Resolves with the first fix,
+// or null if we can't get one.
 export function watchHere(): Promise<Here | null> {
   if (!navigator.geolocation) return Promise.resolve(null)
   if (watchId !== null && S.here) return Promise.resolve(S.here)
 
   return new Promise((resolve) => {
-    let first = true
-    const settle = (value: Here | null) => {
-      if (first) {
-        first = false
-        resolve(value)
-      }
-    }
-    if (watchId !== null) navigator.geolocation.clearWatch(watchId)
+    waiting.push(resolve)
+    if (watchId !== null) return // already looking; this caller joins the queue
+
     watchId = navigator.geolocation.watchPosition(
       (position) => {
         S.here = {
@@ -768,10 +810,18 @@ export function watchHere(): Promise<Here | null> {
           heading: position.coords.heading ?? S.here?.heading ?? null,
         }
         changed()
-        settle(S.here)
+        answerWaiting(S.here)
         if (S.sharing) pushLocation(false)
       },
-      () => settle(null),
+      () => {
+        // Denied, or no fix at all: give up so the next ask starts fresh. A
+        // hiccup after we've had fixes keeps the watch going.
+        if (!S.here && watchId !== null) {
+          navigator.geolocation.clearWatch(watchId)
+          watchId = null
+        }
+        answerWaiting(S.here)
+      },
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 15000 },
     )
   })
@@ -802,23 +852,81 @@ export async function enableCompass() {
   window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onTurn as EventListener)
 }
 
+// Sharing is a choice remembered on this device. The row friends read exists
+// only while the app is open and in view, so nobody sees a "here" from hours ago.
+const sharingKey = () => `aroundhere.sharing.${S.userId}`
+
+function remembersSharing() {
+  try {
+    return localStorage.getItem(sharingKey()) === 'on'
+  } catch {
+    return false
+  }
+}
+
+function rememberSharing(on: boolean) {
+  try {
+    if (on) localStorage.setItem(sharingKey(), 'on')
+    else localStorage.removeItem(sharingKey())
+  } catch {
+    // Private mode: sharing just won't resume next time.
+  }
+}
+
+// Location writes go one at a time, so switching sharing off always lands last.
+let locationWrites: Promise<unknown> = Promise.resolve()
+
+function queueLocationWrite(write: () => Promise<unknown>) {
+  locationWrites = locationWrites.then(write, write)
+  return locationWrites
+}
+
 // Sends my position to friends, at most every 20 s unless I moved a fair bit.
-async function pushLocation(force: boolean) {
+function pushLocation(force: boolean) {
   const here = S.here
-  if (!here || !S.userId) return
+  if (!here || !S.userId || !S.sharing) return
   const now = Date.now()
   const moved = distance(lastSent.latitude, lastSent.longitude, here.latitude, here.longitude)
   if (!force && now - lastSent.at < 20000 && moved < 40) return
   lastSent = { at: now, latitude: here.latitude, longitude: here.longitude }
 
-  const { data, error } = await supabase
-    .from('locations')
-    .upsert({ latitude: here.latitude, longitude: here.longitude, accuracy: here.accuracy, heading: here.heading }, { onConflict: 'user_id' })
-    .select()
-    .single()
-  if (error) fail("Couldn't share your location", error)
-  else S.locations.set(S.userId, data as Location)
-  changed()
+  return queueLocationWrite(async () => {
+    // Switched off, or hidden, while this waited its turn.
+    if (!S.sharing || !S.userId || document.visibilityState === 'hidden') return
+    const { data, error } = await supabase
+      .from('locations')
+      .upsert({ latitude: here.latitude, longitude: here.longitude, accuracy: here.accuracy, heading: here.heading }, { onConflict: 'user_id' })
+      .select()
+      .single()
+    if (error) fail("Couldn't share your location", error)
+    else if (S.sharing) S.locations.set(S.userId, data as Location)
+    changed()
+  })
+}
+
+function withdrawLocation() {
+  const userId = S.userId
+  if (!userId) return
+  S.locations.delete(userId)
+  lastSent = { at: 0, latitude: 0, longitude: 0 }
+  return queueLocationWrite(async () => {
+    const { error } = await supabase.from('locations').delete().eq('user_id', userId)
+    if (error) fail("Couldn't stop sharing", error)
+  })
+}
+
+// The page is going out of view (or away): take my dot off friends' maps now.
+// A keepalive request finishes even if the page doesn't.
+function withdrawNow() {
+  const userId = S.userId
+  if (!userId || !S.session) return
+  S.locations.delete(userId)
+  lastSent = { at: 0, latitude: 0, longitude: 0 }
+  fetch(`${supabaseUrl}/rest/v1/locations?user_id=eq.${userId}`, {
+    method: 'DELETE',
+    keepalive: true,
+    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}` },
+  }).catch(() => {})
 }
 
 export async function setSharing(on: boolean) {
@@ -827,15 +935,15 @@ export async function setSharing(on: boolean) {
     const here = await watchHere()
     if (!here) return fail("Can't find you: location is blocked or unavailable", null)
     S.sharing = true
+    rememberSharing(true)
     changed()
     await pushLocation(true)
     return true
   }
   S.sharing = false
+  rememberSharing(false)
   changed()
-  const { error } = await supabase.from('locations').delete().eq('user_id', S.userId)
-  if (error) return fail("Couldn't stop sharing", error)
-  S.locations.delete(S.userId)
+  await withdrawLocation()
   changed()
   return true
 }

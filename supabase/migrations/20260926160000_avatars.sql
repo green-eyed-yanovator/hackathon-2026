@@ -16,3 +16,14 @@ create policy "people upload their own avatar" on storage.objects
 create policy "people remove their old avatars" on storage.objects
   for delete to authenticated
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+-- Deleting your account takes your pins' photos with it.
+create policy "authors remove media of their pins" on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id = 'post-media'
+    and exists (
+      select 1 from public.posts
+      where id::text = (storage.foldername(name))[1] and author_id = (select auth.uid())
+    )
+  );
