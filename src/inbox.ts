@@ -161,3 +161,56 @@ export function useInbox(userId: string | null) {
 }
 
 export type InboxApi = ReturnType<typeof useInbox>
+
+// One entry per neighbour you've messaged, latest conversation first.
+export function conversationsOf(userId: string, messages: Message[]) {
+  const byOther = new Map<string, { other: string; last: Message; unread: number }>()
+
+  for (const message of messages) {
+    const other = message.sender_id === userId ? message.recipient_id : message.sender_id
+    const unread = message.recipient_id === userId && !message.read_at ? 1 : 0
+
+    byOther.set(other, { other, last: message, unread: (byOther.get(other)?.unread ?? 0) + unread })
+  }
+
+  return [...byOther.values()].reverse()
+}
+
+export function describeNotification(notification: NotificationRow) {
+  const title = `“${notification.post_title ?? 'a pin'}”`
+
+  switch (notification.kind) {
+    case 'reply':
+      return { icon: '💬', text: `replied to your pin ${title}` }
+    case 'saved_reply':
+      return { icon: '🔔', text: `replied to ${title}, a pin you saved` }
+    case 'save':
+      return { icon: '⭐', text: `saved your pin ${title}` }
+  }
+}
+
+// Display names by user id, fetched on first use and shared for the session.
+const nameCache: Record<string, string> = {}
+
+export function useNames(ids: string[]) {
+  const [names, setNames] = useState<Record<string, string>>(() => ({ ...nameCache }))
+
+  const missing = [...new Set(ids)].filter((id) => !(id in names)).sort().join(',')
+
+  useEffect(() => {
+    if (!missing) {
+      return
+    }
+
+    supabase
+      .from('profiles')
+      .select('id, display_name')
+      .in('id', missing.split(','))
+      .then(({ data }) => {
+        for (const profile of data ?? []) nameCache[profile.id] = profile.display_name
+        setNames({ ...nameCache })
+      })
+  }, [missing])
+
+  return names
+}

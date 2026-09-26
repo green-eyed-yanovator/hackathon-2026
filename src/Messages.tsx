@@ -1,90 +1,94 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { supabase } from './lib/supabase'
+import { conversationsOf } from './inbox'
 import type { Message } from './types'
-import { linkButtonStyle, noticeStyle, primaryButtonStyle } from './ui'
+import { ago, avatar, noticeStyle } from './ui'
 
-type Props = {
+export function ConversationList({
+  userId,
+  messages,
+  names,
+  onOpen,
+}: {
   userId: string
   messages: Message[]
-  // The open conversation, or null for the list of conversations.
-  withUser: string | null
-  onSelect: (otherId: string | null) => void
+  names: Record<string, string>
+  onOpen: (otherId: string) => void
+}) {
+  const conversations = conversationsOf(userId, messages)
+
+  if (conversations.length === 0) {
+    return <p className="empty">No messages yet. Tap Message on a neighbour's profile to say hi.</p>
+  }
+
+  return conversations.map(({ other, last, unread }) => (
+    <button
+      key={other}
+      className={unread ? 'row unread' : 'row'}
+      onClick={() => onOpen(other)}
+    >
+      {avatar(other, names[other] ?? null)}
+      <div className="row-main">
+        <div className="row-title" style={{ fontWeight: unread ? 700 : 500 }}>
+          {names[other] ?? '…'}
+        </div>
+        <div className="row-meta row-title">
+          {last.sender_id === userId ? 'You: ' : ''}
+          {last.body}
+        </div>
+      </div>
+      <span className="row-time">{ago(last.created_at)}</span>
+      {unread > 0 && <span className="dot" />}
+    </button>
+  ))
+}
+
+type ChatProps = {
+  userId: string
+  otherId: string
+  name: string | null
+  messages: Message[]
+  onBack: () => void
   onSend: (recipientId: string, body: string) => Promise<string | null>
   onRead: (otherId: string) => void
   onOpenProfile: (id: string) => void
 }
 
-export default function Messages({
+export default function Chat({
   userId,
+  otherId,
+  name,
   messages,
-  withUser,
-  onSelect,
+  onBack,
   onSend,
   onRead,
   onOpenProfile,
-}: Props) {
-  const [names, setNames] = useState<Record<string, string>>({})
+}: ChatProps) {
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const endRef = useRef<HTMLDivElement>(null)
 
-  const otherOf = (message: Message) =>
-    message.sender_id === userId ? message.recipient_id : message.sender_id
-
-  // Latest message first, one row per neighbour.
-  const conversations = new Map<string, { last: Message; unread: number }>()
-  for (const message of messages) {
-    const other = otherOf(message)
-    const unread = message.recipient_id === userId && !message.read_at ? 1 : 0
-    conversations.set(other, {
-      last: message,
-      unread: (conversations.get(other)?.unread ?? 0) + unread,
-    })
-  }
-  const conversationList = [...conversations.entries()].reverse()
-
-  const thread = withUser ? messages.filter((message) => otherOf(message) === withUser) : []
-  const unreadInThread = withUser ? (conversations.get(withUser)?.unread ?? 0) : 0
-
-  // Load display names for everyone we're talking to.
-  const missingKey = [...new Set([...conversations.keys(), ...(withUser ? [withUser] : [])])]
-    .filter((id) => !(id in names))
-    .join(',')
+  const thread = messages.filter(
+    (message) => message.sender_id === otherId || message.recipient_id === otherId,
+  )
+  const unread = thread.some((message) => message.sender_id === otherId && !message.read_at)
 
   useEffect(() => {
-    if (!missingKey) {
-      return
+    if (unread) {
+      onRead(otherId)
     }
-
-    supabase
-      .from('profiles')
-      .select('id, display_name')
-      .in('id', missingKey.split(','))
-      .then(({ data }) => {
-        setNames((current) => ({
-          ...current,
-          ...Object.fromEntries((data ?? []).map((profile) => [profile.id, profile.display_name])),
-        }))
-      })
-  }, [missingKey])
-
-  useEffect(() => {
-    if (withUser && unreadInThread > 0) {
-      onRead(withUser)
-    }
-  }, [withUser, unreadInThread, onRead])
+  }, [unread, otherId, onRead])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
   }, [thread.length])
 
-  async function handleSend() {
-    if (!withUser || !text.trim()) {
+  async function send() {
+    if (!text.trim()) {
       return
     }
 
-    const sendError = await onSend(withUser, text.trim())
+    const sendError = await onSend(otherId, text.trim())
 
     if (sendError) {
       setError(sendError)
@@ -95,70 +99,28 @@ export default function Messages({
     setError('')
   }
 
-  if (!withUser) {
-    return conversationList.length === 0 ? (
-      <p style={{ margin: 0, color: '#777', fontSize: '14px' }}>
-        No messages yet. Open a neighbour's profile and tap Message to start a conversation.
-      </p>
-    ) : (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {conversationList.map(([other, { last, unread }]) => (
-          <button
-            key={other}
-            onClick={() => onSelect(other)}
-            style={{
-              textAlign: 'left',
-              border: 'none',
-              padding: '12px',
-              background: unread ? '#eff6ff' : '#f3f4f6',
-              borderRadius: '10px',
-              cursor: 'pointer',
-              color: '#333',
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
-              <span>{names[other] ?? '…'}</span>
-              {unread > 0 && <span style={{ color: '#2563eb' }}>{unread} new</span>}
-            </div>
-            <div
-              style={{
-                marginTop: '4px',
-                fontSize: '13px',
-                color: '#666',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {last.sender_id === userId ? 'You: ' : ''}
-              {last.body}
-            </div>
-          </button>
-        ))}
-      </div>
-    )
-  }
-
   return (
-    <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-        <button onClick={() => onSelect(null)} style={linkButtonStyle}>
-          ← All messages
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+        <button onClick={onBack} className="row" style={{ width: 'auto', padding: '6px 10px' }}>
+          ←
         </button>
-        <button
-          onClick={() => onOpenProfile(withUser)}
-          style={{ ...linkButtonStyle, fontWeight: 600, color: '#222' }}
-        >
-          {names[withUser] ?? '…'}
+        <button onClick={() => onOpenProfile(otherId)} className="row" style={{ padding: '6px' }}>
+          {avatar(otherId, name, 36)}
+          <div className="row-main">
+            <div style={{ fontWeight: 700 }}>{name ?? '…'}</div>
+            <div className="row-meta">View profile</div>
+          </div>
         </button>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-        {thread.length === 0 && (
-          <p style={{ margin: 0, color: '#777', fontSize: '14px' }}>Say hello 👋</p>
-        )}
-        {thread.map((message) => {
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {thread.length === 0 && <p className="empty">Say hello 👋</p>}
+        {thread.map((message, index) => {
           const mine = message.sender_id === userId
+          const next = thread[index + 1]
+          // Show the time once per run of messages from the same person.
+          const lastOfRun = !next || next.sender_id !== message.sender_id
 
           return (
             <div
@@ -166,26 +128,58 @@ export default function Messages({
               style={{
                 alignSelf: mine ? 'flex-end' : 'flex-start',
                 maxWidth: '80%',
-                padding: '10px 12px',
-                borderRadius: '14px',
-                background: mine ? '#000' : '#f3f4f6',
-                color: mine ? 'white' : '#222',
-                fontSize: '14px',
-                whiteSpace: 'pre-wrap',
-                overflowWrap: 'anywhere',
+                textAlign: mine ? 'right' : 'left',
               }}
             >
-              {message.body}
+              <div
+                style={{
+                  display: 'inline-block',
+                  padding: '9px 13px',
+                  borderRadius: mine ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                  background: mine ? '#111' : '#f1f3f5',
+                  color: mine ? 'white' : '#222',
+                  fontSize: '14px',
+                  lineHeight: 1.4,
+                  textAlign: 'left',
+                  whiteSpace: 'pre-wrap',
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                {message.body}
+              </div>
+              {lastOfRun && (
+                <div className="row-meta" style={{ margin: '2px 4px 6px' }}>
+                  {ago(message.created_at)}
+                  {mine && message.read_at && ' · Seen'}
+                </div>
+              )}
             </div>
           )
         })}
         <div ref={endRef} />
       </div>
 
+      {error && (
+        <p role="alert" style={noticeStyle}>
+          {error}
+        </p>
+      )}
+
       <form
         onSubmit={(event) => {
           event.preventDefault()
-          handleSend()
+          send()
+        }}
+        style={{
+          position: 'sticky',
+          bottom: '-24px',
+          display: 'flex',
+          gap: '8px',
+          alignItems: 'flex-end',
+          margin: '12px -24px -24px',
+          padding: '12px 24px 24px',
+          background: 'white',
+          borderTop: '1px solid #eee',
         }}
       >
         <textarea
@@ -194,34 +188,39 @@ export default function Messages({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
-              handleSend()
+              send()
             }
           }}
           placeholder="Write a message..."
-          rows={2}
+          rows={1}
           maxLength={2000}
           style={{
-            width: '100%',
+            flex: 1,
             boxSizing: 'border-box',
-            padding: '12px',
-            border: '1px solid #ccc',
-            borderRadius: '10px',
+            padding: '10px 14px',
+            border: '1px solid #ddd',
+            borderRadius: '20px',
             fontSize: '14px',
-            resize: 'vertical',
-            marginBottom: '10px',
+            fontFamily: 'inherit',
+            resize: 'none',
           }}
         />
-        {error && (
-          <p role="alert" style={noticeStyle}>
-            {error}
-          </p>
-        )}
-        <div style={{ display: 'flex' }}>
-          <button type="submit" disabled={!text.trim()} style={primaryButtonStyle(text.trim() !== '')}>
-            Send
-          </button>
-        </div>
+        <button
+          type="submit"
+          disabled={!text.trim()}
+          style={{
+            padding: '10px 16px',
+            border: 'none',
+            borderRadius: '20px',
+            background: text.trim() ? '#111' : '#ccc',
+            color: 'white',
+            fontWeight: 600,
+            cursor: text.trim() ? 'pointer' : 'not-allowed',
+          }}
+        >
+          Send
+        </button>
       </form>
-    </>
+    </div>
   )
 }

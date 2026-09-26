@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Map,
   Marker,
@@ -9,6 +9,7 @@ import {
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 
 import 'maplibre-gl/dist/maplibre-gl.css'
+import './App.css'
 import type { Session } from '@supabase/supabase-js'
 import AuthPanel from './AuthPanel'
 import { useInbox } from './inbox'
@@ -16,13 +17,12 @@ import ProfilePanel from './ProfilePanel'
 import { supabase } from './lib/supabase'
 import type {
   AuthMode,
-  MenuTab,
   NotificationRow,
   Post,
   Profile,
   Reply,
 } from './types'
-import { linkButtonStyle, rightPanelStyle } from './ui'
+import { ago, avatar, linkButtonStyle, rightPanelStyle } from './ui'
 
 setWorkerUrl(workerUrl)
 
@@ -61,8 +61,8 @@ const [replyText, setReplyText] = useState('')
   const [myProfile, setMyProfile] = useState<Profile | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode | null>(null)
   const [profileId, setProfileId] = useState<string | null>(null)
-  const [menuTab, setMenuTab] = useState<MenuTab>('profile')
-  const [messageWith, setMessageWith] = useState<string | null>(null)
+  // The conversation open in your menu, if any.
+  const [chatWith, setChatWith] = useState<string | null>(null)
   const [saved, setSaved] = useState<{ owner: string | null; ids: string[] }>({
     owner: null,
     ids: [],
@@ -71,10 +71,24 @@ const [replyText, setReplyText] = useState('')
   const userId = session?.user.id ?? null
   // Ignore a profile or saved pins left over from a previous session.
   const me = myProfile?.id === userId ? myProfile : null
-  const savedIds = saved.owner === userId ? saved.ids : []
+  const savedIds = useMemo(
+    () => (saved.owner === userId ? saved.ids : []),
+    [saved, userId],
+  )
 
   const inbox = useInbox(userId)
   const unreadTotal = inbox.unreadNotifications + inbox.unreadMessages
+
+  // Pins with unread notifications get a red dot on the map.
+  const newActivityIds = useMemo(
+    () =>
+      new Set(
+        inbox.notifications
+          .filter((notification) => !notification.read_at)
+          .map((notification) => notification.post_id),
+      ),
+    [inbox.notifications],
+  )
 
   useEffect(() => {
     if (!userId) {
@@ -160,7 +174,24 @@ const [replyText, setReplyText] = useState('')
       setPosts(data ?? [])
     }
 
+    // A neighbourhood's replies are small: load them once, then threads,
+    // reply counts and "replied to" lists are instant and need no more requests.
+    async function loadReplies() {
+      const { data, error } = await supabase
+        .from('replies')
+        .select('*')
+        .order('created_at', { ascending: true })
+
+      if (error) {
+        console.error('Failed to load replies:', error)
+        return
+      }
+
+      setReplies(data ?? [])
+    }
+
     loadPosts()
+    loadReplies()
 
     if (!mapContainer.current || map.current) {
       return
@@ -260,57 +291,45 @@ const [replyText, setReplyText] = useState('')
 }, [])
 
   useEffect(() => {
-    if (!map.current || posts.length === 0) {
+    if (!map.current) {
       return
     }
 
     markers.current.forEach((marker) => marker.remove())
-    markers.current = []
 
-    posts.forEach((post) => {
-      const marker = new Marker()
-        .setLngLat([post.longitude, post.latitude])
-        .addTo(map.current!)
+    const replyCounts: Record<string, number> = {}
+    for (const reply of replies) {
+      replyCounts[reply.post_id] = (replyCounts[reply.post_id] ?? 0) + 1
+    }
 
-      marker.getElement().addEventListener('click', () => {
+    // Your pins are black, saved pins gold, the rest blue; a red dot means
+    // unread activity. The number is the reply count.
+    markers.current = posts.map((post) => {
+      const element = document.createElement('div')
+      element.className = [
+        'pin',
+        userId && post.author_id === userId && 'mine',
+        savedIds.includes(post.id) && 'saved',
+        newActivityIds.has(post.id) && 'new',
+      ]
+        .filter(Boolean)
+        .join(' ')
+      element.title = post.title
+      element.innerHTML = '<div class="pin-head"><span></span></div>'
+      element.querySelector('span')!.textContent = replyCounts[post.id]
+        ? String(replyCounts[post.id])
+        : ''
+
+      element.addEventListener('click', () => {
         setProfileId(null)
         setSelectedPost(post)
       })
 
-      markers.current.push(marker)
+      return new Marker({ element, anchor: 'bottom' })
+        .setLngLat([post.longitude, post.latitude])
+        .addTo(map.current!)
     })
-  }, [posts])
-
-  useEffect(() => {
-    if (!selectedPost) {
-      return
-    }
-
-    // Drop the response if another thread was opened before it arrived.
-    let ignore = false
-
-    supabase
-      .from('replies')
-      .select('*')
-      .eq('post_id', selectedPost.id)
-      .order('created_at', { ascending: true })
-      .then(({ data, error }) => {
-        if (ignore) {
-          return
-        }
-
-        if (error) {
-          console.error('Failed to load replies:', error)
-          return
-        }
-
-        setReplies(data ?? [])
-      })
-
-    return () => {
-      ignore = true
-    }
-  }, [selectedPost])
+  }, [posts, replies, savedIds, newActivityIds, userId])
 
 async function handleCreateReply() {
   if (!selectedPost || !replyText.trim()) {
@@ -465,18 +484,18 @@ async function handleCreateReply() {
   function openProfile(id: string) {
     setSelectedPost(null)
     setProfileId(id)
-    setMenuTab('profile')
+    setChatWith(null)
   }
 
-  function openMenu(tab: MenuTab, withUser: string | null = null) {
+  // Your own profile is the menu; pass someone's id to open your chat with them.
+  function openMenu(withUser: string | null = null) {
     if (!userId) {
       return
     }
 
     setSelectedPost(null)
     setProfileId(userId)
-    setMenuTab(tab)
-    setMessageWith(withUser)
+    setChatWith(withUser)
   }
 
   function openNotification(notification: NotificationRow) {
@@ -613,10 +632,12 @@ async function handleCreateReply() {
 
           {session && (
             <button
-              onClick={() => openProfile(session.user.id)}
-              title="Your profile"
-              style={{ ...linkButtonStyle, color: '#222' }}
+              onClick={() => openMenu()}
+              title="Your profile, pins and messages"
+              className="row"
+              style={{ width: 'auto', padding: '4px 8px 4px 4px', fontWeight: 600 }}
             >
+              {avatar(userId, me?.display_name ?? null, 28)}
               {me?.display_name ?? session.user.email}
               {unreadTotal > 0 && (
                 <span
@@ -656,6 +677,15 @@ async function handleCreateReply() {
         </div>
       </header>
 
+      {session && (
+        <div className="legend">
+          <span><i style={{ background: '#111' }} />Yours</span>
+          <span><i style={{ background: '#f59e0b' }} />Saved</span>
+          <span><i style={{ background: '#2563eb' }} />Neighbours</span>
+          <span><i style={{ background: '#dc2626' }} />New activity</span>
+        </div>
+      )}
+
       {/* Add button */}
       {!showAddForm && (
         <button
@@ -681,208 +711,206 @@ async function handleCreateReply() {
       )}
       {/* Thread details */}
 {selectedPost && (
-  <aside style={rightPanelStyle}>
+  <aside className="menu" style={rightPanelStyle}>
     <button
       onClick={() => setSelectedPost(null)}
+      aria-label="Close"
       style={{
+        float: 'right',
         border: 'none',
         background: 'transparent',
         fontSize: '24px',
+        lineHeight: 1,
         cursor: 'pointer',
         padding: 0,
-        marginBottom: '20px',
       }}
     >
       ×
     </button>
 
-    <h2
-      style={{
-        margin: '0 0 12px',
-        fontSize: '26px',
-        color: '#111',
-      }}
-    >
+    {selectedPost.author_id ? (
+      <button
+        className="row"
+        onClick={() => openProfile(selectedPost.author_id!)}
+        style={{ width: 'auto', padding: '4px 10px 4px 4px', marginBottom: '12px' }}
+      >
+        {avatar(selectedPost.author_id, selectedPost.author_name, 36)}
+        <div className="row-main">
+          <div style={{ fontWeight: 600 }}>{selectedPost.author_name}</div>
+          <div className="row-meta">Posted {ago(selectedPost.created_at)}</div>
+        </div>
+      </button>
+    ) : (
+      <div className="row-meta" style={{ marginBottom: '12px' }}>
+        Posted {ago(selectedPost.created_at)}
+      </div>
+    )}
+
+    <h2 style={{ margin: '0 0 8px', fontSize: '24px', color: '#111' }}>
       {selectedPost.title}
     </h2>
 
-    {selectedPost.author_id && (
-      <p
-        style={{
-          margin: '0 0 12px',
-          fontSize: '14px',
-          color: '#777',
-        }}
-      >
-        by{' '}
-        <button
-          onClick={() => openProfile(selectedPost.author_id!)}
-          style={{ ...linkButtonStyle, color: '#444' }}
-        >
-          {selectedPost.author_name}
-        </button>
-      </p>
-    )}
-
-    {session && (
-      <button
-        onClick={() => toggleSave(selectedPost.id)}
-        style={{
-          marginBottom: '16px',
-          padding: '6px 12px',
-          border: '1px solid #ccc',
-          borderRadius: '999px',
-          background: savedIds.includes(selectedPost.id) ? '#fef3c7' : 'white',
-          fontSize: '14px',
-          cursor: 'pointer',
-        }}
-      >
-        {savedIds.includes(selectedPost.id) ? '★ Saved' : '☆ Save'}
-      </button>
-    )}
-
     <p
       style={{
-        margin: '0 0 24px',
+        margin: '0 0 16px',
         fontSize: '16px',
         lineHeight: 1.5,
         color: '#444',
+        whiteSpace: 'pre-wrap',
       }}
     >
       {selectedPost.description}
     </p>
 
-    <div
-  style={{
-    padding: '12px',
-    background: '#f3f4f6',
-    borderRadius: '10px',
-    fontSize: '13px',
-    color: '#666',
-    marginBottom: '24px',
-  }}
->
-  📍 Thread location
-</div>
+    {session && (
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button
+          onClick={() => toggleSave(selectedPost.id)}
+          style={{
+            padding: '7px 14px',
+            border: '1px solid #ddd',
+            borderRadius: '999px',
+            background: savedIds.includes(selectedPost.id) ? '#fef3c7' : 'white',
+            fontSize: '14px',
+            cursor: 'pointer',
+          }}
+        >
+          {savedIds.includes(selectedPost.id) ? '★ Saved' : '☆ Save'}
+        </button>
 
-<h3
-  style={{
-    margin: '0 0 12px',
-    fontSize: '18px',
-    color: '#111',
-  }}
->
-  Replies
-</h3>
-
-<div
-  style={{
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-    marginBottom: '20px',
-  }}
->
-  {threadReplies.length === 0 ? (
-    <p
-      style={{
-        margin: 0,
-        color: '#777',
-        fontSize: '14px',
-      }}
-    >
-      No replies yet.
-    </p>
-  ) : (
-    threadReplies.map((reply) => (
-      <div
-        key={reply.id}
-        style={{
-          padding: '12px',
-          background: '#f3f4f6',
-          borderRadius: '10px',
-          color: '#333',
-        }}
-      >
-        {reply.author_id && (
+        {selectedPost.author_id && selectedPost.author_id !== userId && (
           <button
-            onClick={() => openProfile(reply.author_id!)}
+            onClick={() => openMenu(selectedPost.author_id)}
             style={{
-              ...linkButtonStyle,
-              display: 'block',
-              marginBottom: '4px',
-              fontSize: '12px',
-              fontWeight: 600,
-              color: '#666',
-              textDecoration: 'none',
+              padding: '7px 14px',
+              border: '1px solid #ddd',
+              borderRadius: '999px',
+              background: 'white',
+              fontSize: '14px',
+              cursor: 'pointer',
             }}
           >
-            {reply.author_name}
+            ✉️ Message
           </button>
         )}
-        {reply.content}
       </div>
-    ))
-  )}
-</div>
+    )}
 
-{session ? (
-  <>
-    <textarea
-      value={replyText}
-      onChange={(event) => setReplyText(event.target.value)}
-      placeholder="Write a reply..."
-      rows={3}
-      style={{
-        width: '100%',
-        boxSizing: 'border-box',
-        padding: '12px',
-        border: '1px solid #ccc',
-        borderRadius: '10px',
-        fontSize: '14px',
-        resize: 'vertical',
-        marginBottom: '10px',
-      }}
-    />
+    <div className="section-title">
+      <span>
+        {threadReplies.length === 0
+          ? 'Replies'
+          : `${threadReplies.length} ${threadReplies.length === 1 ? 'reply' : 'replies'}`}
+      </span>
+    </div>
 
-    <button
-      onClick={handleCreateReply}
-      disabled={!replyText.trim()}
+    {threadReplies.length === 0 ? (
+      <p className="empty">No replies yet. Be the first.</p>
+    ) : (
+      threadReplies.map((reply) => (
+        <div key={reply.id} style={{ display: 'flex', gap: '10px', padding: '8px 0' }}>
+          {avatar(reply.author_id, reply.author_name, 30)}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="row-meta" style={{ marginTop: 0 }}>
+              {reply.author_id ? (
+                <button
+                  onClick={() => openProfile(reply.author_id!)}
+                  style={{
+                    ...linkButtonStyle,
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: '#222',
+                    textDecoration: 'none',
+                  }}
+                >
+                  {reply.author_name}
+                </button>
+              ) : (
+                <strong>Anonymous</strong>
+              )}
+              {' · '}
+              {ago(reply.created_at)}
+            </div>
+            <div
+              style={{
+                marginTop: '2px',
+                fontSize: '14px',
+                lineHeight: 1.45,
+                color: '#333',
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {reply.content}
+            </div>
+          </div>
+        </div>
+      ))
+    )}
+
+    <div
       style={{
-        width: '100%',
-        border: 'none',
-        background: replyText.trim() ? '#000' : '#ccc',
-        color: 'white',
-        padding: '12px',
-        borderRadius: '10px',
-        fontSize: '15px',
-        fontWeight: 600,
-        cursor: replyText.trim()
-          ? 'pointer'
-          : 'not-allowed',
+        position: 'sticky',
+        bottom: '-24px',
+        margin: '16px -24px -24px',
+        padding: '12px 24px 24px',
+        background: 'white',
+        borderTop: '1px solid #eee',
       }}
     >
-      Reply
-    </button>
-  </>
-) : (
-  <button
-    onClick={() => setAuthMode('signup')}
-    style={{
-      width: '100%',
-      border: '1px solid #ccc',
-      background: 'white',
-      color: '#222',
-      padding: '12px',
-      borderRadius: '10px',
-      fontSize: '15px',
-      fontWeight: 600,
-      cursor: 'pointer',
-    }}
-  >
-    Sign up to reply
-  </button>
-)}
+      {session ? (
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+          <textarea
+            value={replyText}
+            onChange={(event) => setReplyText(event.target.value)}
+            placeholder="Write a reply..."
+            rows={2}
+            style={{
+              flex: 1,
+              boxSizing: 'border-box',
+              padding: '10px 14px',
+              border: '1px solid #ddd',
+              borderRadius: '16px',
+              fontSize: '14px',
+              fontFamily: 'inherit',
+              resize: 'none',
+            }}
+          />
+          <button
+            onClick={handleCreateReply}
+            disabled={!replyText.trim()}
+            style={{
+              padding: '10px 16px',
+              border: 'none',
+              borderRadius: '20px',
+              background: replyText.trim() ? '#111' : '#ccc',
+              color: 'white',
+              fontWeight: 600,
+              cursor: replyText.trim() ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Reply
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setAuthMode('signup')}
+          style={{
+            width: '100%',
+            border: '1px solid #ccc',
+            background: 'white',
+            color: '#222',
+            padding: '12px',
+            borderRadius: '10px',
+            fontSize: '15px',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Sign up to reply
+        </button>
+      )}
+    </div>
   </aside>
 )}
 
@@ -1107,30 +1135,29 @@ async function handleCreateReply() {
         <ProfilePanel
           key={profileId}
           profileId={profileId}
-          ownEmail={
-            profileId === userId ? (session?.user.email ?? '') : null
-          }
-          menu={
+          seed={profileId === userId ? me : null}
+          own={
             profileId === userId
               ? {
-                  tab: menuTab,
-                  onTabChange: (tab) => openMenu(tab),
+                  email: session?.user.email ?? '',
                   inbox,
-                  savedIds,
-                  messageWith,
-                  onMessageWith: setMessageWith,
+                  chatWith,
+                  onChat: setChatWith,
                   onOpenNotification: openNotification,
                   onOpenProfile: openProfile,
+                  onChangePassword: () => setAuthMode('new-password'),
+                  onSignOut: handleSignOut,
                 }
               : null
           }
           posts={posts}
+          replies={replies}
+          savedIds={savedIds}
           onOpenPost={openPostFromProfile}
           onSaved={handleProfileSaved}
-          onChangePassword={() => setAuthMode('new-password')}
           onMessage={
             userId && profileId !== userId
-              ? () => openMenu('messages', profileId)
+              ? () => openMenu(profileId)
               : null
           }
           onClose={() => setProfileId(null)}

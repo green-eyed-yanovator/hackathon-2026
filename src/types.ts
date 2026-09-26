@@ -53,5 +53,3 @@ export type Message = {
   created_at: string
   read_at: string | null
 }
-
-export type MenuTab = 'profile' | 'pins' | 'notifications' | 'messages'
