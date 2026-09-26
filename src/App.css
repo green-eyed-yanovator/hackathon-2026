@@ -1830,6 +1830,12 @@ textarea::placeholder {
   color: #2f7cf6;
 }
 
+.icon-btn.tool.follow,
+.icon-btn.tool.follow:hover {
+  background: #2f7cf6;
+  color: #fff;
+}
+
 .fab {
   position: absolute;
   z-index: 12;

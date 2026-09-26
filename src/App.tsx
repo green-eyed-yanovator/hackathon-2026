@@ -89,6 +89,7 @@ const UI = {
   alerts: stored('aroundhere.alerts') === 'on',
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
   banner: null as { title: string; sub: string } | null,
+  follow: false, // the camera keeps you in the middle until you move the map
 }
 
 let map: MapState | null = null
@@ -361,6 +362,19 @@ async function locate() {
     return
   }
   reveal(here.latitude, here.longitude, Math.max(map?.zoom ?? 16, 16.5), true)
+  followed = here
+  ui({ follow: true })
+}
+
+// Following: when my position moves, the camera goes with it.
+let followed: { latitude: number; longitude: number } | null = null
+
+function keepFollowing() {
+  const here = S.here
+  if (!UI.follow || !here || !map || map.fly) return
+  if (followed && distance(followed.latitude, followed.longitude, here.latitude, here.longitude) < 3) return
+  followed = here
+  reveal(here.latitude, here.longitude, map.zoom, true)
 }
 
 function startCompose() {
@@ -1505,6 +1519,7 @@ const MUTABLE: [string, string][] = [
   ['save', 'People saving your pins'],
   ['resolved', 'Pins you follow getting resolved'],
   ['friend_request', 'Friend requests'],
+  ['friend_post', 'Friends pinning something new'],
 ]
 
 function ThemeSwatch({ id }: { id: string }) {
@@ -2125,6 +2140,7 @@ export default function App() {
     const m = createMap(canvasRef.current!, UI.view.lng, UI.view.lat, UI.view.zoom, UI.theme)
     map = m
     let saveTimer = 0
+    let lastCenter = center(m)
 
     m.onClick = (marker, lng, lat) => {
       if (UI.route.kind === 'new') {
@@ -2149,6 +2165,9 @@ export default function App() {
         go(`user/${S.userId}`)
       }
     }
+    m.onUserMove = () => {
+      if (UI.follow) ui({ follow: false })
+    }
     m.onHover = (marker) => ui({ hover: marker && marker.kind !== 'me' ? marker.id : null })
     m.onFrame = () => {
       // Keep the hover card glued to its pin, without a React render per frame.
@@ -2160,9 +2179,11 @@ export default function App() {
         card.style.transform = `translate(${Math.round(p.x - card.offsetWidth / 2)}px, ${Math.round(p.y - lift - card.offsetHeight)}px)`
       }
 
-      // Remember the view, and re-sort "Around" once the map settles.
+      // Remember the view, and re-sort "Around", once the camera has stopped moving.
+      // Frames keep coming while things pulse, so compare with the last frame.
       const c = center(m)
-      if (Math.abs(c.lat - UI.view.lat) > 1e-6 || Math.abs(c.lng - UI.view.lng) > 1e-6 || Math.abs(c.zoom - UI.view.zoom) > 0.01) {
+      if (c.lat !== lastCenter.lat || c.lng !== lastCenter.lng || c.zoom !== lastCenter.zoom) {
+        lastCenter = c
         window.clearTimeout(saveTimer)
         saveTimer = window.setTimeout(() => {
           store('aroundhere.view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: c.zoom }))
@@ -2184,6 +2205,7 @@ export default function App() {
     map.draftMode = UI.route.kind === 'new'
     setMarkers(map, buildMarkers(posts))
     map.canvas.style.cursor = map.draftMode ? 'crosshair' : 'grab'
+    keepFollowing()
   })
 
   // Keys: the map is the main surface, so single letters drive it.
@@ -2307,7 +2329,7 @@ export default function App() {
         <button className="icon-btn tool" onClick={() => map && zoomBy(map, -1)} aria-label="Zoom out" title="Zoom out (−)">
           <Icon name="minus" />
         </button>
-        <button className={S.here ? 'icon-btn tool on' : 'icon-btn tool'} onClick={locate} aria-label="Where am I" title="Where am I (L)">
+        <button className={UI.follow ? 'icon-btn tool follow' : S.here ? 'icon-btn tool on' : 'icon-btn tool'} onClick={locate} aria-label="Where am I" title="Where am I (L)">
           <Icon name="locate" />
         </button>
       </div>

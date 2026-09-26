@@ -719,6 +719,7 @@ export type MapState = {
   onClick: (marker: Marker | null, lng: number, lat: number) => void
   onHover: (marker: Marker | null) => void
   onFrame: () => void
+  onUserMove: () => void // the person moved the map themselves
 }
 
 export function worldSize(m: MapState) {
@@ -754,7 +755,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
     fade: null, tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
-    onClick: () => {}, onHover: () => {}, onFrame: () => {},
+    onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {},
   }
 
   fetch(TILEJSON_URL)
@@ -898,6 +899,7 @@ function attachInput(m: MapState) {
     } else if (m.pointers.size === 2) {
       m.pinchDistance = pinchInfo().distance
       m.moved = true
+      m.onUserMove()
     }
   }
 
@@ -921,6 +923,7 @@ function attachInput(m: MapState) {
 
     if (m.pointers.size === 1) {
       if (!m.moved && Math.hypot(p.x - m.downX, p.y - m.downY) < 4) return
+      if (!m.moved) m.onUserMove()
       m.moved = true
       canvas.style.cursor = 'grabbing'
       panBy(m, previous.x - p.x, previous.y - p.y)
@@ -1003,6 +1006,7 @@ function attachInput(m: MapState) {
     if (event.deltaMode === 1) delta *= 16
     // Trackpad pinches arrive as ctrl+wheel with small deltas.
     const amount = event.ctrlKey ? -delta / 100 : -delta / 450
+    m.onUserMove()
     m.fly = null
     m.vx = m.vy = 0
     m.zoomTarget = clamp((m.zoomTarget ?? m.zoom) + clamp(amount, -1, 1), MIN_ZOOM, MAX_ZOOM)

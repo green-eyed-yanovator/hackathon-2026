@@ -86,7 +86,7 @@ alter publication supabase_realtime add table public.friendships, public.locatio
 -- Friend requests and acceptances show up as notifications.
 alter table public.notifications drop constraint notifications_kind_check;
 alter table public.notifications add constraint notifications_kind_check
-  check (kind in ('reply', 'saved_reply', 'thread_reply', 'save', 'interest', 'resolved', 'friend_request', 'friend_accept'));
+  check (kind in ('reply', 'saved_reply', 'thread_reply', 'save', 'interest', 'resolved', 'friend_request', 'friend_accept', 'friend_post'));
 
 create function public.notify_friendship() returns trigger
 language plpgsql security definer set search_path = ''
@@ -107,6 +107,27 @@ $$;
 create trigger notify_friendship
   after insert or update of accepted_at on public.friendships
   for each row execute function public.notify_friendship();
+
+-- A new pin tells the author's friends.
+create function public.notify_friend_post() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  perform public.notify(friend.id, 'friend_post', new.author_id, new, new.description)
+  from (
+    select case when requester = new.author_id then addressee else requester end as id
+    from public.friendships
+    where accepted_at is not null and new.author_id in (requester, addressee)
+  ) friend;
+
+  return new;
+end;
+$$;
+
+create trigger notify_friend_post
+  after insert on public.posts
+  for each row when (new.author_id is not null)
+  execute function public.notify_friend_post();
 
 -- Names in the app come from profiles, loaded once and kept live.
 alter publication supabase_realtime add table public.profiles;
