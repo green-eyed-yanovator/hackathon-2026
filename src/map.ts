@@ -662,12 +662,12 @@ function collectLabels(tile: SourceTile) {
 
 // The closest named road to a point, from tiles already loaded; '' if none is near.
 // Good enough to say "near Rundle Street" without a geocoding service.
-export function nearestStreet(m: MapState, lng: number, lat: number) {
+export function nearestStreet(m: MapState, lng: number, lat: number, within = 160) {
   const n = 2 ** SOURCE_MAX_ZOOM
   const x = lngToX(lng) * n
   const y = latToY(lat) * n
   let best = ''
-  let bestDistance = 160 // tile units at z14, roughly 100 m
+  let bestDistance = within // tile units at z14; 160 is roughly 100 m
 
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
@@ -2382,6 +2382,7 @@ export type Route = {
   state: 'waiting' | 'ready' | 'far' | 'none' // none: the roads we have don't join up, or didn't load
   points: number[] // world x, y pairs, from you to the destination
   meters: number
+  via: string // the street a good part of the way is along, if there is one
 }
 
 const metersPerWorld = (y: number) => 40075016.686 * Math.cos((yToLat(y) * Math.PI) / 180)
@@ -2441,7 +2442,7 @@ export function setRoute(m: MapState, from: { lng: number; lat: number } | null,
   }
 
   // The old line stays up until the new one is ready.
-  m.route = { fromX, fromY, toX, toY, state: 'waiting', points: sameEnd ? old.points : [], meters: sameEnd ? old.meters : 0 }
+  m.route = { fromX, fromY, toX, toY, state: 'waiting', points: sameEnd ? old.points : [], meters: sameEnd ? old.meters : 0, via: sameEnd ? old.via : '' }
   requestFrame(m)
 }
 
@@ -2485,8 +2486,26 @@ function stepRoute(m: MapState) {
   r.state = points ? 'ready' : 'none'
   r.points = points ?? []
   measureRoute(r)
+  r.via = viaStreet(m, r)
   m.baseDirty = true
   m.onRoute()
+}
+
+// "Via Pulteney Street". The tiles keep street names on lines of their own, so
+// each stretch of the route asks which named street it runs along, within about
+// 20 m, since footpaths beside a street are drawn apart from it and have no name.
+function viaStreet(m: MapState, r: Route) {
+  const along = new Map<string, number>()
+  let total = 0
+  for (let i = 2; i < r.points.length; i += 2) {
+    const length = Math.hypot(r.points[i] - r.points[i - 2], r.points[i + 1] - r.points[i - 1])
+    total += length
+    const name = nearestStreet(m, xToLng((r.points[i] + r.points[i - 2]) / 2), yToLat((r.points[i + 1] + r.points[i - 1]) / 2), 40)
+    if (name) along.set(name, (along.get(name) ?? 0) + length)
+  }
+  let via = ''
+  for (const [name, length] of along) if (length > (along.get(via) ?? 0)) via = name
+  return (along.get(via) ?? 0) > total * 0.25 ? via : ''
 }
 
 // Everything here is in "grid" units: tile units of the source zoom, counted

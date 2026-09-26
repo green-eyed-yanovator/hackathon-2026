@@ -694,13 +694,12 @@ function walkKey() {
   else if (UI.walk) ui({ walk: null })
 }
 
+// Location was asked for and never came (blocked, or no fix): the walk bar
+// says so, and still has the way to your maps app.
+let noFix = false
+
 async function walkTo(to: string) {
   if (UI.walk === to) return ui({ walk: null })
-  const here = S.here ?? (await watchHere())
-  if (!here) {
-    toast("Can't find you: location is blocked or unavailable")
-    return
-  }
   UI.walk = to
   UI.follow = false
   // Phones put the map first, so the way is what you see.
@@ -709,9 +708,13 @@ async function walkTo(to: string) {
     go('')
   } else changed()
 
+  const here = S.here ?? (await watchHere())
+  noFix = !here
+  changed()
+
   // Both ends in view.
   const target = walkTarget()
-  if (!target || !map) return
+  if (!here || !target || !map || UI.walk !== to) return
   const area = openArea()
   const x0 = lngToX(here.longitude)
   const y0 = latToY(here.latitude)
@@ -3150,10 +3153,13 @@ function WalkBar() {
   const target = walkTarget()
   if (!target || UI.route.kind === 'new') return null
   const route = map?.route
+  const minutes = route?.points.length ? Math.max(1, Math.round(route.meters / 80)) : 0
   const status = !route
-    ? 'Finding you…'
-    : route.points.length
-      ? `${Math.max(1, Math.round(route.meters / 80))} min walk · ${route.meters < 1000 ? `${Math.round(route.meters / 10) * 10} m` : `${(route.meters / 1000).toFixed(1)} km`}`
+    ? noFix && !S.here
+      ? "Can't see where you are; your maps app can help"
+      : 'Finding you…'
+    : minutes
+      ? `${minutes} min walk · ${route.meters < 1000 ? `${Math.round(route.meters / 10) * 10} m` : `${(route.meters / 1000).toFixed(1)} km`}${route.via ? ` · via ${route.via}` : ''}`
       : route.state === 'waiting'
         ? 'Working out the way…'
         : route.state === 'far'
@@ -3168,6 +3174,19 @@ function WalkBar() {
           <small>{status}</small>
         </span>
       </button>
+      {target.person && minutes > 0 && (
+        <button
+          className="icon-btn"
+          title={`Tell ${target.name} you're on your way`}
+          aria-label={`Tell ${target.name} you're on your way`}
+          onClick={async () => {
+            if (await sendMessage(UI.walk!.split('/')[1], `On my way, about ${minutes} min`)) toast(`${target.name} knows you're coming`)
+            else failed("Couldn't send")
+          }}
+        >
+          <Icon name="send" />
+        </button>
+      )}
       <a className="icon-btn" href={directions(target.lat, target.lng)} target="_blank" rel="noreferrer noopener" title="Open in your maps app" aria-label="Open in your maps app">
         <Icon name="link" />
       </a>

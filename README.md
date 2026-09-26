@@ -93,7 +93,9 @@ password reset) into Authentication → Email Templates, so emails carry a
    pops up on Maya's map with a ripple, and she gets a notification.
 5. As Maya, open Hannah's street clean-up and press Get there: the way along
    the streets, with the time it takes. Press `T` for Metro to see it as a
-   purple GPS line, on the radar too.
+   purple GPS line, on the radar too. (It starts from where you really are;
+   away from Adelaide, set a location near the city centre in the browser's
+   dev tools, under Sensors.)
 6. On a phone (or the browser's phone view): the tab bar, sheets you drag up
    and down, pinch to zoom, and the locate button that follows you around.
 

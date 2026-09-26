@@ -317,7 +317,8 @@ button:disabled {
 }
 
 h1,
-h2 {
+h2,
+.walk-main strong {
   font-family: var(--font-head);
   text-transform: var(--head-case);
   letter-spacing: var(--head-spacing);
