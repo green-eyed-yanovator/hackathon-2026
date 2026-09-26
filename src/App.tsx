@@ -1962,7 +1962,7 @@ function ComposeView() {
         <Icon name="pin" size={16} />
         <div>
           <strong>{street ? `Near ${street}` : 'At the red marker'}</strong>
-          <div className="muted small">Tap the map to move it</div>
+          <div className="muted small">{narrow() ? 'Tap' : 'Click'} the map to move it</div>
         </div>
         <button className="btn small" onClick={async () => {
           const here = await watchHere()
@@ -2737,7 +2737,7 @@ export default function App() {
           <Icon name="plus" size={20} /> Pin something
         </button>
       )}
-      {route.kind === 'new' && <div className="hint-bar">Tap the map to place your pin</div>}
+      {route.kind === 'new' && <div className="hint-bar">{narrow() ? 'Tap' : 'Click'} the map to place your pin</div>}
 
       <nav className="tabbar">
         <button className={!detail && !UI.feed ? 'on' : ''} onClick={() => { ui({ feed: false }); go('') }}>
