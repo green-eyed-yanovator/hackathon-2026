@@ -8,7 +8,7 @@ import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
   friendIds, friendshipWith, conversations, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, toggleInterest, toggleSave, saveProfile,
-  uploadAvatar, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
+  uploadAvatar, changeEmail, deleteAccount, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
   type Flair, type Post, type Revision, type Notification,
 } from './data'
@@ -1676,6 +1676,28 @@ function ThemeGrid() {
 }
 
 function SettingsView() {
+  const [newEmail, setNewEmail] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  async function saveEmail() {
+    if (!newEmail?.includes('@')) return
+    if (await changeEmail(newEmail.trim())) {
+      setNewEmail(null)
+      toast('Check both inboxes to confirm the change')
+    } else failed("Couldn't change your email")
+  }
+
+  async function removeAccount() {
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      return
+    }
+    if (await deleteAccount()) {
+      go('')
+      toast('Your account and everything in it is gone')
+    } else failed("Couldn't delete your account")
+  }
+
   async function toggleAlerts() {
     let on = !UI.alerts
     if (on && typeof Notification !== 'undefined' && Notification.permission !== 'granted') on = (await Notification.requestPermission()) === 'granted'
@@ -1707,14 +1729,34 @@ function SettingsView() {
           ))}
 
           <div className="section">Account</div>
-          <div className="muted small">{S.session?.user.email}</div>
+          {newEmail === null ? (
+            <div className="muted small">{S.session?.user.email}</div>
+          ) : (
+            <div className="composer">
+              <input className="input" type="email" placeholder="New email" value={newEmail} autoFocus onChange={(e) => setNewEmail(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveEmail()} />
+              <button className="btn primary" onClick={saveEmail} disabled={!newEmail.includes('@')}>
+                Save
+              </button>
+            </div>
+          )}
           <div className="actions">
+            {newEmail === null && (
+              <button className="btn" onClick={() => setNewEmail('')}>
+                Change email
+              </button>
+            )}
             <button className="btn" onClick={() => ui({ auth: 'new-password' })}>
               Change password
             </button>
             <button className="btn" onClick={signOut}>
               <Icon name="logout" size={16} /> Sign out
             </button>
+          </div>
+          <div className="danger-zone">
+            <button className={confirmDelete ? 'btn danger' : 'btn'} onClick={removeAccount} onBlur={() => setConfirmDelete(false)}>
+              <Icon name="trash" size={16} /> {confirmDelete ? 'Delete everything, for good?' : 'Delete account'}
+            </button>
+            {confirmDelete && <p className="muted small">Your pins, replies, messages and friends go too. This can't be undone.</p>}
           </div>
         </>
       )}

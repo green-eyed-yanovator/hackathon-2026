@@ -1678,6 +1678,16 @@ textarea::placeholder {
   border-radius: 5px;
 }
 
+.danger-zone {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line2);
+}
+
+.danger-zone p {
+  margin: 8px 0 0;
+}
+
 .keys {
   display: grid;
   grid-template-columns: 1fr 1fr;

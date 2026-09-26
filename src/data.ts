@@ -255,6 +255,10 @@ function subscribePublic() {
       upsert(S.replies, row as Reply, byId)
       changed()
     })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'replies' }, ({ old }) => {
+      S.replies = S.replies.filter((r) => r.id !== (old as Reply).id)
+      changed()
+    })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_media' }, ({ new: row }) => {
       upsert(S.media, row as Media, byId)
       changed()
@@ -267,9 +271,9 @@ function subscribePublic() {
       S.interests = S.interests.filter((i) => !sameInterest(i, old as Interest))
       changed()
     })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, ({ new: row }) => {
-      const profile = row as Profile
-      if (profile.id) S.profiles.set(profile.id, profile)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
+      if (payload.eventType === 'DELETE') S.profiles.delete((payload.old as Profile).id)
+      else S.profiles.set((payload.new as Profile).id, payload.new as Profile)
       changed()
     })
     .subscribe()
@@ -579,6 +583,23 @@ export async function uploadAvatar(file: File) {
   const { error } = await supabase.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg' })
   if (error) return fail("Couldn't upload the photo", error)
   return saveProfile({ avatar_url: supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl })
+}
+
+// Supabase emails both the old and the new address; the change happens once both confirm.
+export async function changeEmail(email: string) {
+  const { error } = await supabase.auth.updateUser({ email })
+  if (error) return fail(error.message, error)
+  return true
+}
+
+// Everything you made goes with you; the database cascades it.
+export async function deleteAccount() {
+  if (S.sharing) await setSharing(false)
+  const { error } = await supabase.rpc('delete_my_account')
+  if (error) return fail("Couldn't delete your account", error)
+  await supabase.auth.signOut({ scope: 'local' })
+  loadPublic()
+  return true
 }
 
 export async function requestFriend(id: string) {
