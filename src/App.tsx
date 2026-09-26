@@ -3048,7 +3048,7 @@ function Palette() {
           <input
             autoFocus
             value={query}
-            placeholder="Search pins, people, or type a command…"
+            placeholder="Search pins, people, places, or “walk …”"
             onChange={(e) => {
               setQuery(e.target.value)
               setIndex(0)
