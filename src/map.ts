@@ -641,7 +641,7 @@ export const MARK_SAVED = 2
 export const MARK_NEW = 4
 export const MARK_RESOLVED = 8
 export const MARK_SELECTED = 16
-export const MARK_FRIEND_POST = 32
+export const MARK_STALE = 32 // a person whose last position is old
 
 export type Marker = {
   id: string
@@ -1682,14 +1682,20 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
     c.bezierCurveTo(-4, -8, -14, -12, -14, -22)
     c.arc(0, -22, 14, Math.PI, 0)
     c.bezierCurveTo(14, -12, 4, -8, 0, 0)
-    c.fillStyle = marker.flags & MARK_MINE ? '#1d1f24' : color
+    c.fillStyle = color
     c.fill()
     c.shadowColor = 'transparent'
+    if (marker.flags & MARK_MINE) {
+      // Your own pins get a white rim.
+      c.strokeStyle = '#fff'
+      c.lineWidth = 2.5
+      c.stroke()
+    }
     c.beginPath()
     c.arc(0, -22, 10.5, 0, Math.PI * 2)
     c.fillStyle = '#fff'
     c.fill()
-    drawIcon(c, marker.icon, 0, -22, 13, marker.flags & MARK_MINE ? '#1d1f24' : color)
+    drawIcon(c, marker.icon, 0, -22, 13, color)
     badgeX = 11
     badgeY = -33
   } else {
@@ -1764,6 +1770,7 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
 function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean) {
   const r = hover ? 17 : 15
   c.save()
+  if (marker.flags & MARK_STALE) c.globalAlpha = 0.5
   c.shadowColor = 'rgba(0,0,0,0.35)'
   c.shadowBlur = 6
   c.beginPath()
@@ -2069,17 +2076,6 @@ function frame(m: MapState, time: number) {
       animated = true
     }
   }
-
-  // Attribution, as the data licence asks.
-  c.font = `500 10px ${sans}`
-  c.textAlign = 'right'
-  c.textBaseline = 'bottom'
-  const credit = '© OpenStreetMap contributors · OpenFreeMap'
-  const cw = c.measureText(credit).width
-  c.fillStyle = 'rgba(255,255,255,0.6)'
-  c.fillRect(m.width - cw - 10, m.height - 16, cw + 10, 16)
-  c.fillStyle = '#333'
-  c.fillText(credit, m.width - 5, m.height - 3)
 
   m.onFrame()
 

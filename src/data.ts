@@ -259,6 +259,8 @@ async function loadPrivate(userId: string) {
   S.locations = new Map((locations.data ?? []).map((l: Location) => [l.user_id, l]))
   S.sharing = S.locations.has(userId)
   changed()
+  // Still sharing from last time: keep the position fresh.
+  if (S.sharing) watchHere().then(() => pushLocation(true))
 }
 
 function subscribePrivate(userId: string) {
@@ -523,7 +525,13 @@ export async function acceptFriend(id: string) {
   upsert(S.friendships, data as Friendship, samePair)
   changed()
   refreshLocations()
+  readFriendRequestsFrom(id)
   return true
+}
+
+// Answering a request, either way, settles its notification.
+function readFriendRequestsFrom(id: string) {
+  markNotificationsRead(S.notifications.filter((n) => n.kind === 'friend_request' && n.actor_id === id).map((n) => n.id))
 }
 
 export async function removeFriend(id: string) {
@@ -534,6 +542,7 @@ export async function removeFriend(id: string) {
   S.friendships = S.friendships.filter((x) => !samePair(x, f))
   S.locations.delete(id)
   changed()
+  readFriendRequestsFrom(id)
   return true
 }
 

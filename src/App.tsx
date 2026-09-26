@@ -14,7 +14,7 @@ import {
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, project, center, requestFrame, nearestStreet,
-  lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED,
+  lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE,
   type IconName, type MapState, type Marker,
 } from './map'
 import './App.css'
@@ -281,7 +281,8 @@ function buildMarkers(posts: Post[]): Marker[] {
     const name = nameOf(userId)
     markers.push({
       id: `person:${userId}`, kind: 'person', x: lngToX(loc.longitude), y: latToY(loc.latitude), icon: 'user',
-      color: `hsl(${hue(userId)} 55% 45%)`, count: 0, flags: 0, text: initials(name), name: name.split(' ')[0],
+      color: `hsl(${hue(userId)} 55% 45%)`, count: 0, flags: Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0,
+      text: initials(name), name: name.split(' ')[0],
       accuracy: loc.accuracy ?? 0, heading: loc.heading,
     })
   }
@@ -377,7 +378,7 @@ function Avatar({ id, size = 32, dot = false }: { id: string | null; size?: numb
   const name = nameOf(id)
   return (
     <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, background: id ? `hsl(${hue(id)} 52% 44%)` : '#8a8f98' }}>
-      {initials(name)}
+      {id ? initials(name) : '?'}
       {dot && id && S.online.has(id) && <i className="online" />}
     </span>
   )
@@ -1953,6 +1954,13 @@ export default function App() {
 
   useEffect(() => {
     start()
+    // If location was allowed before, show where you are without asking again.
+    navigator.permissions
+      ?.query({ name: 'geolocation' })
+      .then((p) => {
+        if (p.state === 'granted') watchHere()
+      })
+      .catch(() => {})
     setIncomingHandler((title, body, route) => {
       if (document.visibilityState === 'visible') {
         toast(body ? `${title}: ${body}` : title)
@@ -2127,7 +2135,7 @@ export default function App() {
               <Icon name="bell" />
               {unread > 0 && <b className="badge">{unread > 99 ? '99+' : unread}</b>}
             </button>
-            <button className="me-btn" onClick={() => go(`user/${me}`)} title="Your profile">
+            <button className="me-btn hide-narrow" onClick={() => go(`user/${me}`)} title="Your profile">
               <Avatar id={me} size={30} />
             </button>
           </>
@@ -2184,6 +2192,9 @@ export default function App() {
         </button>
       </nav>
 
+      <div className="credit">
+        © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> · OpenFreeMap
+      </div>
       <HoverCard cardRef={cardRef} />
       {UI.toast && (
         <div className="toast" role="status">
