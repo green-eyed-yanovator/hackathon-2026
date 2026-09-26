@@ -2273,6 +2273,7 @@ function FriendsView() {
         <button
           className={S.sharing ? 'switch on' : 'switch'}
           role="switch"
+          aria-label="Share my location with friends"
           aria-checked={S.sharing}
           onClick={toggleSharing}
         >
