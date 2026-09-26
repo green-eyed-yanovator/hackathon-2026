@@ -15,10 +15,12 @@ setWorkerUrl(workerUrl)
 
 type Post = {
   id: string
+  place_id: string
   title: string
   description: string
   latitude: number
   longitude: number
+  flair: string
   created_at: string
 }
 
@@ -26,11 +28,56 @@ type Location = {
   latitude: number
   longitude: number
 }
+
 type Reply = {
   id: string
   post_id: string
   content: string
   created_at: string
+}
+
+type PostMedia = {
+  id: string
+  post_id: string
+  media_type: 'image' | 'video'
+  url: string
+  created_at: string
+}
+
+function formatRelativeTime(dateString: string) {
+  const seconds = Math.floor(
+    (Date.now() - new Date(dateString).getTime()) / 1000,
+  )
+
+  if (seconds < 60) {
+    return 'just now'
+  }
+
+  const minutes = Math.floor(seconds / 60)
+
+  if (minutes < 60) {
+    return `${minutes}m ago`
+  }
+
+  const hours = Math.floor(minutes / 60)
+
+  if (hours < 24) {
+    return `${hours}h ago`
+  }
+
+  const days = Math.floor(hours / 24)
+
+  if (days < 7) {
+    return `${days}d ago`
+  }
+
+  const weeks = Math.floor(days / 7)
+
+  if (weeks < 5) {
+    return `${weeks}w ago`
+  }
+
+  return new Date(dateString).toLocaleDateString()
 }
 
 function App() {
@@ -39,16 +86,24 @@ function App() {
 
   const markers = useRef<Marker[]>([])
   const locationMarker = useRef<Marker | null>(null)
+  const isChoosingLocationRef = useRef(false)
 
   const [posts, setPosts] = useState<Post[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null)
-const [replies, setReplies] = useState<Reply[]>([])
-const [replyText, setReplyText] = useState('')
 
+  const [selectedPost, setSelectedPost] = useState<Post | null>(null)
+  const [selectedPlacePosts, setSelectedPlacePosts] = useState<Post[]>([])
+
+  const [replies, setReplies] = useState<Reply[]>([])
+  const [replyText, setReplyText] = useState('')
+
+  const [postMedia, setPostMedia] = useState<PostMedia[]>([])
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [flair, setFlair] = useState('general')
+
+  const [mediaFiles, setMediaFiles] = useState<File[]>([])
 
   const [selectedLocation, setSelectedLocation] =
     useState<Location | null>(null)
@@ -71,11 +126,13 @@ const [replyText, setReplyText] = useState('')
         return
       }
 
-      setPosts(data ?? [])
+      setPosts((data ?? []) as Post[])
     }
 
     loadPosts()
+  }, [])
 
+  useEffect(() => {
     if (!mapContainer.current || map.current) {
       return
     }
@@ -84,13 +141,28 @@ const [replyText, setReplyText] = useState('')
       container: mapContainer.current,
       style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [138.6007, -34.9285],
-      zoom: 12,
+      zoom: 15,
     })
 
     map.current.addControl(
       new NavigationControl(),
-      'bottom-right',
+      'top-right',
     )
+
+    map.current.on('click', (event) => {
+      if (!isChoosingLocationRef.current) {
+        return
+      }
+
+      setSelectedLocation({
+        latitude: event.lngLat.lat,
+        longitude: event.lngLat.lng,
+      })
+
+      setIsChoosingLocation(false)
+      isChoosingLocationRef.current = false
+      setLocationStatus('Location selected')
+    })
 
     return () => {
       markers.current.forEach((marker) => marker.remove())
@@ -105,150 +177,230 @@ const [replyText, setReplyText] = useState('')
   }, [])
 
   useEffect(() => {
-  const channel = supabase
-    .channel('posts-realtime')
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'posts',
-      },
-      (payload) => {
-        const newPost = payload.new as Post
+    const channel = supabase
+      .channel('posts-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'posts',
+        },
+        (payload) => {
+          const newPost = payload.new as Post
 
-        setPosts((currentPosts) => {
-          // Prevent duplicates from our own insert
-          if (
-            currentPosts.some(
-              (post) => post.id === newPost.id,
-            )
-          ) {
-            return currentPosts
-          }
+          setPosts((currentPosts) => {
+            if (
+              currentPosts.some(
+                (post) => post.id === newPost.id,
+              )
+            ) {
+              return currentPosts
+            }
 
-          return [newPost, ...currentPosts]
-        })
-      },
-    )
-    .subscribe()
+            return [newPost, ...currentPosts]
+          })
+        },
+      )
+      .subscribe()
 
-  return () => {
-    supabase.removeChannel(channel)
-  }
-}, [])
-
-  useEffect(() => {
-  const channel = supabase
-    .channel('replies-realtime')
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'replies',
-      },
-      (payload) => {
-        const newReply = payload.new as Reply
-
-        // Only add it if the currently-open thread
-        // is the thread this reply belongs to
-        if (selectedPost?.id !== newReply.post_id) {
-          return
-        }
-
-        setReplies((currentReplies) => {
-          if (
-            currentReplies.some(
-              (reply) => reply.id === newReply.id,
-            )
-          ) {
-            return currentReplies
-          }
-
-          return [...currentReplies, newReply]
-        })
-      },
-    )
-    .subscribe()
-
-  return () => {
-    supabase.removeChannel(channel)
-  }
-}, [selectedPost])
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
 
   useEffect(() => {
-    if (!map.current || posts.length === 0) {
+    const channel = supabase
+      .channel('replies-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'replies',
+        },
+        (payload) => {
+          const newReply = payload.new as Reply
+
+          if (selectedPost?.id !== newReply.post_id) {
+            return
+          }
+
+          setReplies((currentReplies) => {
+            if (
+              currentReplies.some(
+                (reply) => reply.id === newReply.id,
+              )
+            ) {
+              return currentReplies
+            }
+
+            return [...currentReplies, newReply]
+          })
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [selectedPost])
+
+  useEffect(() => {
+    if (!selectedPost) {
+      setReplies([])
+      setPostMedia([])
+      return
+    }
+
+    const postId = selectedPost.id
+
+    async function loadThreadData() {
+      const { data: replyData, error: replyError } =
+        await supabase
+          .from('replies')
+          .select('*')
+          .eq('post_id', postId)
+          .order('created_at', { ascending: true })
+
+      if (replyError) {
+        console.error(
+          'Failed to load replies:',
+          replyError,
+        )
+      } else {
+        setReplies((replyData ?? []) as Reply[])
+      }
+
+      const { data: mediaData, error: mediaError } =
+        await supabase
+          .from('post_media')
+          .select('*')
+          .eq('post_id', postId)
+          .order('created_at', { ascending: true })
+
+      if (mediaError) {
+        console.error(
+          'Failed to load media:',
+          mediaError,
+        )
+      } else {
+        setPostMedia((mediaData ?? []) as PostMedia[])
+      }
+    }
+
+    loadThreadData()
+  }, [selectedPost])
+
+  useEffect(() => {
+    if (!map.current) {
       return
     }
 
     markers.current.forEach((marker) => marker.remove())
     markers.current = []
 
-    posts.forEach((post) => {
-      const marker = new Marker()
-        .setLngLat([post.longitude, post.latitude])
-        .addTo(map.current!)
+    const postsByPlace: Record<string, Post[]> = {}
 
-      marker.getElement().addEventListener('click', () => {
-        setSelectedPost(post)
+    posts.forEach((post) => {
+      const existingPosts =
+        postsByPlace[post.place_id] ?? []
+
+      postsByPlace[post.place_id] = [
+        ...existingPosts,
+        post,
+      ]
+    })
+
+    Object.values(postsByPlace).forEach((placePosts) => {
+      const firstPost = placePosts[0]
+
+      const flairIcons: Record<string, string> = {
+        general: '💬',
+        food: '🍔',
+        music: '🎵',
+        sports: '🏀',
+        event: '🎉',
+        lost: '🚨',
+      }
+
+      const markerElement = document.createElement('div')
+
+      markerElement.textContent =
+        flairIcons[firstPost.flair] ?? '💬'
+
+      markerElement.style.width = '42px'
+      markerElement.style.height = '42px'
+      markerElement.style.borderRadius = '50%'
+      markerElement.style.background = 'white'
+      markerElement.style.display = 'flex'
+      markerElement.style.alignItems = 'center'
+      markerElement.style.justifyContent = 'center'
+      markerElement.style.fontSize = '22px'
+      markerElement.style.boxShadow =
+        '0 3px 10px rgba(0, 0, 0, 0.3)'
+      markerElement.style.border = '2px solid white'
+      markerElement.style.cursor = 'pointer'
+
+      markerElement.addEventListener('click', () => {
+        setSelectedPlacePosts(placePosts)
+        setSelectedPost(null)
       })
+
+      const marker = new Marker({
+        element: markerElement,
+        anchor: 'center',
+      })
+        .setLngLat([
+          firstPost.longitude,
+          firstPost.latitude,
+        ])
+        .addTo(map.current!)
 
       markers.current.push(marker)
     })
-      }, [posts])
+  }, [posts])
 
-      useEffect(() => {
-  if (!selectedPost) {
-    setReplies([])
-    return
-  }
-
-  async function loadReplies() {
-    const { data, error } = await supabase
-      .from('replies')
-      .select('*')
-      .eq('post_id', selectedPost!.id)
-      .order('created_at', { ascending: true })
-
-    if (error) {
-      console.error('Failed to load replies:', error)
+  useEffect(() => {
+    if (!selectedLocation || !map.current) {
       return
     }
 
-    setReplies(data ?? [])
-  }
-
-  loadReplies()
-}, [selectedPost])
-
-async function handleCreateReply() {
-  if (!selectedPost || !replyText.trim()) {
-    return
-  }
-
-  const { data, error } = await supabase
-    .from('replies')
-    .insert({
-      post_id: selectedPost.id,
-      content: replyText.trim(),
+    map.current.flyTo({
+      center: [
+        selectedLocation.longitude,
+        selectedLocation.latitude,
+      ],
+      zoom: 16,
+      duration: 500,
     })
-    .select()
-    .single()
 
-  if (error) {
-    console.error('Failed to create reply:', error)
-    alert('Failed to post reply.')
-    return
-  }
+    locationMarker.current?.remove()
 
-  setReplies((currentReplies) => [
-    ...currentReplies,
-    data,
-  ])
+    const markerElement = document.createElement('div')
 
-  setReplyText('')
-}
+    markerElement.style.width = '18px'
+    markerElement.style.height = '18px'
+    markerElement.style.borderRadius = '50%'
+    markerElement.style.background = '#2563eb'
+    markerElement.style.border = '3px solid white'
+    markerElement.style.boxShadow =
+      '0 2px 8px rgba(0,0,0,0.3)'
+
+    locationMarker.current = new Marker({
+      element: markerElement,
+    })
+      .setLngLat([
+        selectedLocation.longitude,
+        selectedLocation.latitude,
+      ])
+      .addTo(map.current)
+
+    return () => {
+      locationMarker.current?.remove()
+      locationMarker.current = null
+    }
+  }, [selectedLocation])
 
   function setLocation(location: Location) {
     setSelectedLocation(location)
@@ -286,6 +438,7 @@ async function handleCreateReply() {
       )
 
       setIsChoosingLocation(true)
+      isChoosingLocationRef.current = true
       return
     }
 
@@ -305,6 +458,7 @@ async function handleCreateReply() {
         )
 
         setIsChoosingLocation(true)
+        isChoosingLocationRef.current = true
       },
       {
         enableHighAccuracy: true,
@@ -317,302 +471,318 @@ async function handleCreateReply() {
   function handleOpenForm() {
     setShowAddForm(true)
     setIsChoosingLocation(false)
+    isChoosingLocationRef.current = false
+
     requestCurrentLocation()
   }
-
-  async function handleCreatePost() {
-  if (!title.trim() || !description.trim() || !selectedLocation) {
-    return
-  }
-
-  const { data, error } = await supabase
-    .from('posts')
-    .insert({
-      title: title.trim(),
-      description: description.trim(),
-      latitude: selectedLocation.latitude,
-      longitude: selectedLocation.longitude,
-    })
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Failed to create post:', error)
-    alert('Failed to create thread.')
-    return
-  }
-
-  // Immediately show the new marker
-  setPosts((currentPosts) => [data, ...currentPosts])
-
-  // Close and reset the form
-  handleCloseForm()
-}
 
   function handleCloseForm() {
     setShowAddForm(false)
     setIsChoosingLocation(false)
+    isChoosingLocationRef.current = false
 
     setTitle('')
     setDescription('')
+    setFlair('general')
+    setMediaFiles([])
     setSelectedLocation(null)
 
     locationMarker.current?.remove()
     locationMarker.current = null
   }
 
-  useEffect(() => {
-    if (!map.current || !isChoosingLocation) {
+  async function handleCreateReply() {
+    if (!selectedPost || !replyText.trim()) {
       return
     }
 
-    function handleMapClick(event: {
-      lngLat: {
-        lng: number
-        lat: number
-      }
-    }) {
-      setLocation({
-        latitude: event.lngLat.lat,
-        longitude: event.lngLat.lng,
+    const { data, error } = await supabase
+      .from('replies')
+      .insert({
+        post_id: selectedPost.id,
+        content: replyText.trim(),
       })
+      .select()
+      .single()
 
-      setLocationStatus('Location selected')
-      setIsChoosingLocation(false)
+    if (error) {
+      console.error(
+        'Failed to create reply:',
+        error,
+      )
+      alert('Failed to post reply.')
+      return
     }
 
-    map.current.on('click', handleMapClick)
+    setReplies((currentReplies) => {
+      if (
+        currentReplies.some(
+          (reply) => reply.id === data.id,
+        )
+      ) {
+        return currentReplies
+      }
 
-    return () => {
-      map.current?.off('click', handleMapClick)
+      return [...currentReplies, data as Reply]
+    })
+
+    setReplyText('')
+  }
+
+  async function handleCreatePost() {
+    if (
+      !title.trim() ||
+      !description.trim() ||
+      !selectedLocation
+    ) {
+      return
     }
-  }, [isChoosingLocation])
+
+    const { data: places, error: placesError } =
+      await supabase
+        .from('places')
+        .select('*')
+
+    if (placesError) {
+      console.error(
+        'Failed to load places:',
+        placesError,
+      )
+      alert('Failed to find location.')
+      return
+    }
+
+    const toRadians = (degrees: number) =>
+      (degrees * Math.PI) / 180
+
+    const distanceInMeters = (
+      latitude1: number,
+      longitude1: number,
+      latitude2: number,
+      longitude2: number,
+    ) => {
+      const earthRadius = 6371000
+
+      const latitudeDifference = toRadians(
+        latitude2 - latitude1,
+      )
+
+      const longitudeDifference = toRadians(
+        longitude2 - longitude1,
+      )
+
+      const a =
+        Math.sin(latitudeDifference / 2) ** 2 +
+        Math.cos(toRadians(latitude1)) *
+          Math.cos(toRadians(latitude2)) *
+          Math.sin(longitudeDifference / 2) ** 2
+
+      const c =
+        2 *
+        Math.atan2(
+          Math.sqrt(a),
+          Math.sqrt(1 - a),
+        )
+
+      return earthRadius * c
+    }
+
+    const nearbyPlace = places?.find((place) => {
+      const distance = distanceInMeters(
+        selectedLocation.latitude,
+        selectedLocation.longitude,
+        place.latitude,
+        place.longitude,
+      )
+
+      return distance <= 30
+    })
+
+    let place = nearbyPlace
+
+    if (!place) {
+      const {
+        data: newPlace,
+        error: placeCreateError,
+      } = await supabase
+        .from('places')
+        .insert({
+          latitude: selectedLocation.latitude,
+          longitude: selectedLocation.longitude,
+        })
+        .select()
+        .single()
+
+      if (placeCreateError) {
+        console.error(
+          'Failed to create place:',
+          placeCreateError,
+        )
+        alert('Failed to create location.')
+        return
+      }
+
+      place = newPlace
+    }
+
+    const { data, error } = await supabase
+      .from('posts')
+      .insert({
+        place_id: place.id,
+        title: title.trim(),
+        description: description.trim(),
+        latitude: place.latitude,
+        longitude: place.longitude,
+        flair,
+      })
+      .select()
+      .single()
+
+    if (error) {
+      console.error(
+        'Failed to create post:',
+        error,
+      )
+      alert('Failed to create thread.')
+      return
+    }
+
+    const post = data as Post
+
+    for (const file of mediaFiles) {
+      const fileExtension =
+        file.name.split('.').pop() ?? 'file'
+
+      const filePath = `${post.id}/${crypto.randomUUID()}.${fileExtension}`
+
+      const { error: uploadError } =
+        await supabase.storage
+          .from('post-media')
+          .upload(filePath, file)
+
+      if (uploadError) {
+        console.error(
+          'Failed to upload media:',
+          uploadError,
+        )
+        continue
+      }
+
+      const { data: publicUrlData } =
+        supabase.storage
+          .from('post-media')
+          .getPublicUrl(filePath)
+
+      const mediaType = file.type.startsWith('video/')
+        ? 'video'
+        : 'image'
+
+      const { error: mediaError } =
+        await supabase
+          .from('post_media')
+          .insert({
+            post_id: post.id,
+            media_type: mediaType,
+            url: publicUrlData.publicUrl,
+          })
+
+      if (mediaError) {
+        console.error(
+          'Failed to save media record:',
+          mediaError,
+        )
+      }
+    }
+
+    setPosts((currentPosts) => [
+      post,
+      ...currentPosts,
+    ])
+
+    handleCloseForm()
+  }
 
   return (
     <div
-      ref={mapContainer}
       style={{
         width: '100%',
-        height: '100vh',
+        height: '100%',
+        position: 'relative',
+        overflow: 'hidden',
+        fontFamily:
+          'Arial, Helvetica, sans-serif',
+        background: '#f5f5f5',
       }}
     >
-      {/* Header */}
-      <header
+      <div
+        ref={mapContainer}
+        style={{
+          width: '100%',
+          height: '100%',
+        }}
+      />
+
+      <div
         style={{
           position: 'absolute',
-          top: '16px',
-          left: '16px',
-          zIndex: 10,
+          top: 16,
+          left: 16,
+          right: 16,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          pointerEvents: 'none',
         }}
       >
         <div
           style={{
             background: 'white',
-            padding: '12px 20px',
-            borderRadius: '16px',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
+            padding: '10px 16px',
+            borderRadius: 12,
+            boxShadow:
+              '0 2px 10px rgba(0,0,0,0.15)',
+            fontSize: 22,
+            fontWeight: 700,
           }}
         >
-          <h1
-            style={{
-              margin: 0,
-              fontSize: '20px',
-              fontWeight: 700,
-              color: '#111',
-            }}
-          >
-            AroundHere
-          </h1>
+          AroundHere
         </div>
-      </header>
 
-      {/* Add button */}
-      {!showAddForm && (
         <button
+          type="button"
           onClick={handleOpenForm}
           style={{
-            position: 'absolute',
-            right: '24px',
-            bottom: '24px',
-            zIndex: 10,
+            pointerEvents: 'auto',
             border: 'none',
-            borderRadius: '999px',
-            background: '#000',
-            color: '#fff',
-            padding: '16px 24px',
-            fontSize: '18px',
-            fontWeight: 600,
+            background: '#111',
+            color: 'white',
+            borderRadius: 12,
+            padding: '11px 17px',
+            fontSize: 15,
+            fontWeight: 700,
             cursor: 'pointer',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+            boxShadow:
+              '0 2px 10px rgba(0,0,0,0.2)',
           }}
         >
           + Add
         </button>
-      )}
-      {/* Thread details */}
-{selectedPost && (
-  <aside
-    style={{
-      position: 'absolute',
-      top: '16px',
-      right: '16px',
-      bottom: '16px',
-      width: '360px',
-      zIndex: 20,
-      background: 'white',
-      borderRadius: '20px',
-      padding: '24px',
-      boxSizing: 'border-box',
-      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.25)',
-      fontFamily: 'Arial, sans-serif',
-      overflowY: 'auto',
-    }}
-  >
-    <button
-      onClick={() => setSelectedPost(null)}
-      style={{
-        border: 'none',
-        background: 'transparent',
-        fontSize: '24px',
-        cursor: 'pointer',
-        padding: 0,
-        marginBottom: '20px',
-      }}
-    >
-      ×
-    </button>
-
-    <h2
-      style={{
-        margin: '0 0 12px',
-        fontSize: '26px',
-        color: '#111',
-      }}
-    >
-      {selectedPost.title}
-    </h2>
-
-    <p
-      style={{
-        margin: '0 0 24px',
-        fontSize: '16px',
-        lineHeight: 1.5,
-        color: '#444',
-      }}
-    >
-      {selectedPost.description}
-    </p>
-
-    <div
-  style={{
-    padding: '12px',
-    background: '#f3f4f6',
-    borderRadius: '10px',
-    fontSize: '13px',
-    color: '#666',
-    marginBottom: '24px',
-  }}
->
-  📍 Thread location
-</div>
-
-<h3
-  style={{
-    margin: '0 0 12px',
-    fontSize: '18px',
-    color: '#111',
-  }}
->
-  Replies
-</h3>
-
-<div
-  style={{
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-    marginBottom: '20px',
-  }}
->
-  {replies.length === 0 ? (
-    <p
-      style={{
-        margin: 0,
-        color: '#777',
-        fontSize: '14px',
-      }}
-    >
-      No replies yet.
-    </p>
-  ) : (
-    replies.map((reply) => (
-      <div
-        key={reply.id}
-        style={{
-          padding: '12px',
-          background: '#f3f4f6',
-          borderRadius: '10px',
-          color: '#333',
-        }}
-      >
-        {reply.content}
       </div>
-    ))
-  )}
-</div>
 
-<textarea
-  value={replyText}
-  onChange={(event) => setReplyText(event.target.value)}
-  placeholder="Write a reply..."
-  rows={3}
-  style={{
-    width: '100%',
-    boxSizing: 'border-box',
-    padding: '12px',
-    border: '1px solid #ccc',
-    borderRadius: '10px',
-    fontSize: '14px',
-    resize: 'vertical',
-    marginBottom: '10px',
-  }}
-/>
-
-<button
-  onClick={handleCreateReply}
-  disabled={!replyText.trim()}
-  style={{
-    width: '100%',
-    border: 'none',
-    background: replyText.trim() ? '#000' : '#ccc',
-    color: 'white',
-    padding: '12px',
-    borderRadius: '10px',
-    fontSize: '15px',
-    fontWeight: 600,
-    cursor: replyText.trim()
-      ? 'pointer'
-      : 'not-allowed',
-  }}
->
-  Reply
-</button>
-  </aside>
-)}
-
-      {/* Location selection message */}
       {showAddForm && isChoosingLocation && (
         <div
           style={{
             position: 'absolute',
-            top: '20px',
-            left: '390px',
-            zIndex: 20,
+            top: 80,
+            left: '50%',
+            transform: 'translateX(-50%)',
             background: 'white',
-            padding: '14px 20px',
-            borderRadius: '14px',
-            boxShadow: '0 4px 15px rgba(0, 0, 0, 0.25)',
-            fontFamily: 'Arial, sans-serif',
+            padding: '12px 18px',
+            borderRadius: 12,
+            boxShadow:
+              '0 3px 15px rgba(0,0,0,0.2)',
+            zIndex: 10,
+            fontSize: 14,
           }}
         >
           <strong>
@@ -621,42 +791,60 @@ async function handleCreateReply() {
         </div>
       )}
 
-      {/* Side panel */}
       {showAddForm && (
         <aside
           style={{
             position: 'absolute',
-            top: '16px',
-            left: '16px',
-            bottom: '16px',
-            width: '340px',
-            zIndex: 20,
-            background: 'white',
-            borderRadius: '20px',
-            padding: '24px',
-            boxSizing: 'border-box',
-            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.25)',
-            fontFamily: 'Arial, sans-serif',
+            top: 16,
+            right: 16,
+            width: 360,
+            maxHeight: 'calc(100% - 32px)',
             overflowY: 'auto',
+            background: 'white',
+            borderRadius: 16,
+            padding: 20,
+            boxShadow:
+              '0 4px 20px rgba(0,0,0,0.2)',
+            zIndex: 20,
+            boxSizing: 'border-box',
           }}
         >
-          <h2
+          <div
             style={{
-              margin: '0 0 24px',
-              fontSize: '24px',
-              fontWeight: 700,
-              color: '#111',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: 20,
             }}
           >
-            Create a thread
-          </h2>
+            <h2
+              style={{
+                margin: 0,
+                fontSize: 21,
+              }}
+            >
+              Create a thread
+            </h2>
+
+            <button
+              type="button"
+              onClick={handleCloseForm}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                fontSize: 22,
+                cursor: 'pointer',
+              }}
+            >
+              ×
+            </button>
+          </div>
 
           <label
             style={{
               display: 'block',
-              marginBottom: '6px',
               fontWeight: 600,
-              color: '#333',
+              marginBottom: 6,
             }}
           >
             Title
@@ -664,25 +852,26 @@ async function handleCreateReply() {
 
           <input
             value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="e.g. BBQ tonight"
+            onChange={(event) =>
+              setTitle(event.target.value)
+            }
+            placeholder="What's happening?"
             style={{
               width: '100%',
               boxSizing: 'border-box',
-              padding: '12px',
-              marginBottom: '20px',
+              padding: 11,
               border: '1px solid #ccc',
-              borderRadius: '10px',
-              fontSize: '16px',
+              borderRadius: 9,
+              marginBottom: 16,
+              fontSize: 14,
             }}
           />
 
           <label
             style={{
               display: 'block',
-              marginBottom: '6px',
               fontWeight: 600,
-              color: '#333',
+              marginBottom: 6,
             }}
           >
             Description
@@ -693,34 +882,116 @@ async function handleCreateReply() {
             onChange={(event) =>
               setDescription(event.target.value)
             }
-            placeholder="What's happening?"
-            rows={6}
+            placeholder="Tell people more..."
+            rows={5}
             style={{
               width: '100%',
               boxSizing: 'border-box',
-              padding: '12px',
-              marginBottom: '20px',
+              padding: 11,
               border: '1px solid #ccc',
-              borderRadius: '10px',
-              fontSize: '16px',
+              borderRadius: 9,
+              marginBottom: 16,
+              fontSize: 14,
               resize: 'vertical',
             }}
           />
 
-          {/* Location */}
+          <label
+            style={{
+              display: 'block',
+              fontWeight: 600,
+              marginBottom: 6,
+            }}
+          >
+            Flair
+          </label>
+
+          <select
+            value={flair}
+            onChange={(event) =>
+              setFlair(event.target.value)
+            }
+            style={{
+              width: '100%',
+              padding: 11,
+              border: '1px solid #ccc',
+              borderRadius: 9,
+              marginBottom: 16,
+              fontSize: 14,
+            }}
+          >
+            <option value="general">
+              💬 General
+            </option>
+            <option value="food">
+              🍔 Food
+            </option>
+            <option value="music">
+              🎵 Music
+            </option>
+            <option value="sports">
+              🏀 Sports
+            </option>
+            <option value="event">
+              🎉 Event
+            </option>
+            <option value="lost">
+              🚨 Lost / Found
+            </option>
+          </select>
+
+          <label
+            style={{
+              display: 'block',
+              fontWeight: 600,
+              marginBottom: 6,
+            }}
+          >
+            Photos or videos
+          </label>
+
+          <input
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            onChange={(event) => {
+              setMediaFiles(
+                Array.from(
+                  event.target.files ?? [],
+                ),
+              )
+            }}
+            style={{
+              width: '100%',
+              marginBottom: 16,
+            }}
+          />
+
+          {mediaFiles.length > 0 && (
+            <div
+              style={{
+                fontSize: 13,
+                color: '#555',
+                marginBottom: 16,
+              }}
+            >
+              {mediaFiles.length} file
+              {mediaFiles.length === 1 ? '' : 's'} selected
+            </div>
+          )}
+
           <div
             style={{
-              border: '1px solid #ddd',
-              borderRadius: '12px',
-              padding: '14px',
-              marginBottom: '24px',
+              padding: 12,
+              background: '#f5f5f5',
+              borderRadius: 10,
+              marginBottom: 18,
             }}
           >
             <div
               style={{
-                fontSize: '13px',
-                color: '#666',
-                marginBottom: '6px',
+                fontWeight: 600,
+                marginBottom: 5,
               }}
             >
               Location
@@ -728,30 +999,28 @@ async function handleCreateReply() {
 
             <div
               style={{
-                fontWeight: 600,
-                color: '#222',
-                marginBottom: '12px',
+                fontSize: 13,
+                color: '#555',
+                marginBottom: 9,
               }}
             >
               📍 {locationStatus}
             </div>
 
             <button
+              type="button"
               onClick={() => {
                 setIsChoosingLocation(true)
+                isChoosingLocationRef.current = true
                 setLocationStatus(
                   'Tap the map to choose a location',
                 )
               }}
               style={{
-                width: '100%',
-                border: 'none',
-                background: '#f3f4f6',
-                color: '#222',
-                padding: '11px 14px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: 600,
+                border: '1px solid #ccc',
+                background: 'white',
+                padding: '8px 11px',
+                borderRadius: 8,
                 cursor: 'pointer',
               }}
             >
@@ -759,30 +1028,30 @@ async function handleCreateReply() {
             </button>
           </div>
 
-          {/* Actions */}
           <div
             style={{
               display: 'flex',
-              gap: '10px',
+              gap: 10,
             }}
           >
             <button
+              type="button"
               onClick={handleCloseForm}
               style={{
                 flex: 1,
+                padding: 11,
                 border: '1px solid #ccc',
                 background: 'white',
-                color: '#333',
-                padding: '12px',
-                borderRadius: '10px',
-                fontSize: '16px',
+                borderRadius: 9,
                 cursor: 'pointer',
+                fontWeight: 600,
               }}
             >
               Cancel
             </button>
 
             <button
+              type="button"
               onClick={handleCreatePost}
               disabled={
                 !title.trim() ||
@@ -791,28 +1060,478 @@ async function handleCreateReply() {
               }
               style={{
                 flex: 1,
+                padding: 11,
                 border: 'none',
                 background:
                   !title.trim() ||
                   !description.trim() ||
                   !selectedLocation
-                    ? '#ccc'
-                    : '#000',
+                    ? '#aaa'
+                    : '#111',
                 color: 'white',
-                padding: '12px',
-                borderRadius: '10px',
-                fontSize: '16px',
-                fontWeight: 600,
+                borderRadius: 9,
                 cursor:
                   !title.trim() ||
                   !description.trim() ||
                   !selectedLocation
                     ? 'not-allowed'
                     : 'pointer',
+                fontWeight: 600,
               }}
             >
               Post
             </button>
+          </div>
+        </aside>
+      )}
+
+      {selectedPlacePosts.length > 0 &&
+        !selectedPost && (
+          <aside
+            style={{
+              position: 'absolute',
+              top: 16,
+              right: 16,
+              width: 420,
+              maxHeight: 'calc(100% - 32px)',
+              overflowY: 'auto',
+              background: 'white',
+              borderRadius: 16,
+              boxShadow:
+                '0 4px 20px rgba(0,0,0,0.2)',
+              zIndex: 15,
+            }}
+          >
+            <div
+              style={{
+                padding: '16px 18px',
+                borderBottom: '1px solid #eee',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: 20,
+                    fontWeight: 700,
+                  }}
+                >
+                  Threads here
+                </div>
+
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#777',
+                    marginTop: 3,
+                  }}
+                >
+                  {selectedPlacePosts.length}{' '}
+                  thread
+                  {selectedPlacePosts.length === 1
+                    ? ''
+                    : 's'}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setSelectedPlacePosts([])
+                }
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  fontSize: 24,
+                  cursor: 'pointer',
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ padding: 10 }}>
+              {selectedPlacePosts.map((post) => {
+                const flairIcons: Record<
+                  string,
+                  string
+                > = {
+                  general: '💬',
+                  food: '🍔',
+                  music: '🎵',
+                  sports: '🏀',
+                  event: '🎉',
+                  lost: '🚨',
+                }
+
+                return (
+                  <button
+                    key={post.id}
+                    type="button"
+                    onClick={() =>
+                      setSelectedPost(post)
+                    }
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      border: 'none',
+                      background: 'white',
+                      padding: 14,
+                      borderRadius: 10,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        fontSize: 12,
+                        color: '#777',
+                        marginBottom: 7,
+                      }}
+                    >
+                      <span>
+                        {flairIcons[post.flair] ??
+                          '💬'}
+                      </span>
+
+                      <span>
+                        u/anonymous ·{' '}
+                        {formatRelativeTime(
+                          post.created_at,
+                        )}
+                      </span>
+                    </div>
+
+                    <div
+                      style={{
+                        fontWeight: 700,
+                        fontSize: 16,
+                        color: '#111',
+                        marginBottom: 5,
+                      }}
+                    >
+                      {post.title}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: '#555',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {post.description}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </aside>
+        )}
+
+      {selectedPost && (
+        <aside
+          style={{
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            width: 420,
+            maxHeight: 'calc(100% - 32px)',
+            overflowY: 'auto',
+            background: 'white',
+            borderRadius: 16,
+            boxShadow:
+              '0 4px 20px rgba(0,0,0,0.2)',
+            zIndex: 15,
+          }}
+        >
+          <div
+            style={{
+              position: 'sticky',
+              top: 0,
+              background: 'white',
+              borderBottom: '1px solid #eee',
+              padding: '13px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              zIndex: 2,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedPost(null)
+              }}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                fontSize: 22,
+                cursor: 'pointer',
+                padding: 2,
+              }}
+            >
+              ←
+            </button>
+
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              Thread
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedPost(null)
+                setSelectedPlacePosts([])
+              }}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                fontSize: 22,
+                cursor: 'pointer',
+                padding: 2,
+              }}
+            >
+              ×
+            </button>
+          </div>
+
+          <div style={{ padding: 18 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                color: '#777',
+                fontSize: 12,
+                marginBottom: 10,
+              }}
+            >
+              <span>u/anonymous</span>
+
+              <span>·</span>
+
+              <span>
+                {formatRelativeTime(
+                  selectedPost.created_at,
+                )}
+              </span>
+
+              <span>·</span>
+
+              <span>
+                {selectedPost.flair}
+              </span>
+            </div>
+
+            <h1
+              style={{
+                fontSize: 24,
+                lineHeight: 1.2,
+                margin: '0 0 12px',
+              }}
+            >
+              {selectedPost.title}
+            </h1>
+
+            <div
+              style={{
+                fontSize: 15,
+                lineHeight: 1.55,
+                whiteSpace: 'pre-wrap',
+                color: '#222',
+              }}
+            >
+              {selectedPost.description}
+            </div>
+
+            {postMedia.length > 0 && (
+              <div
+                style={{
+                  marginTop: 16,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                }}
+              >
+                {postMedia.map((media) =>
+                  media.media_type === 'video' ? (
+                    <video
+                      key={media.id}
+                      src={media.url}
+                      controls
+                      style={{
+                        width: '100%',
+                        maxHeight: 300,
+                        borderRadius: 10,
+                        background: '#111',
+                      }}
+                    />
+                  ) : (
+                    <img
+                      key={media.id}
+                      src={media.url}
+                      alt=""
+                      style={{
+                        width: '100%',
+                        maxHeight: 350,
+                        objectFit: 'cover',
+                        borderRadius: 10,
+                      }}
+                    />
+                  ),
+                )}
+              </div>
+            )}
+
+            <div
+              style={{
+                marginTop: 16,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                background: '#f2f2f2',
+                padding: '7px 10px',
+                borderRadius: 999,
+                fontSize: 12,
+                color: '#555',
+              }}
+            >
+              📍 Nearby
+            </div>
+
+            <div
+              style={{
+                marginTop: 22,
+                paddingTop: 16,
+                borderTop: '1px solid #eee',
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: 15,
+                  marginBottom: 12,
+                }}
+              >
+                {replies.length}{' '}
+                {replies.length === 1
+                  ? 'comment'
+                  : 'comments'}
+              </div>
+
+              {replies.length === 0 ? (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#777',
+                    padding: '12px 0',
+                  }}
+                >
+                  No comments yet.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                  }}
+                >
+                  {replies.map((reply) => (
+                    <div
+                      key={reply.id}
+                      style={{
+                        background: '#f7f7f7',
+                        borderRadius: 10,
+                        padding: 12,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: '#777',
+                          marginBottom: 6,
+                        }}
+                      >
+                        u/anonymous ·{' '}
+                        {formatRelativeTime(
+                          reply.created_at,
+                        )}
+                      </div>
+
+                      <div
+                        style={{
+                          fontSize: 14,
+                          lineHeight: 1.45,
+                          whiteSpace: 'pre-wrap',
+                        }}
+                      >
+                        {reply.content}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div
+                style={{
+                  marginTop: 16,
+                }}
+              >
+                <textarea
+                  value={replyText}
+                  onChange={(event) =>
+                    setReplyText(event.target.value)
+                  }
+                  placeholder="What do you think?"
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    border: '1px solid #ccc',
+                    borderRadius: 10,
+                    padding: 11,
+                    resize: 'vertical',
+                    fontSize: 14,
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={handleCreateReply}
+                  disabled={!replyText.trim()}
+                  style={{
+                    marginTop: 8,
+                    width: '100%',
+                    padding: 10,
+                    border: 'none',
+                    borderRadius: 9,
+                    background:
+                      replyText.trim()
+                        ? '#111'
+                        : '#aaa',
+                    color: 'white',
+                    cursor:
+                      replyText.trim()
+                        ? 'pointer'
+                        : 'not-allowed',
+                    fontWeight: 600,
+                  }}
+                >
+                  Comment
+                </button>
+              </div>
+            </div>
           </div>
         </aside>
       )}
