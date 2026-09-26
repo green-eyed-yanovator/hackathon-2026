@@ -34,6 +34,10 @@ export function yToLat(y: number) {
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
 
+// How far along the segment from (ax, ay) by (vx, vy) the point nearest (px, py) is, 0 to 1.
+const nearestT = (px: number, py: number, ax: number, ay: number, vx: number, vy: number) =>
+  clamp(((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy || 1), 0, 1)
+
 //
 // Icons. Hand-made 24x24 paths, shared by the canvas (Path2D) and the UI (<svg>).
 // A leading '!' means fill with the even-odd rule, which is how holes are cut.
@@ -96,7 +100,7 @@ export type IconName = keyof typeof icons
 
 const iconPaths = new Map<string, { path: Path2D; rule: CanvasFillRule }>()
 
-export function drawIcon(ctx: CanvasRenderingContext2D, name: IconName, cx: number, cy: number, size: number, color: string) {
+function drawIcon(ctx: CanvasRenderingContext2D, name: IconName, cx: number, cy: number, size: number, color: string) {
   let entry = iconPaths.get(name)
   if (!entry) {
     const d = icons[name]
@@ -119,9 +123,9 @@ export function drawIcon(ctx: CanvasRenderingContext2D, name: IconName, cx: numb
 
 type RoadClass = 'motorway' | 'trunk' | 'primary' | 'secondary' | 'tertiary' | 'minor' | 'service' | 'path' | 'rail'
 
-export type BlipStyle = 'pin' | 'square' | 'round' | 'stamp' | 'ring'
+type BlipStyle = 'pin' | 'square' | 'round' | 'stamp' | 'ring'
 
-export type MapTheme = {
+type MapTheme = {
   land: string
   texture: 'none' | 'parchment' | 'grain'
   water: string
@@ -458,7 +462,6 @@ function decodeTile(buf: Uint8Array, z: number, x: number, y: number): SourceTil
       }
     }
 
-    // Layers we never draw aren't worth decoding.
     const features: Feature[] = []
     if (SKIPPED_LAYERS.has(name)) featureRanges.length = 0
     for (let i = 0; i < featureRanges.length; i += 2) {
@@ -510,7 +513,7 @@ export const LEGEND: [IconName, string][] = [
 
 export const poiColor = (icon: IconName) => POI_COLORS[icon] ?? '#888888'
 
-function nameOf(props: Props) {
+function featureName(props: Props) {
   const name = props['name:latin'] ?? props.name
   return typeof name === 'string' ? name : ''
 }
@@ -530,20 +533,19 @@ function collectLabels(tile: SourceTile) {
   const toWorldY = (v: number) => (tile.y * tile.extent + v) / scale
   const inside = (u: number, v: number) => u >= 0 && v >= 0 && u < tile.extent && v < tile.extent
   const lineOf = (ring: Int32Array): Line => ({ ring, baseX: tile.x * tile.extent, baseY: tile.y * tile.extent, scale })
+  // A label that sits on a point, with none of the line or icon parts.
+  const at = (f: Feature) => ({ x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0, icon: null, color: null })
 
   for (const f of tile.layers.place ?? []) {
-    const text = nameOf(f.props)
+    const text = featureName(f.props)
     const rank = PLACE_RANK[String(f.props.class)]
     if (!text || !rank || !inside(f.rings[0][0], f.rings[0][1])) continue
-    tile.labels.push({
-      kind: 'place', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
-      rank: rank[0] * 10 + Number(f.props.rank ?? 0) / 10, minZoom: rank[1], maxZoom: rank[2], size: rank[3], icon: null, color: null,
-    })
+    tile.labels.push({ ...at(f), kind: 'place', text, rank: rank[0] * 10 + Number(f.props.rank ?? 0) / 10, minZoom: rank[1], maxZoom: rank[2], size: rank[3] })
   }
 
   // Rivers and creeks: their name runs along the water.
   for (const f of tile.layers.waterway ?? []) {
-    const text = nameOf(f.props)
+    const text = featureName(f.props)
     const cls = String(f.props.class)
     if (!text || f.type !== 2 || (cls !== 'river' && cls !== 'stream' && cls !== 'canal')) continue
     for (const ring of f.rings) {
@@ -558,33 +560,26 @@ function collectLabels(tile: SourceTile) {
   }
 
   for (const f of tile.layers.water_name ?? []) {
-    const text = nameOf(f.props)
+    const text = featureName(f.props)
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
     const cls = String(f.props.class)
     tile.labels.push({
-      kind: 'water', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
-      rank: cls === 'ocean' || cls === 'sea' ? 5 : 40, minZoom: cls === 'ocean' ? 3 : cls === 'sea' ? 6 : 13, maxZoom: 20,
-      size: cls === 'ocean' || cls === 'sea' ? 15 : 12, icon: null, color: null,
+      ...at(f), kind: 'water', text, rank: cls === 'ocean' || cls === 'sea' ? 5 : 40, minZoom: cls === 'ocean' ? 3 : cls === 'sea' ? 6 : 13, maxZoom: 20,
+      size: cls === 'ocean' || cls === 'sea' ? 15 : 12,
     })
   }
 
   for (const f of tile.layers.mountain_peak ?? []) {
-    const name = nameOf(f.props)
+    const name = featureName(f.props)
     if (!name || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
     const ele = Number(f.props.ele)
-    tile.labels.push({
-      kind: 'park', text: `▲ ${name}${ele ? ` ${Math.round(ele)} m` : ''}`, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]),
-      angle: 0, length: 0, line: null, pathLength: 0, rank: 60 + Number(f.props.rank ?? 0), minZoom: 10.5, maxZoom: 18, size: 11, icon: null, color: null,
-    })
+    tile.labels.push({ ...at(f), kind: 'park', text: `▲ ${name}${ele ? ` ${Math.round(ele)} m` : ''}`, rank: 60 + Number(f.props.rank ?? 0), minZoom: 10.5, maxZoom: 18, size: 11 })
   }
 
   for (const f of tile.layers.park ?? []) {
-    const text = nameOf(f.props)
+    const text = featureName(f.props)
     if (!text || f.type !== 1 || !inside(f.rings[0][0], f.rings[0][1])) continue
-    tile.labels.push({
-      kind: 'park', text, x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
-      rank: 70 + Number(f.props.rank ?? 0), minZoom: 14.5, maxZoom: 20, size: 11, icon: null, color: null,
-    })
+    tile.labels.push({ ...at(f), kind: 'park', text, rank: 70 + Number(f.props.rank ?? 0), minZoom: 14.5, maxZoom: 20, size: 11 })
   }
 
   for (const f of tile.layers.poi ?? []) {
@@ -596,14 +591,14 @@ function collectLabels(tile: SourceTile) {
     if (!icon || subclass === 'artwork' || subclass === 'bus_stop' || subclass === 'tram_stop') continue
     const rank = Number(f.props.rank ?? 30)
     tile.labels.push({
-      kind: 'poi', text: nameOf(f.props), x: toWorldX(f.rings[0][0]), y: toWorldY(f.rings[0][1]), angle: 0, length: 0, line: null, pathLength: 0,
-      rank: 100 + rank, minZoom: rank <= 4 ? 15 : rank <= 12 ? 16 : 17, maxZoom: 20, size: 11, icon, color: POI_COLORS[icon] ?? '#888888',
+      ...at(f), kind: 'poi', text: featureName(f.props), rank: 100 + rank, minZoom: rank <= 4 ? 15 : rank <= 12 ? 16 : 17, maxZoom: 20, size: 11,
+      icon, color: poiColor(icon),
     })
   }
 
   // Roads: label the longest nearly-straight run of each named line.
   for (const f of tile.layers.transportation_name ?? []) {
-    const text = nameOf(f.props)
+    const text = featureName(f.props)
     const rank = ROAD_RANK[String(f.props.class)]
     if (!text || rank === undefined || f.type !== 2) continue
 
@@ -679,7 +674,7 @@ export function nearestStreet(m: MapState, lng: number, lat: number, within = 16
       for (const f of tile.layers.transportation_name ?? []) {
         if (f.type !== 2) continue
         if (px < f.minX - bestDistance || px > f.maxX + bestDistance || py < f.minY - bestDistance || py > f.maxY + bestDistance) continue
-        const name = nameOf(f.props)
+        const name = featureName(f.props)
         if (!name) continue
 
         for (const ring of f.rings) {
@@ -688,7 +683,7 @@ export function nearestStreet(m: MapState, lng: number, lat: number, within = 16
             const ay = ring[i + 1]
             const vx = ring[i + 2] - ax
             const vy = ring[i + 3] - ay
-            const t = clamp(((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy || 1), 0, 1)
+            const t = nearestT(px, py, ax, ay, vx, vy)
             const d = Math.hypot(px - (ax + vx * t), py - (ay + vy * t))
             if (d < bestDistance) {
               bestDistance = d
@@ -702,6 +697,8 @@ export function nearestStreet(m: MapState, lng: number, lat: number, within = 16
   return best
 }
 
+const PLACE_KIND: Record<Label['kind'], string> = { road: 'Street', place: 'Area', poi: 'Place', water: 'Water', park: 'Park' }
+
 // Streets, suburbs, parks and places in the tiles we've loaded whose name
 // matches: a geocoder for the neighbourhood you're looking at, with no service.
 export function findPlaces(m: MapState, query: string, limit = 6) {
@@ -712,7 +709,7 @@ export function findPlaces(m: MapState, query: string, limit = 6) {
   for (const entry of m.sources.values()) {
     for (const label of entry.tile?.labels ?? []) {
       if (!label.text || !label.text.toLowerCase().includes(q)) continue
-      const kind = label.kind === 'road' ? 'Street' : label.kind === 'place' ? 'Area' : label.kind === 'poi' ? 'Place' : label.kind === 'water' ? 'Water' : 'Park'
+      const kind = PLACE_KIND[label.kind]
       const key = `${kind}:${label.text}`
       // Prefer names that start with the query, then the more important ones.
       const rank = (label.text.toLowerCase().startsWith(q) ? 0 : 1000) + label.rank
@@ -745,7 +742,7 @@ export type Marker = {
   color: string
   count: number
   flags: number
-  text: string // initials for people, count or empty for pins
+  text: string // initials, for people
   name: string // shown under people
   accuracy: number // metres, for 'me'
   heading: number | null
@@ -789,9 +786,7 @@ export type MapState = {
   pointers: Map<number, { x: number; y: number }>
   downX: number
   downY: number
-  downTime: number
   moved: boolean
-  pinchDistance: number
   lastTap: number
   lastPointer: string // 'mouse', 'touch' or 'pen'
   samples: { x: number; y: number; t: number }[]
@@ -859,7 +854,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     x: lngToX(lng), y: latToY(lat), zoom, theme: mapThemes[themeName] ?? mapThemes.day, themeName,
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
-    pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
+    pointers: new Map(), downX: 0, downY: 0, moved: false, lastTap: 0, lastPointer: 'mouse', samples: [],
     fade: null, radar: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
@@ -1045,11 +1040,9 @@ function attachInput(m: MapState) {
     if (m.pointers.size === 1) {
       m.downX = p.x
       m.downY = p.y
-      m.downTime = performance.now()
       m.moved = false
-      m.samples = [{ x: p.x, y: p.y, t: m.downTime }]
+      m.samples = [{ x: p.x, y: p.y, t: performance.now() }]
     } else if (m.pointers.size === 2) {
-      m.pinchDistance = pinchInfo().distance
       m.moved = true
       m.onUserMove()
     }
@@ -1762,7 +1755,7 @@ const measurer = document.createElement('canvas').getContext('2d')!
 
 function labelFont(t: MapTheme, label: Label) {
   const italic = (t.italic && label.kind !== 'poi') || label.kind === 'water' || label.kind === 'park' ? 'italic ' : ''
-  const weight = label.kind === 'place' ? (t.caps ? 700 : 600) : label.kind === 'road' ? 500 : 500
+  const weight = label.kind === 'place' ? (t.caps ? 700 : 600) : 500
   return `${italic}${weight} ${label.size}px ${t.font}`
 }
 
@@ -1865,7 +1858,7 @@ function alongPath(m: MapState, line: Line, sx: number, sy: number, widths: numb
     const vx = pts[i] - ax
     const vy = pts[i + 1] - ay
     const segment = Math.hypot(vx, vy)
-    const t = clamp(((sx - ax) * vx + (sy - ay) * vy) / (segment * segment || 1), 0, 1)
+    const t = nearestT(sx, sy, ax, ay, vx, vy)
     const d = Math.hypot(sx - (ax + vx * t), sy - (ay + vy * t))
     if (d < nearest) {
       nearest = d
@@ -1899,6 +1892,23 @@ function alongPath(m: MapState, line: Line, sx: number, sy: number, widths: numb
     d += w
   }
   return out
+}
+
+// A filled circle with a white rim: "new", "online", and counts with the number in.
+function dot(c: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, rim = 1.5, count = 0) {
+  c.beginPath()
+  c.arc(x, y, r, 0, Math.PI * 2)
+  c.fillStyle = fill
+  c.fill()
+  c.strokeStyle = '#fff'
+  c.lineWidth = rim
+  c.stroke()
+  if (!count) return
+  c.fillStyle = '#fff'
+  c.font = `700 10px ${sans}`
+  c.textAlign = 'center'
+  c.textBaseline = 'middle'
+  c.fillText(count > 9 ? '9+' : String(count), x, y + 0.5)
 }
 
 // A blip: the badge a map puts on a place. The shape depends on the theme.
@@ -1977,7 +1987,7 @@ function poiSprite(m: MapState, icon: IconName, color: string) {
   const size = r * 2 + 12
   return sprite(m, `P${icon}`, size, size, (c) => {
     c.globalAlpha = t.poiAlpha
-    drawBadge(c, t, size / 2, size / 2, r, t.blip === 'pin' ? color : t.blip === 'ring' ? '#000' : color, icon, false)
+    drawBadge(c, t, size / 2, size / 2, r, color, icon, false)
   })
 }
 
@@ -2075,20 +2085,7 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
   }
 
   // Little badges: thread count, saved star, unread dot.
-  if (marker.count > 1) {
-    c.beginPath()
-    c.arc(badgeX, badgeY, 8, 0, Math.PI * 2)
-    c.fillStyle = '#1d1f24'
-    c.fill()
-    c.strokeStyle = '#fff'
-    c.lineWidth = 1.5
-    c.stroke()
-    c.fillStyle = '#fff'
-    c.font = `700 10px ${sans}`
-    c.textAlign = 'center'
-    c.textBaseline = 'middle'
-    c.fillText(marker.count > 9 ? '9+' : String(marker.count), badgeX, badgeY + 0.5)
-  }
+  if (marker.count > 1) dot(c, badgeX, badgeY, 8, '#1d1f24', 1.5, marker.count)
   if (marker.flags & MARK_SAVED) {
     drawIcon(c, 'star', -badgeX, badgeY, 14, '#f5b50a')
   }
@@ -2107,13 +2104,7 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
   }
   if (marker.flags & MARK_NEW) {
     const pulse = 0.5 + 0.5 * Math.sin(time / 180)
-    c.beginPath()
-    c.arc(badgeX - (marker.count > 1 ? 14 : 0), badgeY, 4.5 + pulse, 0, Math.PI * 2)
-    c.fillStyle = '#ef3b3b'
-    c.fill()
-    c.strokeStyle = '#fff'
-    c.lineWidth = 1.5
-    c.stroke()
+    dot(c, badgeX - (marker.count > 1 ? 14 : 0), badgeY, 4.5 + pulse, '#ef3b3b')
   }
 
   c.restore()
@@ -2142,15 +2133,7 @@ function drawCluster(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, s
   c.textAlign = 'center'
   c.textBaseline = 'middle'
   c.fillText(String(marker.count), sx, sy + 1)
-  if (marker.flags & MARK_NEW) {
-    c.beginPath()
-    c.arc(sx + r * 0.72, sy - r * 0.72, 5, 0, Math.PI * 2)
-    c.fillStyle = '#ef3b3b'
-    c.fill()
-    c.strokeStyle = '#fff'
-    c.lineWidth = 1.5
-    c.stroke()
-  }
+  if (marker.flags & MARK_NEW) dot(c, sx + r * 0.72, sy - r * 0.72, 5, '#ef3b3b')
   c.restore()
 }
 
@@ -2246,31 +2229,9 @@ function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx
   c.fillStyle = t.blip === 'ring' ? t.blipInk : '#fff'
   c.fillText(marker.name, sx, sy + r + 11.5)
 
-  if (marker.flags & MARK_ONLINE) {
-    c.beginPath()
-    c.arc(sx + r * 0.72, sy - r * 0.72, 4.5, 0, Math.PI * 2)
-    c.fillStyle = '#22c55e'
-    c.fill()
-    c.strokeStyle = '#fff'
-    c.lineWidth = 2
-    c.stroke()
-  }
-
+  if (marker.flags & MARK_ONLINE) dot(c, sx + r * 0.72, sy - r * 0.72, 4.5, '#22c55e', 2)
   // Unread messages from them: a count, top left, asking to be tapped.
-  if (marker.count > 0) {
-    const bx = sx - r * 0.8
-    const by = sy - r * 0.8
-    c.beginPath()
-    c.arc(bx, by, 8, 0, Math.PI * 2)
-    c.fillStyle = '#ef3b3b'
-    c.fill()
-    c.strokeStyle = '#fff'
-    c.lineWidth = 1.5
-    c.stroke()
-    c.fillStyle = '#fff'
-    c.font = `700 10px ${sans}`
-    c.fillText(marker.count > 9 ? '9+' : String(marker.count), bx, by + 0.5)
-  }
+  if (marker.count > 0) dot(c, sx - r * 0.8, sy - r * 0.8, 8, '#ef3b3b', 1.5, marker.count)
   c.restore()
 }
 
@@ -2374,7 +2335,7 @@ const WALKABLE = new Set(['trunk', 'primary', 'secondary', 'tertiary', 'minor', 
 // Tiles are about 2 km across; past 4 by 4 of them it's not a walk.
 const MAX_ROUTE_TILES = 16
 
-export type Route = {
+type Route = {
   fromX: number // world
   fromY: number
   toX: number
@@ -2420,7 +2381,7 @@ export function setRoute(m: MapState, from: { lng: number; lat: number; accuracy
       const ay = old.points[i - 1]
       const dx = old.points[i] - ax
       const dy = old.points[i + 1] - ay
-      const t = clamp(((fromX - ax) * dx + (fromY - ay) * dy) / (dx * dx + dy * dy || 1), 0, 1)
+      const t = nearestT(fromX, fromY, ax, ay, dx, dy)
       const d = Math.hypot(ax + t * dx - fromX, ay + t * dy - fromY)
       if (d < best) {
         best = d
@@ -2602,12 +2563,11 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
     const u = j * 5
     const qx = segs[u + 2] - segs[u]
     const qy = segs[u + 3] - segs[u + 1]
-    const lengthSquared = qx * qx + qy * qy
-    if (lengthSquared === 0) return
+    if (qx === 0 && qy === 0) return
     for (let end = 0; end <= 2; end += 2) {
       const x = segs[s + end]
       const y = segs[s + end + 1]
-      const v = clamp(((x - segs[u]) * qx + (y - segs[u + 1]) * qy) / lengthSquared, 0, 1)
+      const v = nearestT(x, y, segs[u], segs[u + 1], qx, qy)
       const ex = segs[u] + v * qx - x
       const ey = segs[u + 1] + v * qy - y
       if (ex * ex + ey * ey > TOLERANCE * TOLERANCE) continue
@@ -2742,7 +2702,7 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
         if (Math.min(nodeY[a], nodeY[b]) - y > best || y - Math.max(nodeY[a], nodeY[b]) > best) continue
         const dx = nodeX[b] - nodeX[a]
         const dy = nodeY[b] - nodeY[a]
-        const t = clamp(((x - nodeX[a]) * dx + (y - nodeY[a]) * dy) / (dx * dx + dy * dy || 1), 0, 1)
+        const t = nearestT(x, y, nodeX[a], nodeY[a], dx, dy)
         const d = Math.hypot(nodeX[a] + t * dx - x, nodeY[a] + t * dy - y)
         if (d < best) {
           best = d
@@ -3211,7 +3171,7 @@ function drawBentName(m: MapState, label: Label, sx: number, sy: number, placed:
 function drawMarkers(m: MapState, v: View, time: number) {
   const t = m.theme
   const c = m.ctx
-  const metersPerPixel = (40075016.686 * Math.cos((yToLat(m.y) * Math.PI) / 180)) / v.size
+  const metersPerPixel = metersPerWorld(m.y) / v.size
   let animated = false
   let dropping = false
   const ordered = [...m.visible].sort((a, b) => order(a) - order(b) || a.y - b.y)
@@ -3259,12 +3219,12 @@ function drawRadar(m: MapState, v: View, time: number) {
   const tileSize = TILE * 2 ** (zoom - v.z)
 
   // Most radars are round; the modern sprawl's is a wide rounded rectangle.
-  const square = t.blip === 'round'
-  const hw = square ? r * RADAR_WIDE : r // half width and height
-  const hh = square ? r * 0.9 : r
+  const wide = t.blip === 'round'
+  const hw = wide ? r * RADAR_WIDE : r // half width and height
+  const hh = wide ? r * 0.9 : r
   const outline = (grow: number) => {
     c.beginPath()
-    if (square) c.roundRect(cx - hw - grow, cy - hh - grow, 2 * (hw + grow), 2 * (hh + grow), 10 + grow)
+    if (wide) c.roundRect(cx - hw - grow, cy - hh - grow, 2 * (hw + grow), 2 * (hh + grow), 10 + grow)
     else c.arc(cx, cy, r + grow, 0, Math.PI * 2)
   }
 
@@ -3300,10 +3260,10 @@ function drawRadar(m: MapState, v: View, time: number) {
     let dx = (marker.x - wx) * size
     let dy = (marker.y - wy) * size
     const d = Math.hypot(dx, dy)
-    const inside = square ? Math.abs(dx) < hw - 6 && Math.abs(dy) < hh - 6 : d < r - 6
+    const inside = wide ? Math.abs(dx) < hw - 6 && Math.abs(dy) < hh - 6 : d < r - 6
     if (!inside) {
       if (marker.kind === 'pin' && !(marker.flags & (MARK_LIVE | MARK_NEW | MARK_SELECTED))) continue // only what matters goes on the rim
-      const k = square ? Math.min((hw - 5) / Math.abs(dx || 1), (hh - 5) / Math.abs(dy || 1)) : (r - 5) / d
+      const k = wide ? Math.min((hw - 5) / Math.abs(dx || 1), (hh - 5) / Math.abs(dy || 1)) : (r - 5) / d
       dx *= k
       dy *= k
     }
