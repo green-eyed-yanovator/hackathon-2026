@@ -211,7 +211,7 @@ export const mapThemes: Record<string, MapTheme> = {
     casing: null,
     road: { motorway: '#c2c7cc', trunk: '#b2b7bd', primary: '#9aa0a7', secondary: '#8a9097', tertiary: '#7b8188', minor: '#636970', service: '#565c63', path: '#4f555c', rail: '#4a5057' },
     roadWidth: 0.9, wobble: 0, boundary: '#717880', glow: null,
-    font: '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif', labelColor: '#e8ebee', labelHalo: '#1b1f24', placeColor: '#ffffff', waterLabel: '#a9c6e6',
+    font: '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, sans-serif', labelColor: '#e8ebee', labelHalo: '#1b1f24', placeColor: '#ffffff', waterLabel: '#a9c6e6',
     caps: true, italic: false, blip: 'round', blipInk: '#ffffff', poiAlpha: 1, me: '#ffffff',
   },
   // A hand-inked survey map of the old frontier.

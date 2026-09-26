@@ -108,7 +108,7 @@
   --shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
   --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --font: 'Avenir Next', 'Segoe UI', Roboto, sans-serif;
-  --font-head: 'Avenir Next Condensed', 'Roboto Condensed', 'Arial Narrow', sans-serif;
+  --font-head: 'Avenir Next Condensed', 'Roboto Condensed', 'Arial Narrow', sans-serif-condensed, sans-serif;
   --head-case: uppercase;
   --head-spacing: 0.06em;
   --head-weight: 700;
