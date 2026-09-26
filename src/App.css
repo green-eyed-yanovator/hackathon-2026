@@ -2974,8 +2974,29 @@ button.toast {
   }
 
   [data-theme='coast'] .has-feed .toast,
-  [data-theme='metro'] .has-feed .toast {
+  [data-theme='metro'] .has-feed .toast,
+  [data-theme='frontier'] .has-feed .toast {
     left: 408px;
+  }
+
+  /* The frontier's is a band of dark fading off to the right, in the book face. */
+  [data-theme='frontier'] .toast {
+    top: 140px;
+    bottom: auto;
+    left: 16px;
+    transform: none;
+    max-width: 360px;
+    padding: 12px 40px 12px 16px;
+    border-radius: 0;
+    background: linear-gradient(90deg, rgba(20, 14, 8, 0.92) 60%, rgba(20, 14, 8, 0));
+    color: #f3e6c8;
+    font-family: var(--font-head);
+    font-size: 15px;
+    font-weight: 500;
+    text-align: left;
+    white-space: normal;
+    box-shadow: none;
+    animation: none;
   }
 }
 
