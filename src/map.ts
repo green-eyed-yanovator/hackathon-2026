@@ -87,11 +87,9 @@ export const icons = {
   logout: 'M4 3h9v2H6v14h7v2H4zM15 7l5 5-5 5-1.4-1.4 2.6-2.6H9v-2h7.2l-2.6-2.6z',
   arrow: 'M12 2l7 19-7-4-7 4z',
   map: '!M3 5l6-2 6 2 6-2v16l-6 2-6-2-6 2zM9 5.2v13.6l6 2V7.2z',
-  more: 'M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM12 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM19 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4z',
   minus: 'M4 11h16v2H4z',
   info: '!M12 2a10 10 0 1 1 0 20 10 10 0 1 1 0-20zM11 10h2v8h-2zM11 6h2v2h-2z',
   heart: 'M12 20.5C6 16 2.5 12.5 2.5 8.6A4.6 4.6 0 0 1 7.1 4c2 0 3.6 1 4.9 2.8C13.3 5 14.9 4 16.9 4a4.6 4.6 0 0 1 4.6 4.6c0 3.9-3.5 7.4-9.5 11.9z',
-  menu: 'M3 5h18v2H3zM3 11h18v2H3zM3 17h18v2H3z',
 }
 
 export type IconName = keyof typeof icons
