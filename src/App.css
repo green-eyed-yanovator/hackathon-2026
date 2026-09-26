@@ -942,6 +942,16 @@ kbd {
   color: #16a34a;
 }
 
+/* Lore's year, in sepia whatever the style. */
+.when.lore {
+  color: #9a6b3f;
+}
+
+.when-line.lore {
+  background: color-mix(in srgb, #9a6b3f 14%, transparent);
+  color: color-mix(in srgb, #9a6b3f 80%, var(--fg));
+}
+
 .when-field {
   margin: 10px 0 0;
 }
@@ -2287,6 +2297,64 @@ textarea::placeholder {
   min-width: 0;
 }
 
+/* Back in time: the years slide along the bottom, where the pin button was. */
+.then-bar {
+  position: absolute;
+  z-index: 12;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(460px, calc(100vw - 32px));
+  padding: 8px 8px 8px 16px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  backdrop-filter: blur(var(--blur)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(1.3);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow), var(--highlight);
+  color: #9a6b3f;
+  animation: rise 0.2s;
+}
+
+.then-bar input {
+  flex: 1;
+  accent-color: #9a6b3f;
+}
+
+.then-year {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 64px;
+  font-variant-numeric: tabular-nums;
+}
+
+.then-year strong {
+  font-family: var(--font-head);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.then-year small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.has-feed .then-bar {
+  left: calc(50% + 190px);
+}
+
+.has-detail .then-bar {
+  left: calc(50% - 222px);
+}
+
+.has-feed.has-detail .then-bar {
+  left: calc(50% - 32px);
+}
+
 .fab {
   position: absolute;
   z-index: 12;
@@ -3013,7 +3081,8 @@ button.toast {
 
   .has-detail.has-feed .fab,
   .has-detail.has-feed .walk,
-  .has-detail.has-feed .objective {
+  .has-detail.has-feed .objective,
+  .has-detail.has-feed .then-bar {
     left: calc(50% - 222px);
   }
 
@@ -3270,6 +3339,14 @@ button.toast {
   .district {
     right: 68px;
     bottom: calc(150px + env(safe-area-inset-bottom));
+  }
+
+  .then-bar {
+    left: 16px !important; /* phones: across the bottom, over the tab bar */
+    right: 16px;
+    width: auto;
+    transform: none;
+    bottom: calc(72px + env(safe-area-inset-bottom));
   }
 
   .district strong {

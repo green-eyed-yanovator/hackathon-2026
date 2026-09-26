@@ -17,6 +17,11 @@ What you can do:
   or share. Give a pin a time and it counts down in the feed, shows under
   Soon, ripples on the map while it's on, and goes to your calendar in a tap;
   anything you're in on gets you a word an hour before.
+- **Lore: what a place remembers.** A kind of pin of its own, with the year
+  it happened: your nan's corner deli in 1964, the band's first gig in 1994.
+  The clock button (or `Y`) takes the map back in time: slide the years and
+  it shows only what people remember from up to then, yellowing the further
+  back it goes. Lore never goes quiet the way news does.
 - **Areas, like a game's districts.** A pin can be about a stretch of the
   city, not just a spot: a circle of so many metres, or a few blocks drawn
   corner by corner on the map. Each style marks them its own way (a territory
@@ -158,7 +163,7 @@ for Neon Bay…) and a tick for messages. Settings turns them off.
 `/` or `Ctrl K` search pins, people, streets and commands (fuzzy: `rndl` finds
 Rundle; `walk rundle mall` walks you there) · `N` new pin ·
 `J` `K` next and previous pin · `L` where am I (follows you until you move the map) ·
-`G` get there on foot (again to stop) ·
+`G` get there on foot (again to stop) · `Y` back in time ·
 `T` next map style · `F` friends · `I` inbox · arrows move the map · `+` `−`
 zoom · `Esc` close
 

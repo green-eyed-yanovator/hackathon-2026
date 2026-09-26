@@ -46,7 +46,7 @@ const ownMedia = (m: Media) => {
   return url ? { ...m, url } : null
 }
 
-export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
+export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost' | 'lore'
 
 export type Post = {
   id: string
@@ -63,6 +63,7 @@ export type Post = {
   flair: Flair
   starts_at: string | null // when it happens, for events and meetups
   area: Area | null // the stretch of city it's about, if more than a spot
+  year: number | null // for lore: the year it happened
 }
 
 // A pin's area, the way a game marks out a district: a circle of so many metres
@@ -113,13 +114,14 @@ export type Location = { user_id: string; latitude: number; longitude: number; a
 export type Here = { latitude: number; longitude: number; accuracy: number; heading: number | null }
 export type Presence = { user_id: string; device: string; here: boolean; seen_at: string }
 
-export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert'; color: string }> = {
+export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert' | 'book'; color: string }> = {
   general: { label: 'General', icon: 'chat', color: '#4f7cff' },
   food: { label: 'Food', icon: 'burger', color: '#f07b2d' },
   music: { label: 'Music', icon: 'note', color: '#a259ff' },
   sports: { label: 'Sports', icon: 'ball', color: '#16a974' },
   event: { label: 'Event', icon: 'star', color: '#e0a100' },
   lost: { label: 'Lost & found', icon: 'alert', color: '#ef4444' },
+  lore: { label: 'Lore', icon: 'book', color: '#9a6b3f' }, // what a place remembers
 }
 
 export const S = {
@@ -711,7 +713,7 @@ function forgetPost(postId: string) {
   changed()
 }
 
-export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; latitude: number; longitude: number; area: Area | null; files: File[] }
+export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; year: number | null; latitude: number; longitude: number; area: Area | null; files: File[] }
 
 export async function createPost(draft: Draft) {
   // Posts within 30 m of an existing place join it and share its marker.
@@ -737,7 +739,7 @@ export async function createPost(draft: Draft) {
 
   const { data: post, error } = await supabase
     .from('posts')
-    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt, area: draft.area })
+    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt, year: draft.year, area: draft.area })
     .select()
     .single()
   if (error) {
@@ -770,7 +772,7 @@ export async function createPost(draft: Draft) {
   return post as Post
 }
 
-export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair' | 'area'>>) {
+export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair' | 'area' | 'year'>>) {
   const { data, error } = await supabase.from('posts').update(patch).eq('id', id).select().single()
   if (error) return fail("Couldn't save the change", error)
   upsert(S.posts, data as Post, byId, true)

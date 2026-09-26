@@ -103,6 +103,7 @@ const UI = {
   draft: null as { latitude: number; longitude: number } | null,
   draftArea: null as Area | null, // the area of the pin being made: a circle, or corners being tapped
   district: null as { name: string; sub: string } | null, // an area just walked into, named in the corner
+  then: null as number | null, // looking at the city as it was: lore up to this year
   alerts: stored('aroundhere.alerts') === 'on',
   sounds: stored('aroundhere.sounds') !== 'off',
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
@@ -481,10 +482,13 @@ function visiblePosts() {
   const { joined, active } = stats()
   // Pins nobody has touched in a month quietly leave the map; Past still has them.
   // An event still to come counts as recent however long ago it was pinned.
-  const recent = (p: Post) => Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
+  // Lore is what a place remembers: it never goes quiet.
+  const recent = (p: Post) => p.flair === 'lore' || Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
 
   return S.posts.filter((p) => {
     if (p.author_id && S.blocked.has(p.author_id)) return false
+    // Then: the city's lore up to a year, and nothing else.
+    if (UI.then !== null) return p.flair === 'lore' && p.year !== null && p.year <= UI.then
     if (UI.flair && p.flair !== UI.flair) return false
     switch (UI.tab) {
       case 'around':
@@ -555,6 +559,27 @@ function areaText(area: Area, lat: number) {
   return `about ${((pitches * 7140) / 1e6).toFixed(1)} km²`
 }
 
+// "38 years ago", "last year".
+function yearsAgo(year: number) {
+  const n = new Date().getFullYear() - year
+  return n <= 0 ? 'this year' : n === 1 ? 'last year' : `${n} years ago`
+}
+
+// The years the lore on the map spans, for the Then slider: from the decade of
+// the oldest story to now.
+function loreSpan() {
+  const years = S.posts.filter((p) => p.flair === 'lore' && p.year).map((p) => p.year!)
+  const now = new Date().getFullYear()
+  return { from: Math.floor(Math.min(now - 10, ...years) / 10) * 10, to: now }
+}
+
+function toggleThen() {
+  ui({ then: UI.then === null ? loreSpan().to : null })
+}
+
+// A four-digit year typed in, or nothing.
+const typedYear = (text: string) => (/^\d{4}$/.test(text.trim()) ? Number(text.trim()) : null)
+
 // The area last walked into, so it's named once on the way in.
 let lastRegion = ''
 let districtTimer = 0
@@ -603,7 +628,8 @@ function buildMarkers(posts: Post[]): Marker[] {
     })
   }
 
-  for (const userId of S.locations.keys()) {
+  // Friends are where they are now, so looking back in time leaves them out.
+  for (const userId of UI.then === null ? S.locations.keys() : []) {
     const loc = locationOf(userId)
     if (userId === S.userId || !loc) continue
     const name = nameOf(userId)
@@ -1210,6 +1236,11 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
             </span>
           )}
           <span className="nowrap">{meters(away)}</span>
+          {post.year && (
+            <span className="when lore">
+              <Icon name="book" size={12} /> {post.year}
+            </span>
+          )}
           {soon && (
             <span className={soon === 'now' ? 'when now' : 'when'}>
               <Icon name="calendar" size={12} /> {soon}
@@ -1347,7 +1378,9 @@ function Feed() {
         ) : !S.ready ? (
           <div className="skeleton">{[0, 1, 2, 3].map((i) => <div key={i} />)}</div>
         ) : rows.length === 0 ? (
-          <Empty icon="pin">{EMPTY_TAB[UI.tab]}</Empty>
+          <Empty icon={UI.then !== null ? 'book' : 'pin'}>
+            {UI.then !== null ? `Nothing remembered from before ${UI.then} here yet. Pin some lore: a place, a year, what happened.` : EMPTY_TAB[UI.tab]}
+          </Empty>
         ) : (
           rows.map(({ post, away, active }, i) => {
             // In Latest, a line where the new stuff since your last visit ends.
@@ -1390,6 +1423,7 @@ function PostView({ post }: { post: Post }) {
   const [title, setTitle] = useState(post.title)
   const [body, setBody] = useState(post.description)
   const [starts, setStarts] = useState(post.starts_at ? toLocalInput(post.starts_at) : '')
+  const [year, setYear] = useState(post.year ? String(post.year) : '')
   const [flair, setFlair] = useState<Flair>(post.flair)
   const [doomedReply, setDoomedReply] = useState<string | null>(null) // a reply of mine waiting for "really?"
   const [reporting, setReporting] = useState(false)
@@ -1421,7 +1455,8 @@ function PostView({ post }: { post: Post }) {
 
   async function save() {
     if (!title.trim()) return
-    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), starts_at: fromLocalInput(starts), flair })) {
+    const lore = flair === 'lore'
+    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), flair, starts_at: lore ? null : fromLocalInput(starts), year: lore ? typedYear(year) : null })) {
       setEditing(false)
       setHistory(null)
     } else failed("Couldn't save")
@@ -1511,12 +1546,21 @@ function PostView({ post }: { post: Post }) {
           <FlairPick value={flair} onPick={setFlair} />
           <input className="input title-input" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} autoFocus />
           <textarea className="input" rows={5} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
-          <label className="field when-field">
-            <span>
-              When <em className="muted">· optional</em>
-            </span>
-            <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
-          </label>
+          {flair === 'lore' ? (
+            <label className="field when-field">
+              <span>
+                The year it happened <em className="muted">· optional</em>
+              </span>
+              <input className="input" inputMode="numeric" maxLength={4} placeholder="1986" value={year} onChange={(e) => setYear(e.target.value)} />
+            </label>
+          ) : (
+            <label className="field when-field">
+              <span>
+                When <em className="muted">· optional</em>
+              </span>
+              <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+            </label>
+          )}
           <div className="btn-row">
             <button className="btn" onClick={() => setEditing(false)}>
               Cancel
@@ -1529,6 +1573,13 @@ function PostView({ post }: { post: Post }) {
       ) : (
         <>
           <h1 className="post-title">{post.title}</h1>
+          {post.year && (
+            <div className="when-line lore">
+              <Icon name="book" size={16} />
+              <strong>{post.year}</strong>
+              <span className="muted">· {yearsAgo(post.year)}</span>
+            </div>
+          )}
           {post.starts_at && (
             <div className={soon === 'now' ? 'when-line now' : 'when-line'}>
               <Icon name="calendar" size={16} />
@@ -2579,6 +2630,7 @@ function SettingsView() {
           ['J K', 'Next, previous pin'],
           ['L', 'Where am I'],
           ['G', 'Get there on foot, or stop'],
+          ['Y', 'Back in time, or back to now'],
           ['T', 'Next map style'],
           ['F', 'Friends'],
           ['I', 'Inbox'],
@@ -2605,6 +2657,7 @@ function ComposeView() {
   const [body, setBody] = useState('')
   const [flair, setFlair] = useState<Flair>('general')
   const [starts, setStarts] = useState('')
+  const [year, setYear] = useState('')
   const [attached, setAttached] = useState<{ file: File; url: string }[]>([])
   const [busy, setBusy] = useState(false)
 
@@ -2637,7 +2690,8 @@ function ComposeView() {
       title: title.trim(),
       description: body.trim(),
       flair,
-      startsAt: fromLocalInput(starts),
+      startsAt: flair === 'lore' ? null : fromLocalInput(starts),
+      year: flair === 'lore' ? typedYear(year) : null,
       latitude: draft.latitude,
       longitude: draft.longitude,
       area: area && ('r' in area || area.ring.length >= 3) ? area : null,
@@ -2727,14 +2781,37 @@ function ComposeView() {
 
       <FlairPick value={flair} onPick={setFlair} />
 
-      <input className="input title-input" placeholder="What's happening?" value={title} maxLength={120} autoFocus={!narrow()} onChange={(e) => setTitle(e.target.value)} />
-      <textarea className="input" rows={5} placeholder="Details: where exactly, who should come, what to bring…" value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
-      <label className="field when-field">
-        <span>
-          When <em className="muted">· optional, for things that happen at a time</em>
-        </span>
-        <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
-      </label>
+      <input
+        className="input title-input"
+        placeholder={flair === 'lore' ? 'What happened here?' : "What's happening?"}
+        value={title}
+        maxLength={120}
+        autoFocus={!narrow()}
+        onChange={(e) => setTitle(e.target.value)}
+      />
+      <textarea
+        className="input"
+        rows={5}
+        placeholder={flair === 'lore' ? 'Tell it the way you remember it: who was there, what it was like…' : 'Details: where exactly, who should come, what to bring…'}
+        value={body}
+        maxLength={2000}
+        onChange={(e) => setBody(e.target.value)}
+      />
+      {flair === 'lore' ? (
+        <label className="field when-field">
+          <span>
+            The year it happened <em className="muted">· so it shows when the map goes back in time</em>
+          </span>
+          <input className="input" inputMode="numeric" maxLength={4} placeholder="1986" value={year} onChange={(e) => setYear(e.target.value)} />
+        </label>
+      ) : (
+        <label className="field when-field">
+          <span>
+            When <em className="muted">· optional, for things that happen at a time</em>
+          </span>
+          <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+        </label>
+      )}
 
       <label className="drop">
         <input type="file" accept="image/*,video/*" multiple onChange={(e) => attach(e.target.files)} />
@@ -3048,6 +3125,7 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
   const commands: Command[] = [
     { key: 'new', icon: <Icon name="plus" />, label: 'New pin', hint: 'N', run: startCompose },
     { key: 'locate', icon: <Icon name="locate" />, label: 'Where am I', hint: 'L', run: locate },
+    { key: 'then', icon: <Icon name="clock" />, label: UI.then === null ? 'Back in time: the lore of the place' : 'Back to now', hint: 'Y', run: toggleThen },
     ...(walkable() || UI.walk
       ? [{ key: 'walk', icon: <Icon name="arrow" />, label: walkable() && walkable() !== UI.walk ? 'Get there on foot' : 'Stop walking', hint: 'G', run: walkKey }]
       : []),
@@ -3304,6 +3382,7 @@ function onKey(e: KeyboardEvent) {
   else if (k === 'n') startCompose()
   else if (k === 'l') locate()
   else if (k === 'g') walkKey()
+  else if (k === 'y') toggleThen()
   else if (k === 't') applyTheme(THEMES[(THEMES.findIndex((t) => t.id === UI.theme) + 1) % THEMES.length].id)
   else if (k === 'f') {
     if (!needAccount('signin')) go('friends')
@@ -3324,6 +3403,27 @@ function onKey(e: KeyboardEvent) {
   else if (k === '-' && map) zoomBy(map, -1)
   else return
   e.preventDefault()
+}
+
+// Back in time: a slider through the years the lore covers. The map shows what
+// people remember from up to that year, and yellows the further back it goes.
+function ThenBar() {
+  const span = loreSpan()
+  const then = UI.then!
+  const count = visiblePosts().length
+  return (
+    <div className="then-bar">
+      <Icon name="clock" size={18} />
+      <input type="range" min={span.from} max={span.to} value={then} onChange={(e) => ui({ then: Number(e.target.value) })} aria-label="Year" />
+      <span className="then-year">
+        <strong>{then}</strong>
+        <small>{plural(count, 'story', 'stories')}</small>
+      </span>
+      <button className="icon-btn" onClick={() => ui({ then: null })} title="Back to now" aria-label="Back to now">
+        <Icon name="close" />
+      </button>
+    </div>
+  )
 }
 
 // "Get there" under way: how far, the maps app for the real thing, and stop.
@@ -3517,6 +3617,8 @@ export default function App() {
     }
     setMarkers(map, buildMarkers(posts))
     setRegions(map, buildRegions(posts), draftRegion())
+    const age = UI.then === null ? 0 : Math.min(1, (new Date().getFullYear() - UI.then) / 80)
+    map.canvas.style.filter = UI.then === null ? '' : `sepia(${(0.3 + 0.6 * age).toFixed(2)}) saturate(${(1 - 0.35 * age).toFixed(2)})`
     // Walking into a pin's area: its name comes up, the way a game names a district.
     const inside = S.here ? regionAt(map, S.here.longitude, S.here.latitude) : null
     if ((inside?.id ?? '') !== lastRegion) {
@@ -3620,13 +3722,17 @@ export default function App() {
         <button className={UI.follow ? 'icon-btn tool follow' : S.here ? 'icon-btn tool on' : 'icon-btn tool'} onClick={locate} aria-label="Where am I" title="Where am I (L)">
           <Icon name="locate" />
         </button>
+        <button className={UI.then !== null ? 'icon-btn tool on' : 'icon-btn tool'} onClick={toggleThen} aria-label="Back in time" title="Back in time: the lore of the place (Y)">
+          <Icon name="clock" />
+        </button>
         <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend })} aria-label="Legend" title="What the blips mean">
           <Icon name="info" />
         </button>
       </div>
       {UI.legend && <Legend />}
 
-      {route.kind !== 'new' && (
+      {UI.then !== null && <ThenBar />}
+      {route.kind !== 'new' && UI.then === null && (
         <button className="fab hide-narrow" onClick={startCompose} title="New pin (N)">
           <Icon name="plus" size={20} /> Pin something
         </button>

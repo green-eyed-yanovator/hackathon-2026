@@ -38,6 +38,7 @@ declare
   );
   person jsonb;
   p record;
+  memory record;
 begin
   if exists (select 1 from auth.users where email = 'maya@aroundhere.demo') then
     raise notice 'Demo neighbourhood is already here.';
@@ -185,6 +186,28 @@ begin
     (maya, tom, 'Not yet, Ben thinks he saw him by the courts.', now() - interval '2 hours', now() - interval '2 hours'),
     (tom, maya, 'I''ll ride past on the way home and have a look.', now() - interval '110 minutes', null),
     (priya, maya, 'Dumplings at 7, don''t be late!', now() - interval '50 minutes', null);
+
+  -- Lore: what the neighbours remember of a place, and the year. Some of it is
+  -- about a stretch of the city rather than a spot.
+  create temporary table demo_lore (author uuid, title text, body text, year int, lat float8, lng float8, area jsonb, age interval) on commit drop;
+  insert into demo_lore values
+    (priya, 'Nan''s corner deli', 'My nan ran a deli on this corner. Kids came in after school for a bag of mixed lollies and she knew every one of them by name, and who their mum was.', 1964, -34.92850, 138.59760, null, '4 days'),
+    (hannah, 'Learned to ride a bike on this path', 'Dad let go of the seat somewhere near the bridge and didn''t tell me until the far end. I cried, then made him do it again.', 1979, -34.91690, 138.59900, null, '6 days'),
+    (tom, 'Watched the Grand Prix from the fence here', 'Stood on a milk crate at the fence all afternoon. You felt the cars in your chest before you saw them, and the whole park smelled of hot tyres.', 1986, -34.92900, 138.61900,
+      '{"ring": [[138.6170, -34.9272], [138.6212, -34.9272], [138.6212, -34.9308], [138.6170, -34.9308]]}', '3 days'),
+    (lucas, 'Our band''s first gig, upstairs at the pub', 'Twelve people came and eight of them were our mums. We played the same four songs twice and nobody minded.', 1994, -34.92360, 138.62550, null, '2 days'),
+    (ben, 'The bakery that did pies at 2am', 'After the clubs everyone ended up here. A pie floater at the bench, and the sky going pink over the rooftops.', 1999, -34.92320, 138.59550, null, '5 days'),
+    (maya, 'The winter the river came up to the benches', 'The path was under brown water for a week. The ducks swam over the benches like they owned them.', 2016, -34.91850, 138.59350, '{"r": 150}', '1 day');
+
+  for memory in select * from demo_lore loop
+    with place as (
+      insert into public.places (latitude, longitude, created_at) values (memory.lat, memory.lng, now() - memory.age) returning id
+    )
+    insert into public.posts (place_id, title, description, latitude, longitude, flair, year, area, author_id, author_name, created_at)
+    select place.id, memory.title, memory.body, memory.lat, memory.lng, 'lore', memory.year, memory.area, memory.author,
+      (select display_name from public.profiles where id = memory.author), now() - memory.age
+    from place;
+  end loop;
 
   -- Some pins are about a stretch of the city, not a spot: a few blocks drawn
   -- round, or a circle of so many metres.
