@@ -95,6 +95,11 @@ they mean. They also get a radar in the corner: the streets around you, your
 arrow, north on the rim, friends and live pins waiting on the edge in their
 direction. Tap it to go back to where you are.
 
+Sounds are synthesized in the browser, no audio files: each style plays its
+own short sting when you post, resolve or make a friend (a plucked-string
+arpeggio for Frontier, an 8-bit climb for Palm Coast, a filtered synth run
+for Neon Bay…) and a tick for messages. Settings turns them off.
+
 ## Keys
 
 `/` or `Ctrl K` search pins, people, streets and commands (fuzzy: `rndl` finds

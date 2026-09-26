@@ -89,6 +89,7 @@ const UI = {
   view: initialView(),
   draft: null as { latitude: number; longitude: number } | null,
   alerts: stored('aroundhere.alerts') === 'on',
+  sounds: stored('aroundhere.sounds') !== 'off',
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
   banner: null as { title: string; sub: string } | null,
   follow: false, // the camera keeps you in the middle until you move the map
@@ -177,9 +178,104 @@ function toast(message: string) {
   }, 2800)
 }
 
+//
+// Sounds, synthesized on the spot: every style has its own short sting for big
+// moments, and a tick for messages. No audio files.
+//
+
+let audio: AudioContext | null = null
+
+function note(at: number, freq: number, length: number, type: OscillatorType, volume: number, out: AudioNode) {
+  const a = audio!
+  const osc = a.createOscillator()
+  const gain = a.createGain()
+  osc.type = type
+  osc.frequency.value = freq
+  gain.gain.setValueAtTime(0, at)
+  gain.gain.linearRampToValueAtTime(volume, at + 0.01)
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + length)
+  osc.connect(gain).connect(out)
+  osc.start(at)
+  osc.stop(at + length + 0.05)
+}
+
+// A plucked string (Karplus-Strong): a burst of noise fed round a short delay
+// that averages itself, so it rings at the delay's pitch and dies away.
+function pluck(at: number, freq: number, volume: number, out: AudioNode) {
+  const a = audio!
+  const length = Math.floor(a.sampleRate * 1.2)
+  const buffer = a.createBuffer(1, length, a.sampleRate)
+  const data = buffer.getChannelData(0)
+  const period = Math.round(a.sampleRate / freq)
+  for (let i = 0; i < period; i++) data[i] = Math.random() * 2 - 1
+  for (let i = period; i < length; i++) data[i] = 0.498 * (data[i - period] + data[i - period + 1])
+  const source = a.createBufferSource()
+  const gain = a.createGain()
+  source.buffer = buffer
+  gain.gain.value = volume
+  source.connect(gain).connect(out)
+  source.start(at)
+}
+
+const hz = (semitonesFromA4: number) => 440 * 2 ** (semitonesFromA4 / 12)
+
+function play(kind: 'sting' | 'tick') {
+  if (!UI.sounds) return
+  try {
+    audio ??= new AudioContext()
+    if (audio.state === 'suspended') audio.resume()
+  } catch {
+    return
+  }
+  const a = audio
+  const t0 = a.currentTime + 0.02
+  const out = a.createGain()
+  out.gain.value = 0.5
+  out.connect(a.destination)
+  const style = shown()
+
+  if (kind === 'tick') {
+    const type: OscillatorType = style === 'coast' ? 'square' : style === 'neon' ? 'sawtooth' : 'sine'
+    if (style === 'frontier') pluck(t0, hz(7), 0.5, out)
+    else note(t0, style === 'radar' ? 1320 : hz(12), 0.12, type, style === 'coast' || style === 'neon' ? 0.08 : 0.2, out)
+    return
+  }
+
+  switch (style) {
+    case 'coast': // a quick 8-bit climb
+      ;[0, 4, 7, 12, 16].forEach((n, i) => note(t0 + i * 0.07, hz(n + 3), 0.18, 'square', 0.09, out))
+      break
+    case 'metro': { // a slow, soft chord over a low thump
+      note(t0, hz(-33), 0.5, 'sine', 0.5, out)
+      ;[-9, -2, 3, 7].forEach((n, i) => note(t0 + 0.05 + i * 0.03, hz(n), 1.4, 'sine', 0.12, out))
+      break
+    }
+    case 'frontier': // a plucked arpeggio, like a guitar on a porch
+      ;[-14, -10, -7, -2, 2].forEach((n, i) => pluck(t0 + i * 0.11, hz(n), 0.45, out))
+      break
+    case 'radar': // two clean beeps
+      note(t0, 1200, 0.09, 'sine', 0.25, out)
+      note(t0 + 0.13, 1600, 0.14, 'sine', 0.25, out)
+      break
+    case 'neon': { // a sawtooth run through a closing filter
+      const filter = a.createBiquadFilter()
+      filter.type = 'lowpass'
+      filter.frequency.setValueAtTime(4000, t0)
+      filter.frequency.exponentialRampToValueAtTime(600, t0 + 0.8)
+      filter.connect(out)
+      ;[0, 7, 12, 15, 19].forEach((n, i) => note(t0 + i * 0.09, hz(n - 5), 0.3, 'sawtooth', 0.07, filter))
+      break
+    }
+    default: // Day and Night: a gentle two-note chime
+      note(t0, hz(7), 0.5, 'sine', 0.2, out)
+      note(t0 + 0.12, hz(12), 0.7, 'sine', 0.2, out)
+  }
+}
+
 // Big moments get a full-screen banner in the game styles, a toast elsewhere.
 let bannerTimer = 0
 function celebrate(title: string, sub: string) {
+  play('sting')
   if (shown() === 'day' || shown() === 'night') {
     toast(sub)
     return
@@ -1963,6 +2059,18 @@ function SettingsView() {
     <Panel title="Settings" icon={<Icon name="sliders" />} className="tall">
       <div className="section">Map style</div>
       <ThemeGrid />
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={UI.sounds}
+          onChange={(e) => {
+            store('aroundhere.sounds', e.target.checked ? 'on' : 'off')
+            ui({ sounds: e.target.checked })
+            if (e.target.checked) play('sting')
+          }}
+        />
+        <span>Sounds (each style has its own)</span>
+      </label>
 
       {S.userId && (
         <>
@@ -2689,6 +2797,7 @@ export default function App() {
       .catch(() => {})
     setIncomingHandler((title, body, route) => {
       if (document.visibilityState === 'visible') {
+        play('tick')
         toast(body ? `${title}: ${body}` : title)
         return
       }
