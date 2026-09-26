@@ -92,6 +92,7 @@ const UI = {
   route: readRoute(),
   theme: initialTheme(),
   toast: '',
+  toastTo: '', // where tapping the toast goes, for news that came in
   auth: null as AuthMode | null,
   palette: false,
   hover: null as string | null, // marker id under the mouse, for the hover card
@@ -182,14 +183,14 @@ function viewCenter() {
   return { latitude: c.lat, longitude: c.lng }
 }
 
-function toast(message: string) {
+// A line at the bottom for a moment. News that came in (a message, a friend nearby)
+// stays a little longer, and a tap goes to it.
+function toast(message: string, to = '') {
   UI.toast = message
+  UI.toastTo = to
   changed()
   window.clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => {
-    UI.toast = ''
-    changed()
-  }, 2800)
+  toastTimer = window.setTimeout(() => ui({ toast: '', toastTo: '' }), to ? 5000 : 2800)
 }
 
 //
@@ -3299,7 +3300,7 @@ export default function App() {
     setIncomingHandler((title, body, route) => {
       if (document.visibilityState === 'visible') {
         play('tick')
-        toast(body ? `${title}: ${body}` : title)
+        toast(body ? `${title}: ${body}` : title, route)
         return
       }
       if (!UI.alerts || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
@@ -3544,11 +3545,16 @@ export default function App() {
           <span>{UI.banner.sub}</span>
         </div>
       )}
-      {UI.toast && (
-        <div className="toast" role="status">
-          {UI.toast}
-        </div>
-      )}
+      {UI.toast &&
+        (UI.toastTo ? (
+          <button className="toast" role="status" onClick={() => { go(UI.toastTo); ui({ toast: '', toastTo: '' }) }}>
+            {UI.toast}
+          </button>
+        ) : (
+          <div className="toast" role="status">
+            {UI.toast}
+          </div>
+        ))}
       {UI.palette && <Palette />}
       {UI.auth && <AuthView key={UI.auth} />}
     </div>

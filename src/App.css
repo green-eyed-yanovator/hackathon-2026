@@ -2420,6 +2420,12 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+button.toast {
+  font: inherit;
+  font-weight: 550;
+  cursor: pointer;
+}
+
 [data-theme='radar'] .toast {
   background: #020a05;
   color: var(--fg);
