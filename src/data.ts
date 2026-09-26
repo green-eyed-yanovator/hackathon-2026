@@ -1159,7 +1159,7 @@ function saidAt(key: string) {
 }
 
 function sayOnce(key: string) {
-  saidAt(key)
+  saidAt(key) // loads the memory, the first time
   const now = Date.now()
   said![key] = now
   for (const k in said) if (now - said[k] > 7 * 86400000) delete said[k]
