@@ -1757,6 +1757,8 @@ function ProfileView({ id }: { id: string }) {
         sortedFeed(posts).map(({ post, away, active }) => <PostRow key={post.id} post={post} away={away} active={active} />)
       )}
 
+      <Activity id={id} />
+
       {own && (
         <div className="foot-links">
           <span className="muted small clip">{S.session?.user.email}</span>
@@ -1766,6 +1768,54 @@ function ProfileView({ id }: { id: string }) {
         </div>
       )}
     </Panel>
+  )
+}
+
+// What someone has been up to on the map, newest first, from what's already loaded.
+function Activity({ id }: { id: string }) {
+  const [limit, setLimit] = useState(6)
+  const byId = new Map(S.posts.map((p) => [p.id, p]))
+  const items: { key: string; time: number; icon: IconName; verb: string; post: Post; quote?: string }[] = []
+
+  for (const post of S.posts) {
+    if (post.author_id !== id) continue
+    items.push({ key: `p${post.id}`, time: time(post.created_at), icon: 'pin', verb: 'Pinned', post })
+    if (post.resolved_at) items.push({ key: `r${post.id}`, time: time(post.resolved_at), icon: 'check', verb: 'Resolved', post })
+  }
+  for (const r of S.replies) {
+    const post = byId.get(r.post_id)
+    if (r.author_id === id && post) items.push({ key: `c${r.id}`, time: time(r.created_at), icon: 'chat', verb: 'Replied to', post, quote: r.content })
+  }
+  for (const i of S.interests) {
+    const post = byId.get(i.post_id)
+    if (i.user_id === id && post) items.push({ key: `i${post.id}`, time: time(i.created_at), icon: 'thumb', verb: "Is in on", post })
+  }
+  items.sort((a, b) => b.time - a.time)
+  if (!items.length) return null
+
+  return (
+    <>
+      <div className="section">Activity</div>
+      {items.slice(0, limit).map((item) => (
+        <button key={item.key} className="row activity" onClick={() => openPin(item.post)}>
+          <span className="activity-icon">
+            <Icon name={item.icon} size={14} />
+          </span>
+          <div className="row-main">
+            <div className="clip">
+              {item.verb} <strong>{item.post.title}</strong>
+            </div>
+            {item.quote && <div className="muted clip">“{item.quote}”</div>}
+          </div>
+          <span className="muted small nowrap">{ago(item.time)}</span>
+        </button>
+      ))}
+      {items.length > limit && (
+        <button className="link small" onClick={() => setLimit(limit + 10)}>
+          More
+        </button>
+      )}
+    </>
   )
 }
 
