@@ -38,6 +38,8 @@ What you can do:
   short getting-started list. Settings turns off any kind of notification,
   one by one.
 
+![Get there in Metro: the way along the streets as a GPS line, on the radar too, with the mission line and the walk bar](docs/walk.jpg)
+
 ## Running it
 
 You need Node (20.19 or 22.12 and up, for Vite) and the Supabase CLI (Docker
