@@ -891,7 +891,7 @@ function Feed() {
               : UI.tab === 'mine'
                 ? 'Pins you post, save, reply to or join show up here.'
                 : UI.tab === 'past'
-                  ? 'No resolved pins.'
+                  ? 'Nothing here yet: resolved pins, and ones quiet for a month, end up in Past.'
                   : UI.tab === 'soon'
                     ? 'Nothing planned this week. Give a pin a time and it shows up here.'
                     : 'No pins here yet. Be the first: press N or tap +.'}
