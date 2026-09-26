@@ -2455,8 +2455,15 @@ textarea::placeholder {
     height: min(86dvh, calc(100dvh - 124px));
   }
 
-  .detail.chat {
+  .detail.chat,
+  .sheet-full .detail,
+  .sheet-full .feed {
     height: calc(100dvh - 64px - 60px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  .feed,
+  .detail {
+    transition: height 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 
   @keyframes sheet {

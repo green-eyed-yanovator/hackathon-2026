@@ -90,6 +90,7 @@ const UI = {
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
   banner: null as { title: string; sub: string } | null,
   follow: false, // the camera keeps you in the middle until you move the map
+  sheetFull: false, // phones: the open sheet is pulled up to full height
 }
 
 let map: MapState | null = null
@@ -113,6 +114,7 @@ function go(path: string) {
   if (window.location.hash !== hash) window.history.pushState(null, '', hash || window.location.pathname + window.location.search)
   UI.route = readRoute()
   UI.hover = null
+  UI.sheetFull = false
   if (UI.route.kind !== 'new') UI.draft = null
   else if (!UI.draft) UI.draft = viewCenter()
   changed()
@@ -469,35 +471,51 @@ function Blip({ flair, size = 30 }: { flair: Flair; size?: number }) {
   )
 }
 
-function Panel({ title, icon, onBack, children, foot, className = '' }: { title: ReactNode; icon?: ReactNode; onBack?: () => void; children: ReactNode; foot?: ReactNode; className?: string }) {
-  const sheet = useRef<HTMLElement>(null)
+// The handle on top of a phone sheet: drag it down to dismiss, up (or tap it) to
+// pull the sheet to full height and back. It moves its parent, the sheet itself.
+function Grip({ onDismiss }: { onDismiss: () => void }) {
   const drag = useRef<{ y: number; dy: number } | null>(null)
 
-  // On phones the panel is a sheet: drag the handle down to dismiss it.
-  const onDown = (e: React.PointerEvent) => {
-    drag.current = { y: e.clientY, dy: 0 }
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-  }
-  const onMove = (e: React.PointerEvent) => {
-    if (!drag.current || !sheet.current) return
-    drag.current.dy = Math.max(0, e.clientY - drag.current.y)
-    sheet.current.style.transform = `translateY(${drag.current.dy}px)`
-    sheet.current.style.transition = 'none'
-  }
-  const onUp = () => {
-    if (!drag.current || !sheet.current) return
-    const dismiss = drag.current.dy > 110
-    sheet.current.style.transition = ''
-    sheet.current.style.transform = ''
+  const settle = (sheet: HTMLElement) => {
+    sheet.style.transition = ''
+    sheet.style.transform = ''
     drag.current = null
-    if (dismiss) go('')
   }
 
   return (
-    <aside ref={sheet} className={`panel detail ${className}`}>
-      <div className="grip" onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
-        <i />
-      </div>
+    <div
+      className="grip"
+      onPointerDown={(e) => {
+        drag.current = { y: e.clientY, dy: 0 }
+        e.currentTarget.setPointerCapture(e.pointerId)
+      }}
+      onPointerMove={(e) => {
+        const sheet = e.currentTarget.parentElement
+        if (!drag.current || !sheet) return
+        drag.current.dy = e.clientY - drag.current.y
+        sheet.style.transform = `translateY(${Math.max(0, drag.current.dy)}px)`
+        sheet.style.transition = 'none'
+      }}
+      onPointerUp={(e) => {
+        const sheet = e.currentTarget.parentElement
+        if (!drag.current || !sheet) return
+        const dy = drag.current.dy
+        settle(sheet)
+        if (dy > 110) onDismiss()
+        else if (dy < -40) ui({ sheetFull: true })
+        else if (Math.abs(dy) < 6) ui({ sheetFull: !UI.sheetFull })
+      }}
+      onPointerCancel={(e) => e.currentTarget.parentElement && settle(e.currentTarget.parentElement)}
+    >
+      <i />
+    </div>
+  )
+}
+
+function Panel({ title, icon, onBack, children, foot, className = '' }: { title: ReactNode; icon?: ReactNode; onBack?: () => void; children: ReactNode; foot?: ReactNode; className?: string }) {
+  return (
+    <aside className={`panel detail ${className}`}>
+      <Grip onDismiss={() => go('')} />
       <header className="panel-head">
         {onBack && (
           <button className="icon-btn" onClick={onBack} aria-label="Back">
@@ -701,9 +719,7 @@ function Feed() {
 
   return (
     <aside className="panel feed">
-      <div className="grip" onClick={() => ui({ feed: false })}>
-        <i />
-      </div>
+      <Grip onDismiss={() => ui({ feed: false, sheetFull: false })} />
       <header className="feed-head">
         <div className="tabs" role="tablist">
           {TABS.map(([id, label]) => (
@@ -2376,7 +2392,7 @@ export default function App() {
   const sheetUp = !!detail || UI.feed
 
   return (
-    <div className={`app${detail ? ' has-detail' : ''}${UI.feed ? ' has-feed' : ''}${sheetUp ? ' sheet-up' : ''}`}>
+    <div className={`app${detail ? ' has-detail' : ''}${UI.feed ? ' has-feed' : ''}${sheetUp ? ' sheet-up' : ''}${UI.sheetFull ? ' sheet-full' : ''}`}>
       <canvas ref={canvasRef} className="map" role="application" aria-label="Map of pins and friends nearby. Drag to move, scroll or pinch to zoom." />
       <div className="fx" aria-hidden />
 
