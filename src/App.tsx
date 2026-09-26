@@ -2014,7 +2014,7 @@ function ChatView({ id }: { id: string }) {
             {nameOf(id)}
             <small className="muted">
               {typingAt ? <em className="typing">typing…</em> : isOnline(id) ? 'online' : 'offline'}
-              {loc && ` · ${away !== null ? awayText(away) : 'on the map'} ${since(loc.updated_at)}`}
+              {loc && ` · ${away !== null ? awayText(away) : 'on the map'}, ${since(loc.updated_at)}`}
             </small>
           </span>
         </button>
