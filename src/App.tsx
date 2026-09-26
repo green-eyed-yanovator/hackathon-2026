@@ -407,6 +407,11 @@ const fromLocalInput = (value: string) => (value ? new Date(value).toISOString()
 
 const minutesLeft = (until: number) => Math.max(1, Math.ceil((until - Date.now()) / 60000))
 
+// How far something is from me, in metres; null if I don't know where I am.
+function fromMe(at: { latitude: number; longitude: number } | null | undefined) {
+  return at && S.here ? distance(S.here.latitude, S.here.longitude, at.latitude, at.longitude) : null
+}
+
 const awayText = (m: number) => (m < 50 ? 'right here' : `${meters(m)} away`)
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
@@ -1193,7 +1198,7 @@ function PostView({ post }: { post: Post }) {
   const siblings = S.posts.filter((p) => placeKey(p) === placeKey(post))
   const f = flairs[post.flair] ?? flairs.general
   const street = map ? nearestStreet(map, post.longitude, post.latitude) : ''
-  const away = S.here ? distance(S.here.latitude, S.here.longitude, post.latitude, post.longitude) : null
+  const away = fromMe(post)
   const soon = post.starts_at ? soonText(post.starts_at) : null
 
   // Opening a pin reads its notifications.
@@ -1869,7 +1874,7 @@ function ChatView({ id }: { id: string }) {
   const thread = S.messages.filter((m) => (m.sender_id === id && m.recipient_id === S.userId) || (m.recipient_id === id && m.sender_id === S.userId))
   const unread = thread.some((m) => m.sender_id === id && !m.read_at)
   const loc = locationOf(id)
-  const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
+  const away = fromMe(loc)
 
   useEffect(() => {
     if (unread) markConversationRead(id)
@@ -2122,7 +2127,7 @@ function FriendsView() {
       {friends.length === 0 && <p className="muted">No friends yet. Find people below, or from anyone's profile.</p>}
       {friends.map((id) => {
         const loc = locationOf(id)
-        const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
+        const away = fromMe(loc)
         return (
           <PersonRow key={id} id={id} sub={`${isOnline(id) ? 'online' : 'offline'}${loc ? ` · ${away !== null ? awayText(away) : 'on the map'}` : ''}`}>
             <div className="btn-row tight">
@@ -2917,7 +2922,7 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
   if (id.startsWith('person:')) {
     const userId = id.slice('person:'.length)
     const loc = locationOf(userId)
-    const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
+    const away = fromMe(loc)
     return (
       <div className="hover-card person-card" ref={cardRef}>
         <Avatar id={userId} size={32} dot />
