@@ -10,8 +10,12 @@ pin on what's going on:
 What you can do:
 
 - **Pins are threads.** Reply (mention people with `@`, heart a good reply), say you're in, save,
-  share, or get directions in your own maps app. Give a pin a time and it
-  counts down in the feed, shows under Soon, and ripples on the map while it's on.
+  or share. Give a pin a time and it counts down in the feed, shows under
+  Soon, and ripples on the map while it's on.
+- **Get there.** A walking route along the streets, drawn on the map (a GPS
+  line in the game styles, on the radar too) with the minutes it takes. It
+  shortens as you walk, finds a new way if you stray, and works for a friend
+  too, following them as they move. Your own maps app is one tap away.
 - **Friends.** People around here suggests neighbours whose pins are close.
   Friends can share their location (until they stop, or just for an hour) and
   see each other on the map with their photos, only while the app is open.
@@ -87,7 +91,10 @@ password reset) into Authentication → Email Templates, so emails carry a
    arrives live, with "seen" once she's looked.
 4. As Tom, press `N`, pick Event, give it a time an hour from now and post: it
    pops up on Maya's map with a ripple, and she gets a notification.
-5. On a phone (or the browser's phone view): the tab bar, sheets you drag up
+5. As Maya, open Hannah's street clean-up and press Get there: the way along
+   the streets, with the time it takes. Press `T` for Metro to see it as a
+   purple GPS line, on the radar too.
+6. On a phone (or the browser's phone view): the tab bar, sheets you drag up
    and down, pinch to zoom, and the locate button that follows you around.
 
 ## Map styles
@@ -110,7 +117,8 @@ screen effect on top. The game styles cover the map in place blips from
 further out, like a pause-menu map; the legend (the `i` button) says what
 they mean. They also get a radar in the corner: the streets around you, your
 arrow, north on the rim, friends and live pins waiting on the edge in their
-direction. Tap it to go back to where you are.
+direction, and the route when you're walking somewhere. Tap it to go back to
+where you are.
 
 Sounds are synthesized in the browser, no audio files: each style plays its
 own short sting when you post, resolve or make a friend (a plucked-string
@@ -140,7 +148,10 @@ Four source files, no UI or map libraries:
   overlap or get cut at tile edges. Tile painting is budgeted per frame, and
   missing tiles are stood in for by scaled-up parents, so zooming stays at
   60 fps. It also handles all the input: drag with fling, wheel and pinch
-  zoom, double-tap, and animated flights.
+  zoom, double-tap, and animated flights. Walking routes come from the same
+  tiles: the roads between the two ends are joined into a graph (crossings
+  found by intersecting segments, since the tiles drop vertices on straight
+  lines; bridges and tunnels meet only what joins their ends) and A* walks it.
 - `src/data.ts` is the store. The public picture (pins, replies, people) loads
   once and stays live over Supabase realtime; the signed-in user's inbox,
   friends and saved pins load on sign-in. Every write is a plain function
@@ -148,7 +159,7 @@ Four source files, no UI or map libraries:
 - `src/App.tsx` is the whole interface: feed, threads, profiles, chat, inbox,
   friends and location sharing, settings, compose, accounts and the command
   palette. UI state lives in one object; anything that changes it redraws.
-- `src/App.css` holds the six themes as CSS variables, the layouts for wide
+- `src/App.css` holds the seven themes as CSS variables, the layouts for wide
   screens (floating panels) and phones (sheets and a tab bar), and the effects.
 
 The database is in `supabase/migrations`. Row level security does the

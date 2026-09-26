@@ -158,6 +158,8 @@ export type MapTheme = {
   blipInk: string // outline / glyph colour for blips
   poiAlpha: number
   me: string
+  route: string // the walking route's line
+  routeDash: boolean // inked styles dash it
   photo: string // canvas filter that gives people's photos the map's look
 }
 
@@ -174,7 +176,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#ffcf73', trunk: '#ffe29a', primary: '#fff3c4', secondary: '#ffffff', tertiary: '#ffffff', minor: '#ffffff', service: '#fbfaf7', path: '#c9bfae', rail: '#b9b4ab' },
     roadWidth: 1, wobble: 0, boundary: '#b7a6c9', glow: null,
     font: sans, labelColor: '#4a4d52', labelHalo: '#f3f1ec', placeColor: '#2b2d31', waterLabel: '#4f7ea3',
-    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.85, me: '#2f7cf6', photo: 'none',
+    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.85, me: '#2f7cf6', route: '#2f7cf6', routeDash: false, photo: 'none',
   },
   night: {
     land: '#16181d', texture: 'none',
@@ -186,7 +188,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#6b5a33', trunk: '#4d4636', primary: '#3b3d44', secondary: '#34363d', tertiary: '#303239', minor: '#2a2c33', service: '#25272d', path: '#34373f', rail: '#3a3d45' },
     roadWidth: 1, wobble: 0, boundary: '#5b4d72', glow: null,
     font: sans, labelColor: '#8e96a3', labelHalo: '#16181d', placeColor: '#c5ccd6', waterLabel: '#4d7394',
-    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.75, me: '#4c9bff', photo: 'none',
+    caps: false, italic: false, blip: 'pin', blipInk: '#ffffff', poiAlpha: 0.75, me: '#4c9bff', route: '#4c9bff', routeDash: false, photo: 'none',
   },
   // Sun-bleached radar from a certain early-2000s west coast crime saga.
   coast: {
@@ -199,7 +201,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#d8d2bd', trunk: '#d0cab4', primary: '#c8c2ab', secondary: '#bfb9a3', tertiary: '#b8b29c', minor: '#aea893', service: '#a39e8a', path: '#9c966f', rail: '#4a473f' },
     roadWidth: 1.25, wobble: 0, boundary: '#3a3830', glow: null,
     font: '"Arial Black", "Helvetica Neue", Arial, sans-serif', labelColor: '#ffffff', labelHalo: '#1b1a17', placeColor: '#f4e7b8', waterLabel: '#d6e4f2',
-    caps: true, italic: false, blip: 'square', blipInk: '#111111', poiAlpha: 1, me: '#ffffff', photo: 'saturate(1.3) contrast(1.1)',
+    caps: true, italic: false, blip: 'square', blipInk: '#111111', poiAlpha: 1, me: '#ffffff', route: '#e0409a', routeDash: false, photo: 'saturate(1.3) contrast(1.1)',
   },
   // Pause-menu atlas of a modern sun-soaked sprawl.
   metro: {
@@ -212,7 +214,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#c2c7cc', trunk: '#b2b7bd', primary: '#9aa0a7', secondary: '#8a9097', tertiary: '#7b8188', minor: '#636970', service: '#565c63', path: '#4f555c', rail: '#4a5057' },
     roadWidth: 0.9, wobble: 0, boundary: '#717880', glow: null,
     font: '"Avenir Next Condensed", "Roboto Condensed", "Arial Narrow", sans-serif-condensed, sans-serif', labelColor: '#e8ebee', labelHalo: '#1b1f24', placeColor: '#ffffff', waterLabel: '#a9c6e6',
-    caps: true, italic: false, blip: 'round', blipInk: '#ffffff', poiAlpha: 1, me: '#ffffff', photo: 'none',
+    caps: true, italic: false, blip: 'round', blipInk: '#ffffff', poiAlpha: 1, me: '#ffffff', route: '#b25ce6', routeDash: false, photo: 'none',
   },
   // A hand-inked survey map of the old frontier.
   frontier: {
@@ -225,7 +227,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#4a3624', trunk: '#4a3624', primary: '#523d29', secondary: '#5a4430', tertiary: '#634c36', minor: '#6f573f', service: '#7d6549', path: '#7d6549', rail: '#3b2a1b' },
     roadWidth: 0.55, wobble: 1.4, boundary: '#8a4b32', glow: null,
     font: '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif', labelColor: '#3f2e1e', labelHalo: '#dcc9a0', placeColor: '#2e2115', waterLabel: '#3f4c43',
-    caps: false, italic: true, blip: 'stamp', blipInk: '#3f2e1e', poiAlpha: 0.9, me: '#8f2b1c', photo: 'sepia(0.8) contrast(0.95)',
+    caps: false, italic: true, blip: 'stamp', blipInk: '#3f2e1e', poiAlpha: 0.9, me: '#8f2b1c', route: '#8f2b1c', routeDash: true, photo: 'sepia(0.8) contrast(0.95)',
   },
   // Green phosphor tracking screen.
   radar: {
@@ -238,7 +240,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#58ff9c', trunk: '#4ef090', primary: '#3fd67c', secondary: '#34bb6b', tertiary: '#2ca25d', minor: '#1f7c46', service: '#18643a', path: '#145331', rail: '#1b6b3f' },
     roadWidth: 0.45, wobble: 0, boundary: '#2ca25d', glow: '#2dff88',
     font: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace', labelColor: '#6dffaa', labelHalo: '#030b06', placeColor: '#b4ffd2', waterLabel: '#3fd67c',
-    caps: true, italic: false, blip: 'ring', blipInk: '#6dffaa', poiAlpha: 0.9, me: '#b4ffd2',
+    caps: true, italic: false, blip: 'ring', blipInk: '#6dffaa', poiAlpha: 0.9, me: '#b4ffd2', route: '#b4ffd2', routeDash: true,
     photo: 'grayscale(1) sepia(1) hue-rotate(80deg) saturate(3) brightness(0.9)',
   },
   // Beachfront nights in the eighties: hot pink roads glowing over a purple dusk.
@@ -252,7 +254,7 @@ export const mapThemes: Record<string, MapTheme> = {
     road: { motorway: '#ff5ad9', trunk: '#ff4fd0', primary: '#ff3fa4', secondary: '#e23d9e', tertiary: '#bf3a92', minor: '#83308c', service: '#622775', path: '#4d2263', rail: '#19e3ff' },
     roadWidth: 0.55, wobble: 0, boundary: '#19e3ff', glow: '#ff2ea6',
     font: '"Futura", "Avenir Next", "Trebuchet MS", sans-serif', labelColor: '#ffd8f4', labelHalo: '#1a0b2e', placeColor: '#8af6ff', waterLabel: '#8af6ff',
-    caps: true, italic: true, blip: 'ring', blipInk: '#ff6ad5', poiAlpha: 0.95, me: '#8af6ff',
+    caps: true, italic: true, blip: 'ring', blipInk: '#ff6ad5', poiAlpha: 0.95, me: '#8af6ff', route: '#8af6ff', routeDash: false,
     photo: 'saturate(1.4) hue-rotate(-20deg) contrast(1.1)',
   },
 }
@@ -823,6 +825,8 @@ export type MapState = {
   onFrame: () => void
   onUserMove: () => void // the person moved the map themselves
   onTile: () => void // a source tile arrived: street names nearby are now known
+  route: Route | null // walking directions, drawn under the names
+  onRoute: () => void // the route was worked out, or couldn't be
 }
 
 export function worldSize(m: MapState) {
@@ -859,6 +863,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     fade: null, radar: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
+    route: null, onRoute: () => {},
   }
 
   fetch(TILEJSON_URL)
@@ -2358,6 +2363,427 @@ function drawDraft(c: CanvasRenderingContext2D, t: MapTheme, sx: number, sy: num
 }
 
 //
+// Walking directions: the line the game styles call a GPS route. There's no
+// routing service; the roads in the most detailed tiles between the two ends
+// are joined into a graph, and A* walks it.
+//
+
+// Roads a person can walk along. Motorways aren't, and neither are railways.
+const WALKABLE = new Set(['trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service', 'track', 'path', 'pedestrian', 'bridleway', 'busway'])
+
+// Tiles are about 2 km across; past 4 by 4 of them it's not a walk.
+const MAX_ROUTE_TILES = 16
+
+export type Route = {
+  fromX: number // world
+  fromY: number
+  toX: number
+  toY: number
+  state: 'waiting' | 'ready' | 'far' | 'none' // none: the roads we have don't join up, or didn't load
+  points: number[] // world x, y pairs, from you to the destination
+  meters: number
+}
+
+const metersPerWorld = (y: number) => 40075016.686 * Math.cos((yToLat(y) * Math.PI) / 180)
+
+// Called on every render with where you are and where you're going. Walking
+// along the line just eats the part behind you; straying off it, or the other
+// end moving (a friend walking), works the way out again.
+export function setRoute(m: MapState, from: { lng: number; lat: number } | null, to: { lng: number; lat: number } | null) {
+  if (!from || !to) {
+    if (m.route) {
+      m.route = null
+      m.baseDirty = true
+      requestFrame(m)
+    }
+    return
+  }
+  const fromX = lngToX(from.lng)
+  const fromY = latToY(from.lat)
+  const toX = lngToX(to.lng)
+  const toY = latToY(to.lat)
+  const metre = 1 / metersPerWorld(fromY)
+  const old = m.route
+  const sameEnd = !!old && Math.hypot(old.toX - toX, old.toY - toY) < 20 * metre
+  if (sameEnd && Math.hypot(old.fromX - fromX, old.fromY - fromY) < 3 * metre) return
+
+  if (sameEnd && old.state === 'ready' && old.points.length) {
+    // The closest point on the line to where you are now.
+    let best = Infinity
+    let at = 0
+    let px = 0
+    let py = 0
+    for (let i = 2; i < old.points.length; i += 2) {
+      const ax = old.points[i - 2]
+      const ay = old.points[i - 1]
+      const dx = old.points[i] - ax
+      const dy = old.points[i + 1] - ay
+      const t = clamp(((fromX - ax) * dx + (fromY - ay) * dy) / (dx * dx + dy * dy || 1), 0, 1)
+      const d = Math.hypot(ax + t * dx - fromX, ay + t * dy - fromY)
+      if (d < best) {
+        best = d
+        at = i
+        px = ax + t * dx
+        py = ay + t * dy
+      }
+    }
+    if (best < 25 * metre) {
+      old.points = [fromX, fromY, px, py, ...old.points.slice(at)]
+      old.fromX = fromX
+      old.fromY = fromY
+      measureRoute(old)
+      m.baseDirty = true
+      requestFrame(m)
+      m.onRoute()
+      return
+    }
+  }
+
+  // The old line stays up until the new one is ready.
+  m.route = { fromX, fromY, toX, toY, state: 'waiting', points: sameEnd ? old.points : [], meters: sameEnd ? old.meters : 0 }
+  requestFrame(m)
+}
+
+function measureRoute(r: Route) {
+  let length = 0
+  for (let i = 2; i < r.points.length; i += 2) length += Math.hypot(r.points[i] - r.points[i - 2], r.points[i + 1] - r.points[i - 1])
+  r.meters = length * metersPerWorld(r.fromY)
+}
+
+// Asks for the tiles the route needs; once they're all here, finds it.
+function stepRoute(m: MapState) {
+  const r = m.route!
+  const pad = Math.max(Math.abs(r.toX - r.fromX), Math.abs(r.toY - r.fromY)) * 0.3 + 300 / metersPerWorld(r.fromY)
+  const box = [Math.min(r.fromX, r.toX) - pad, Math.min(r.fromY, r.toY) - pad, Math.max(r.fromX, r.toX) + pad, Math.max(r.fromY, r.toY) + pad]
+  const n = 2 ** SOURCE_MAX_ZOOM
+  const tx0 = Math.floor(box[0] * n)
+  const ty0 = Math.floor(box[1] * n)
+  const tx1 = Math.floor(box[2] * n)
+  const ty1 = Math.floor(box[3] * n)
+
+  if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > MAX_ROUTE_TILES) {
+    r.state = 'far'
+    r.points = []
+    m.baseDirty = true
+    m.onRoute()
+    return
+  }
+
+  const tiles: SourceTile[] = []
+  let waiting = false
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const entry = requestSource(m, SOURCE_MAX_ZOOM, tx, ty)
+      if (!entry || entry.state === 'loading') waiting = true
+      else if (entry.tile) tiles.push(entry.tile)
+    }
+  }
+  if (waiting) return
+
+  const points = tiles.length ? findRoute(tiles, r, box) : null
+  r.state = points ? 'ready' : 'none'
+  r.points = points ?? []
+  measureRoute(r)
+  m.baseDirty = true
+  m.onRoute()
+}
+
+// Everything here is in "grid" units: tile units of the source zoom, counted
+// from the world's corner, so the same spot is the same number in every tile.
+function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | null {
+  const GRID = 4096
+  const scale = 2 ** SOURCE_MAX_ZOOM * GRID
+  const [bx0, by0, bx1, by1] = box.map((v) => v * scale)
+
+  // Segments of walkable lines: [ax, ay, bx, by, onGround]. Each tile's lines
+  // run a little past its edge, so only the part inside its own square is kept.
+  const segs: number[] = []
+  for (const tile of tiles) {
+    const k = GRID / tile.extent
+    const ox = tile.x * GRID
+    const oy = tile.y * GRID
+    if (ox > bx1 || oy > by1 || ox + GRID < bx0 || oy + GRID < by0) continue
+    for (const f of tile.layers.transportation ?? []) {
+      if (f.type !== 2 || !WALKABLE.has(String(f.props.class))) continue
+      if (ox + f.maxX * k < bx0 || oy + f.maxY * k < by0 || ox + f.minX * k > bx1 || oy + f.minY * k > by1) continue
+      const ground = f.props.brunnel === 'bridge' || f.props.brunnel === 'tunnel' ? 0 : 1
+      for (const ring of f.rings) {
+        for (let i = 2; i < ring.length; i += 2) {
+          const ax = ring[i - 2] * k
+          const ay = ring[i - 1] * k
+          const dx = ring[i] * k - ax
+          const dy = ring[i + 1] * k - ay
+          // Liang-Barsky against the tile's square.
+          let t0 = 0
+          let t1 = 1
+          const p = [-dx, dx, -dy, dy]
+          const q = [ax, GRID - ax, ay, GRID - ay]
+          for (let e = 0; e < 4 && t0 <= t1; e++) {
+            if (p[e] === 0) {
+              if (q[e] < 0) t1 = -1
+            } else if (p[e] < 0) t0 = Math.max(t0, q[e] / p[e])
+            else t1 = Math.min(t1, q[e] / p[e])
+          }
+          if (t0 >= t1) continue
+          segs.push(ox + ax + t0 * dx, oy + ay + t0 * dy, ox + ax + t1 * dx, oy + ay + t1 * dy, ground)
+        }
+      }
+    }
+  }
+  const count = segs.length / 5
+  if (!count) return null
+
+  // Where lines meet. The tiles drop vertices that sit on a straight line, junctions
+  // included, so crossings and T-junctions are found by intersecting segments, a
+  // grid cell at a time. A bridge or tunnel meets only what joins its ends.
+  const CELL = 64
+  const TOLERANCE = 1.5 // grid units; about a metre
+  const cells = new Map<number, number[]>()
+  const cellKey = (cx: number, cy: number) => cx * 1048576 + cy
+  for (let i = 0; i < count; i++) {
+    const s = i * 5
+    const cx0 = Math.floor(Math.min(segs[s], segs[s + 2]) / CELL)
+    const cx1 = Math.floor(Math.max(segs[s], segs[s + 2]) / CELL)
+    const cy0 = Math.floor(Math.min(segs[s + 1], segs[s + 3]) / CELL)
+    const cy1 = Math.floor(Math.max(segs[s + 1], segs[s + 3]) / CELL)
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const key = cellKey(cx, cy)
+        const list = cells.get(key)
+        if (list) list.push(i)
+        else cells.set(key, [i])
+      }
+    }
+  }
+  const cuts: number[][] = Array.from({ length: count }, () => [0, 1])
+  for (const [key, list] of cells) {
+    for (let a = 0; a < list.length; a++) {
+      for (let b = a + 1; b < list.length; b++) {
+        const s = list[a] * 5
+        const u = list[b] * 5
+        // A pair shares several cells; only the one holding the corner of their overlap tests it.
+        const cornerX = Math.max(Math.min(segs[s], segs[s + 2]), Math.min(segs[u], segs[u + 2]))
+        const cornerY = Math.max(Math.min(segs[s + 1], segs[s + 3]), Math.min(segs[u + 1], segs[u + 3]))
+        if (cellKey(Math.floor(cornerX / CELL), Math.floor(cornerY / CELL)) !== key) continue
+        const rx = segs[s + 2] - segs[s]
+        const ry = segs[s + 3] - segs[s + 1]
+        const qx = segs[u + 2] - segs[u]
+        const qy = segs[u + 3] - segs[u + 1]
+        const cross = rx * qy - ry * qx
+        const lengthS = Math.hypot(rx, ry)
+        const lengthU = Math.hypot(qx, qy)
+        if (Math.abs(cross) < 1e-9 || lengthS === 0 || lengthU === 0) continue
+        const wx = segs[u] - segs[s]
+        const wy = segs[u + 1] - segs[s + 1]
+        const t = (wx * qy - wy * qx) / cross
+        const v = (wx * ry - wy * rx) / cross
+        const es = TOLERANCE / lengthS
+        const eu = TOLERANCE / lengthU
+        if (t < -es || t > 1 + es || v < -eu || v > 1 + eu) continue
+        const through = t > es && t < 1 - es && v > eu && v < 1 - eu
+        if (through && !(segs[s + 4] && segs[u + 4])) continue
+        cuts[list[a]].push(clamp(t, 0, 1))
+        cuts[list[b]].push(clamp(v, 0, 1))
+      }
+    }
+  }
+
+  // Nodes: points closer than the tolerance are one node.
+  const nodeX: number[] = []
+  const nodeY: number[] = []
+  const edges: number[][] = [] // per node: neighbour, length, neighbour, length...
+  const nodeAt = new Map<number, number>()
+  const node = (x: number, y: number) => {
+    const gx = Math.round(x / 2)
+    const gy = Math.round(y / 2)
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const id = nodeAt.get(cellKey(gx + dx, gy + dy))
+        if (id !== undefined && Math.abs(nodeX[id] - x) <= TOLERANCE && Math.abs(nodeY[id] - y) <= TOLERANCE) return id
+      }
+    }
+    nodeX.push(x)
+    nodeY.push(y)
+    edges.push([])
+    nodeAt.set(cellKey(gx, gy), nodeX.length - 1)
+    return nodeX.length - 1
+  }
+  const join = (a: number, b: number) => {
+    if (a === b) return
+    const d = Math.hypot(nodeX[a] - nodeX[b], nodeY[a] - nodeY[b])
+    edges[a].push(b, d)
+    edges[b].push(a, d)
+  }
+  for (let i = 0; i < count; i++) {
+    const s = i * 5
+    const ts = cuts[i].sort((a, b) => a - b)
+    let previous = node(segs[s], segs[s + 1])
+    for (let j = 1; j < ts.length; j++) {
+      if (ts[j] === ts[j - 1]) continue
+      const next = node(segs[s] + ts[j] * (segs[s + 2] - segs[s]), segs[s + 1] + ts[j] * (segs[s + 3] - segs[s + 1]))
+      join(previous, next)
+      previous = next
+    }
+  }
+
+  // The biggest connected piece is the street network; the rest are scraps,
+  // like a footpath inside a car park that the tiles cut off from everything.
+  const piece = new Int32Array(nodeX.length).fill(-1)
+  const sizes: number[] = []
+  for (let i = 0; i < nodeX.length; i++) {
+    if (piece[i] >= 0) continue
+    const stack = [i]
+    piece[i] = sizes.length
+    let size = 0
+    while (stack.length) {
+      const a = stack.pop()!
+      size++
+      for (let e = 0; e < edges[a].length; e += 2) {
+        const b = edges[a][e]
+        if (piece[b] < 0) {
+          piece[b] = sizes.length
+          stack.push(b)
+        }
+      }
+    }
+    sizes.push(size)
+  }
+  let main = 0
+  for (let i = 1; i < sizes.length; i++) if (sizes[i] > sizes[main]) main = i
+
+  // Each end steps onto the nearest bit of road, as a new node in the middle of it.
+  const board = (x: number, y: number) => {
+    let best = Infinity
+    let bestA = -1
+    let bestB = -1
+    let bestT = 0
+    for (let a = 0; a < nodeX.length; a++) {
+      if (piece[a] !== main) continue
+      for (let e = 0; e < edges[a].length; e += 2) {
+        const b = edges[a][e]
+        if (b < a) continue
+        const dx = nodeX[b] - nodeX[a]
+        const dy = nodeY[b] - nodeY[a]
+        const t = clamp(((x - nodeX[a]) * dx + (y - nodeY[a]) * dy) / (dx * dx + dy * dy || 1), 0, 1)
+        const d = Math.hypot(nodeX[a] + t * dx - x, nodeY[a] + t * dy - y)
+        if (d < best) {
+          best = d
+          bestA = a
+          bestB = b
+          bestT = t
+        }
+      }
+    }
+    if (bestA < 0) return -1
+    const id = nodeX.length
+    nodeX.push(nodeX[bestA] + bestT * (nodeX[bestB] - nodeX[bestA]))
+    nodeY.push(nodeY[bestA] + bestT * (nodeY[bestB] - nodeY[bestA]))
+    edges.push([])
+    join(id, bestA)
+    join(id, bestB)
+    return id
+  }
+  const start = board(r.fromX * scale, r.fromY * scale)
+  const goal = board(r.toX * scale, r.toY * scale)
+  if (start < 0 || goal < 0) return null
+  // Both ends on the same stretch of road: they can walk straight to each other.
+  if (edges[start][0] === edges[goal][0] && edges[start][2] === edges[goal][2]) join(start, goal)
+
+  // A*, with a binary heap of (estimate, node).
+  const total = nodeX.length
+  const cost = new Float64Array(total).fill(Infinity)
+  const cameFrom = new Int32Array(total).fill(-1)
+  const done = new Uint8Array(total)
+  const heapF: number[] = []
+  const heapN: number[] = []
+  const push = (f: number, id: number) => {
+    let i = heapF.length
+    heapF.push(f)
+    heapN.push(id)
+    while (i > 0) {
+      const parent = (i - 1) >> 1
+      if (heapF[parent] <= f) break
+      heapF[i] = heapF[parent]
+      heapN[i] = heapN[parent]
+      i = parent
+    }
+    heapF[i] = f
+    heapN[i] = id
+  }
+  const pop = () => {
+    const top = heapN[0]
+    const f = heapF.pop()!
+    const id = heapN.pop()!
+    if (heapF.length) {
+      let i = 0
+      for (;;) {
+        let child = 2 * i + 1
+        if (child >= heapF.length) break
+        if (child + 1 < heapF.length && heapF[child + 1] < heapF[child]) child++
+        if (heapF[child] >= f) break
+        heapF[i] = heapF[child]
+        heapN[i] = heapN[child]
+        i = child
+      }
+      heapF[i] = f
+      heapN[i] = id
+    }
+    return top
+  }
+  const estimate = (id: number) => Math.hypot(nodeX[id] - nodeX[goal], nodeY[id] - nodeY[goal])
+  cost[start] = 0
+  push(estimate(start), start)
+  while (heapF.length) {
+    const a = pop()
+    if (a === goal) break
+    if (done[a]) continue
+    done[a] = 1
+    for (let e = 0; e < edges[a].length; e += 2) {
+      const b = edges[a][e]
+      const c = cost[a] + edges[a][e + 1]
+      if (c < cost[b]) {
+        cost[b] = c
+        cameFrom[b] = a
+        push(c + estimate(b), b)
+      }
+    }
+  }
+  if (cost[goal] === Infinity) return null
+
+  const points = [r.toX, r.toY]
+  for (let id = goal; id >= 0; id = cameFrom[id]) points.push(nodeX[id] / scale, nodeY[id] / scale)
+  points.push(r.fromX, r.fromY)
+  // Back to front: from you to there.
+  const forward: number[] = []
+  for (let i = points.length - 2; i >= 0; i -= 2) forward.push(points[i], points[i + 1])
+  return forward
+}
+
+// The route as a thick line in the style's colour over a halo, so it reads on any
+// ground. The glowing styles glow it, the inked ones dash it.
+function strokeRoute(c: CanvasRenderingContext2D, t: MapTheme, points: number[], ox: number, oy: number, scale: number, width: number) {
+  c.beginPath()
+  for (let i = 0; i < points.length; i += 2) c.lineTo(ox + points[i] * scale, oy + points[i + 1] * scale)
+  c.lineJoin = 'round'
+  c.lineCap = 'round'
+  if (t.glow) {
+    c.globalAlpha = 0.25
+    c.strokeStyle = t.route
+    c.lineWidth = width * 3
+    c.stroke()
+    c.globalAlpha = 1
+  }
+  c.strokeStyle = t.labelHalo
+  c.lineWidth = width + 3
+  c.stroke()
+  if (t.routeDash) c.setLineDash([width * 1.5, width * 1.2])
+  c.strokeStyle = t.route
+  c.lineWidth = width
+  c.stroke()
+  c.setLineDash([])
+}
+
+//
 // The frame.
 //
 
@@ -2402,6 +2828,7 @@ function frame(m: MapState, time: number) {
   // move the camera directly, without going through the flights above.
   const camera = `${m.x}|${m.y}|${m.zoom}`
   if (camera !== m.baseCamera) m.baseDirty = true
+  if (m.route?.state === 'waiting') stepRoute(m)
 
   if (m.baseDirty) {
     c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
@@ -2409,6 +2836,10 @@ function frame(m: MapState, time: number) {
     c.fillRect(0, 0, m.width, m.height)
 
     let unsettled = drawTiles(m, view)
+    if (m.route?.points.length) {
+      const scale = worldSize(m)
+      strokeRoute(c, m.theme, m.route.points, m.width / 2 - m.x * scale, m.height / 2 - m.y * scale, scale, 5)
+    }
 
     // Markers claim their space first so labels never cover them.
     m.visible = cluster(m)
@@ -2510,7 +2941,7 @@ function drawTiles(m: MapState, v: View) {
   // Keep a screenful or two of tiles around (each is 1 MB at 2x, so not too many
   // on huge screens), and every source tile that's still useful.
   evict(m.rasters, Math.min(160, Math.max(48, wanted.length * 3)))
-  evict(m.sources, 32)
+  evict(m.sources, m.route?.state === 'waiting' ? 32 + MAX_ROUTE_TILES : 32)
 
   // On a slow connection, say so rather than showing an empty map.
   if (blank > 0) {
@@ -2770,26 +3201,29 @@ function drawRadar(m: MapState, v: View, time: number) {
   // A wash of the style's colour, so the radar reads as its own thing.
   c.fillStyle = t.blip === 'stamp' ? 'rgba(120, 90, 50, 0.18)' : t.blip === 'square' ? 'rgba(0, 0, 0, 0.18)' : 'rgba(0, 0, 0, 0.3)'
   c.fillRect(cx - hw, cy - hh, 2 * hw, 2 * hh)
+  if (m.route?.points.length) strokeRoute(c, t, m.route.points, cx - wx * size, cy - wy * size, size, 3)
   c.restore()
 
   // Blips: inside, a dot where it is; outside, a smaller one on the rim.
-  for (const marker of m.visible) {
-    if (marker.kind !== 'pin' && marker.kind !== 'person' && marker.kind !== 'cluster') continue
+  // Where the route ends is a waypoint, and always shows.
+  const waypoint = m.route?.points.length ? { x: m.route.toX, y: m.route.toY, kind: 'waypoint', flags: 0, color: t.route } : null
+  for (const marker of waypoint ? [...m.visible, waypoint] : m.visible) {
+    if (marker.kind !== 'pin' && marker.kind !== 'person' && marker.kind !== 'cluster' && marker !== waypoint) continue
     let dx = (marker.x - wx) * size
     let dy = (marker.y - wy) * size
     const d = Math.hypot(dx, dy)
     const inside = square ? Math.abs(dx) < hw - 6 && Math.abs(dy) < hh - 6 : d < r - 6
     if (!inside) {
-      if (marker.kind === 'pin' && !(marker.flags & (MARK_LIVE | MARK_NEW))) continue // only what matters goes on the rim
+      if (marker.kind === 'pin' && !(marker.flags & (MARK_LIVE | MARK_NEW | MARK_SELECTED))) continue // only what matters goes on the rim
       const k = square ? Math.min((hw - 5) / Math.abs(dx || 1), (hh - 5) / Math.abs(dy || 1)) : (r - 5) / d
       dx *= k
       dy *= k
     }
-    const size2 = inside ? 4.5 : 3.5
+    const size2 = marker === waypoint ? 5.5 : inside ? 4.5 : 3.5
     c.beginPath()
     if (t.blip === 'square') c.rect(cx + dx - size2, cy + dy - size2, 2 * size2, 2 * size2)
     else c.arc(cx + dx, cy + dy, size2, 0, Math.PI * 2)
-    c.fillStyle = marker.kind === 'person' ? '#4c9bff' : t.blip === 'stamp' ? '#8f2b1c' : marker.color
+    c.fillStyle = marker.kind === 'person' ? '#4c9bff' : t.blip === 'stamp' || marker === waypoint ? t.route : marker.color
     c.fill()
     c.lineWidth = 1.2
     c.strokeStyle = t.blip === 'stamp' ? '#3f2e1e' : '#000'

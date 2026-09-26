@@ -24,7 +24,7 @@ import {
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setRadar, setTheme, flyTo, zoomBy, glideBy, requestFrame,
-  project, center, lngToX, latToY, nearestStreet, findPlaces,
+  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute,
   icons, mapThemes, LEGEND, poiColor, RADAR_WIDE,
   MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
@@ -107,6 +107,7 @@ const UI = {
   follow: false, // the camera keeps you in the middle until you move the map
   sheetFull: false, // phones: the open sheet is pulled up to full height
   legend: false,
+  walk: null as string | null, // "Get there": the pin or friend being walked to, as a route ("pin/…", "user/…")
 }
 
 // When this device last had the app open, for "new since your last visit".
@@ -663,6 +664,51 @@ function startCompose() {
 }
 
 //
+// Getting there on foot: the map works out the way along the streets and draws it.
+//
+
+// Where the walk is heading: a pin, or a friend, who may be moving.
+function walkTarget() {
+  if (!UI.walk) return null
+  const [kind, id] = UI.walk.split('/')
+  if (kind === 'pin') {
+    const post = S.posts.find((p) => p.id === id)
+    return post ? { lat: post.latitude, lng: post.longitude, name: post.title, person: false } : null
+  }
+  const loc = locationOf(id)
+  return loc ? { lat: loc.latitude, lng: loc.longitude, name: firstName(id), person: true } : null
+}
+
+async function walkTo(to: string) {
+  if (UI.walk === to) return ui({ walk: null })
+  const here = S.here ?? (await watchHere())
+  if (!here) {
+    toast("Can't find you: location is blocked or unavailable")
+    return
+  }
+  UI.walk = to
+  UI.follow = false
+  // Phones put the map first, so the way is what you see.
+  if (narrow()) {
+    UI.feed = false
+    go('')
+  } else changed()
+
+  // Both ends in view.
+  const target = walkTarget()
+  if (!target || !map) return
+  const area = openArea()
+  const x0 = lngToX(here.longitude)
+  const y0 = latToY(here.latitude)
+  const x1 = lngToX(target.lng)
+  const y1 = latToY(target.lat)
+  const fit = (pixels: number, span: number) => Math.log2(pixels / Math.max(span * 256, 1e-9))
+  // Room around the ends for the pin, the walk bar and the map buttons.
+  const zoom = Math.min(17, Math.max(12, Math.min(fit(area.right - area.left - 200, Math.abs(x1 - x0)), fit(area.bottom - area.top - 240, Math.abs(y1 - y0)))))
+  reveal(yToLat((y0 + y1) / 2), xToLng((x0 + x1) / 2), zoom, true)
+}
+
+//
 // Little building blocks.
 //
 
@@ -817,8 +863,8 @@ function Linked({ text }: { text: string }) {
 
 // Directions are the phone's job: Apple devices open Apple Maps, everything else
 // OpenStreetMap's route planner.
-function directions(post: Post) {
-  const at = `${post.latitude.toFixed(6)},${post.longitude.toFixed(6)}`
+function directions(lat: number, lng: number) {
+  const at = `${lat.toFixed(6)},${lng.toFixed(6)}`
   if (/iPhone|iPad|Macintosh/.test(navigator.userAgent)) return `https://maps.apple.com/?daddr=${at}`
   return `https://www.openstreetmap.org/directions?to=${at}`
 }
@@ -1429,9 +1475,9 @@ function PostView({ post }: { post: Post }) {
             <button className="btn" onClick={copyLink} title="Copy link">
               <Icon name="link" size={16} />
             </button>
-            <a className="btn" href={directions(post)} target="_blank" rel="noreferrer noopener" title="Directions in your maps app">
+            <button className={UI.walk === `pin/${post.id}` ? 'btn on' : 'btn'} aria-pressed={UI.walk === `pin/${post.id}`} onClick={() => walkTo(`pin/${post.id}`)} title="The way there on foot">
               <Icon name="arrow" size={16} /> Get there
-            </a>
+            </button>
           </div>
 
           {sending && (
@@ -1790,6 +1836,11 @@ function ProfileView({ id }: { id: string }) {
                 <Icon name="locate" size={16} /> Find
               </button>
             )}
+            {loc && (
+              <button className={UI.walk === `user/${id}` ? 'btn on' : 'btn'} aria-pressed={UI.walk === `user/${id}`} onClick={() => walkTo(`user/${id}`)} title="The way there on foot">
+                <Icon name="arrow" size={16} /> Get there
+              </button>
+            )}
           </>
         )}
       </div>
@@ -1944,9 +1995,14 @@ function ChatView({ id }: { id: string }) {
       foot={<Composer placeholder={`Message ${firstName(id)}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} onType={() => typing.current?.ping()} />}
     >
       {loc && (
-        <button className="btn wide" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
-          <Icon name="locate" size={16} /> Show {firstName(id)} on the map
-        </button>
+        <div className="btn-row">
+          <button className="btn grow" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
+            <Icon name="locate" size={16} /> Show on the map
+          </button>
+          <button className={UI.walk === `user/${id}` ? 'btn grow on' : 'btn grow'} aria-pressed={UI.walk === `user/${id}`} onClick={() => walkTo(`user/${id}`)}>
+            <Icon name="arrow" size={16} /> Get there
+          </button>
+        </div>
       )}
       {thread.length === 0 && (
         <Empty icon="chat">
@@ -3061,6 +3117,39 @@ function onKey(e: KeyboardEvent) {
   e.preventDefault()
 }
 
+// "Get there" under way: how far, the maps app for the real thing, and stop.
+function WalkBar() {
+  const target = walkTarget()
+  if (!target || UI.route.kind === 'new') return null
+  const route = map?.route
+  const status = !route
+    ? 'Finding you…'
+    : route.points.length
+      ? `${Math.max(1, Math.round(route.meters / 80))} min walk · ${route.meters < 1000 ? `${Math.round(route.meters / 10) * 10} m` : `${(route.meters / 1000).toFixed(1)} km`}`
+      : route.state === 'waiting'
+        ? 'Working out the way…'
+        : route.state === 'far'
+          ? 'Too far to walk from here'
+          : "Can't find a way there on foot"
+  return (
+    <div className="walk" role="status">
+      <button className="walk-main" onClick={() => go(UI.walk!)}>
+        <Icon name="arrow" size={18} />
+        <span>
+          <strong>{target.name}</strong>
+          <small>{status}</small>
+        </span>
+      </button>
+      <a className="icon-btn" href={directions(target.lat, target.lng)} target="_blank" rel="noreferrer noopener" title="Open in your maps app" aria-label="Open in your maps app">
+        <Icon name="link" />
+      </a>
+      <button className="icon-btn" onClick={() => ui({ walk: null })} title="Stop" aria-label="Stop">
+        <Icon name="close" />
+      </button>
+    </div>
+  )
+}
+
 //
 // The app.
 //
@@ -3139,6 +3228,7 @@ export default function App() {
         if (['pin', 'place', 'new'].includes(UI.route.kind)) changed()
       }, 300)
     }
+    m.onRoute = changed
     m.onUserMove = () => {
       if (UI.follow) ui({ follow: false })
     }
@@ -3184,6 +3274,14 @@ export default function App() {
     }
     setMarkers(map, buildMarkers(posts))
     setRadar(map, radarPlace())
+    const target = walkTarget()
+    const here = S.here
+    setRoute(map, target && here ? { lng: here.longitude, lat: here.latitude } : null, target)
+    if (UI.walk && !target) ui({ walk: null }) // the pin went, or the friend stopped sharing
+    else if (target && here && distance(here.latitude, here.longitude, target.lat, target.lng) < 30) {
+      ui({ walk: null })
+      celebrate('Arrived', target.person ? `You found ${target.name}` : `You're at ${target.name}`)
+    }
     map.canvas.style.cursor = map.draftMode ? 'crosshair' : 'grab'
     keepFollowing()
     revealLinked()
@@ -3312,6 +3410,7 @@ export default function App() {
       <div className="credit">
         © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> · OpenFreeMap
       </div>
+      <WalkBar />
       <HoverCard cardRef={cardRef} />
       {UI.banner && (
         <div className="banner-big" role="status" key={UI.banner.title + UI.banner.sub}>
