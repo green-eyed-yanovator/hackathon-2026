@@ -7,6 +7,10 @@ pin on what's going on:
 - Someone dumping rubbish on your street? Lost cat? Local gossip?
 - Want to see if the neighbours would back a bench in the park?
 
+![The map in each of its styles, with a walk to a street clean-up under way](docs/styles.jpg)
+
+*Day, Night, Palm Coast, Metro; Frontier, Phosphor, Neon Bay, and Metro on a phone.*
+
 What you can do:
 
 - **Pins are threads.** Reply (mention people with `@`, heart a good reply), say you're in, save,
