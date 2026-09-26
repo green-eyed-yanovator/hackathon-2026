@@ -53,7 +53,7 @@ export type Interest = { user_id: string; post_id: string; created_at: string }
 export type Saved = { post_id: string; created_at: string }
 export type Revision = { id: string; title: string; description: string; replaced_at: string }
 
-export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post'
+export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention'
 
 export type Notification = {
   id: string
@@ -780,6 +780,7 @@ export function describeNotification(n: Notification) {
     case 'friend_request': return 'wants to be friends'
     case 'friend_accept': return 'accepted your friend request'
     case 'friend_post': return `pinned ${title}`
+    case 'mention': return `mentioned you in ${title}`
   }
 }
 

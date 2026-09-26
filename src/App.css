@@ -1365,9 +1365,49 @@ textarea::placeholder {
 }
 
 .composer {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 8px;
+}
+
+.mentions {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-solid);
+  border: 1px solid var(--line2);
+  box-shadow: var(--shadow);
+  animation: rise 0.12s ease-out;
+}
+
+.mentions button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-weight: 600;
+}
+
+.mentions button:first-child,
+.mentions button:hover {
+  background: var(--bg2);
+}
+
+.mention {
+  display: inline;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.mention:hover {
+  text-decoration: underline;
 }
 
 .composer textarea {

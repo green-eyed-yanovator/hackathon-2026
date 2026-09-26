@@ -800,6 +800,23 @@ function directions(post: Post) {
   return `https://www.openstreetmap.org/directions?to=${at}`
 }
 
+// A reply's text with "@Name" of people we know as links to them.
+function Mentions({ text }: { text: string }) {
+  const names = [...S.profiles.values()].filter((p) => text.includes('@' + p.display_name))
+  if (!names.length) return <Linked text={text} />
+  const pattern = new RegExp(`(${names.map((p) => '@' + p.display_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g')
+  return text.split(pattern).map((part, i) => {
+    const person = i % 2 ? names.find((p) => '@' + p.display_name === part) : null
+    return person ? (
+      <button key={i} className="mention" onClick={() => go(`user/${person.id}`)}>
+        {part}
+      </button>
+    ) : (
+      <Linked key={i} text={part} />
+    )
+  })
+}
+
 // The pin a link points at, if it's one of ours.
 function pinInLink(url: string) {
   if (!url.startsWith(window.location.origin)) return null
@@ -823,12 +840,32 @@ type ComposerProps = {
   onSend: (text: string) => Promise<boolean> // true once it's sent, which clears the box
   onType?: () => void
   autoFocus?: boolean
+  people?: string[] // who "@" suggests, first ones first
 }
 
-function Composer({ placeholder, onSend, onType, autoFocus = false }: ComposerProps) {
+function Composer({ placeholder, onSend, onType, autoFocus = false, people }: ComposerProps) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [caret, setCaret] = useState(0)
   const ref = useRef<HTMLTextAreaElement>(null)
+
+  // "@ma" just before the caret: suggest people whose name starts that way.
+  const typed = people ? /(^|\s)@([^\s@]{0,20})$/.exec(text.slice(0, caret)) : null
+  const suggestions = typed
+    ? people!.filter((id) => nameOf(id).toLowerCase().startsWith(typed[2].toLowerCase())).slice(0, 5)
+    : []
+
+  function mention(id: string) {
+    const start = caret - typed![2].length - 1
+    const next = `${text.slice(0, start)}@${nameOf(id)} ${text.slice(caret)}`
+    setText(next)
+    const at = start + nameOf(id).length + 2
+    setCaret(at)
+    requestAnimationFrame(() => {
+      ref.current?.focus()
+      ref.current?.setSelectionRange(at, at)
+    })
+  }
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -850,6 +887,16 @@ function Composer({ placeholder, onSend, onType, autoFocus = false }: ComposerPr
 
   return (
     <div className="composer">
+      {suggestions.length > 0 && (
+        <div className="mentions" role="listbox" aria-label="Mention someone">
+          {suggestions.map((id) => (
+            <button key={id} role="option" aria-selected={false} onMouseDown={(e) => e.preventDefault()} onClick={() => mention(id)}>
+              <Avatar id={id} size={22} />
+              {nameOf(id)}
+            </button>
+          ))}
+        </div>
+      )}
       <textarea
         ref={ref}
         rows={1}
@@ -859,12 +906,15 @@ function Composer({ placeholder, onSend, onType, autoFocus = false }: ComposerPr
         maxLength={2000}
         onChange={(e) => {
           setText(e.target.value)
+          setCaret(e.target.selectionStart)
           onType?.()
         }}
+        onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
-            send()
+            if (suggestions.length) mention(suggestions[0])
+            else send()
           }
         }}
       />
@@ -1176,6 +1226,9 @@ function PostView({ post }: { post: Post }) {
       foot={
         me ? (
           <Composer
+            people={[...new Set([post.author_id, ...replies.map((r) => r.author_id), ...friendIds(), ...S.profiles.keys()])].filter(
+              (id): id is string => !!id && id !== me && !S.blocked.has(id),
+            )}
             placeholder={`Reply to ${post.author_id ? firstName(post.author_id) : 'this pin'}…`}
             onSend={async (text) => {
               const ok = await reply(post.id, text)
@@ -1436,7 +1489,7 @@ function PostView({ post }: { post: Post }) {
               )}
             </div>
             <div className="reply-text">
-              <Linked text={r.content} />
+              <Mentions text={r.content} />
             </div>
           </div>
         </div>
@@ -2048,6 +2101,7 @@ const MUTABLE: [string, string][] = [
   ['friend_request', 'Friend requests'],
   ['friend_accept', 'Friend requests accepted'],
   ['friend_post', 'Friends pinning something new'],
+  ['mention', 'Someone mentioning you'],
 ]
 
 function ThemeSwatch({ id }: { id: string }) {
