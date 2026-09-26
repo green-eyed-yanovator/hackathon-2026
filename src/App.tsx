@@ -366,6 +366,17 @@ async function locate() {
   ui({ follow: true })
 }
 
+// Opened from a link: once the pins have loaded, bring that one into view.
+let linkRevealed = false
+
+function revealLinked() {
+  if (linkRevealed || !S.ready || !map) return
+  linkRevealed = true
+  const route = UI.route
+  const post = S.posts.find((p) => (route.kind === 'pin' && p.id === route.id) || (route.kind === 'place' && placeKey(p) === route.id))
+  if (post) reveal(post.latitude, post.longitude, Math.max(map.zoom, 16), true)
+}
+
 // Following: when my position moves, the camera goes with it.
 let followed: { latitude: number; longitude: number } | null = null
 
@@ -2165,6 +2176,14 @@ export default function App() {
         go(`user/${S.userId}`)
       }
     }
+    // Panels that name the nearest street redraw once the tiles around them arrive.
+    let tileTimer = 0
+    m.onTile = () => {
+      window.clearTimeout(tileTimer)
+      tileTimer = window.setTimeout(() => {
+        if (['pin', 'place', 'new'].includes(UI.route.kind)) changed()
+      }, 300)
+    }
     m.onUserMove = () => {
       if (UI.follow) ui({ follow: false })
     }
@@ -2206,6 +2225,7 @@ export default function App() {
     setMarkers(map, buildMarkers(posts))
     map.canvas.style.cursor = map.draftMode ? 'crosshair' : 'grab'
     keepFollowing()
+    revealLinked()
   })
 
   // Keys: the map is the main surface, so single letters drive it.

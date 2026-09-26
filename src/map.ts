@@ -711,6 +711,7 @@ export type MapState = {
   onHover: (marker: Marker | null) => void
   onFrame: () => void
   onUserMove: () => void // the person moved the map themselves
+  onTile: () => void // a source tile arrived: street names nearby are now known
 }
 
 export function worldSize(m: MapState) {
@@ -746,7 +747,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
     fade: null, tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
-    onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {},
+    onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
   }
 
   fetch(TILEJSON_URL)
@@ -1100,6 +1101,7 @@ function requestSource(m: MapState, z: number, x: number, y: number) {
     .then((buffer) => {
       fresh.tile = decodeTile(new Uint8Array(buffer), z, x, y)
       fresh.state = 'ready'
+      m.onTile()
     })
     .catch(() => {
       // Forget it after a while so a network blip doesn't leave a hole for good.
