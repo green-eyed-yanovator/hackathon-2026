@@ -705,6 +705,7 @@ async function walkTo(to: string) {
   if (S.here && there && distance(S.here.latitude, S.here.longitude, there.lat, there.lng) < 30) return toast("You're already there")
   UI.walk = to
   UI.follow = false
+  play('tick') // a waypoint set, in the style's own voice
   // Phones put the map first, so the way is what you see.
   if (narrow()) {
     UI.feed = false
