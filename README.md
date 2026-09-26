@@ -8,10 +8,12 @@ pin on what's going on:
 - Want to see if the neighbours would back a bench in the park?
 
 Pins are threads: people reply, say they're in, save them, and message each
-other. Pins can have a time, so tonight's BBQ counts down in the feed and
-ripples on the map while it's on. Add friends, share your location with them,
-and see each other on the map (with your photos). Tap a friend to talk; you'll
-see when they're typing.
+other. Pins can have a time, so tonight's BBQ counts down in the feed, shows
+under Soon, and ripples on the map while it's on. Add friends (People around
+here suggests neighbours whose pins are close), share your location with
+them, until you stop or just for an hour, and see each other on the map with
+your photos. Tap a friend to talk; you'll see when they're typing. Your dot
+only shows while you have the app open.
 
 Accounts: sign up with email and password, sign in with a password or an
 emailed code, reset a forgotten password by code, change email or password,
@@ -72,9 +74,11 @@ they mean.
 
 ## Keys
 
-`/` or `Ctrl K` search pins, people, streets and commands · `N` new pin ·
+`/` or `Ctrl K` search pins, people, streets and commands (fuzzy: `rndl` finds
+Rundle) · `N` new pin ·
 `J` `K` next and previous pin · `L` where am I (follows you until you move the map) ·
-`T` next map style · `F` friends · `I` inbox · `+` `−` zoom · `Esc` close
+`T` next map style · `F` friends · `I` inbox · arrows move the map · `+` `−`
+zoom · `Esc` close
 
 On phones: the tab bar at the bottom, sheets you can drag up to full height
 or down to close, pinch and double-tap to zoom. It installs to the home
