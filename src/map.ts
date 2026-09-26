@@ -2343,8 +2343,9 @@ function drawTiles(m: MapState, v: View) {
     }
   }
 
-  // Keep a screenful or two of tiles around, and every source tile that's still useful.
-  evict(m.rasters, Math.max(48, wanted.length * 3))
+  // Keep a screenful or two of tiles around (each is 1 MB at 2x, so not too many
+  // on huge screens), and every source tile that's still useful.
+  evict(m.rasters, Math.min(160, Math.max(48, wanted.length * 3)))
   evict(m.sources, 48)
   return unfinished
 }
