@@ -10,49 +10,17 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { Session } from '@supabase/supabase-js'
+import AuthPanel from './AuthPanel'
+import ProfilePanel from './ProfilePanel'
 import { supabase } from './lib/supabase'
+import type { AuthMode, Post, Profile, Reply } from './types'
+import { linkButtonStyle, rightPanelStyle } from './ui'
 
 setWorkerUrl(workerUrl)
-
-type Post = {
-  id: string
-  title: string
-  description: string
-  latitude: number
-  longitude: number
-  created_at: string
-  author_name: string | null
-}
 
 type Location = {
   latitude: number
   longitude: number
-}
-type Reply = {
-  id: string
-  post_id: string
-  content: string
-  created_at: string
-  author_name: string | null
-}
-
-type AuthMode = 'signup' | 'login'
-
-const authLabelStyle = {
-  display: 'block',
-  marginBottom: '6px',
-  fontWeight: 600,
-  color: '#333',
-}
-
-const authInputStyle = {
-  width: '100%',
-  boxSizing: 'border-box' as const,
-  padding: '12px',
-  marginBottom: '16px',
-  border: '1px solid #ccc',
-  borderRadius: '10px',
-  fontSize: '16px',
 }
 
 function App() {
@@ -82,11 +50,13 @@ const [replyText, setReplyText] = useState('')
     useState('Finding your location...')
 
   const [session, setSession] = useState<Session | null>(null)
+  const [myProfile, setMyProfile] = useState<Profile | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode | null>(null)
-  const [authName, setAuthName] = useState('')
-  const [authEmail, setAuthEmail] = useState('')
-  const [authPassword, setAuthPassword] = useState('')
-  const [authMessage, setAuthMessage] = useState('')
+  const [profileId, setProfileId] = useState<string | null>(null)
+
+  const userId = session?.user.id ?? null
+  // Ignore a profile left over from a previous session.
+  const me = myProfile?.id === userId ? myProfile : null
 
   useEffect(() => {
     // Fires once with the stored session (INITIAL_SESSION), then on every sign-in/out.
@@ -98,6 +68,36 @@ const [replyText, setReplyText] = useState('')
 
     return () => data.subscription.unsubscribe()
   }, [])
+
+  useEffect(() => {
+    if (!userId) {
+      return
+    }
+
+    let ignore = false
+
+    supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .single()
+      .then(({ data, error }) => {
+        if (ignore) {
+          return
+        }
+
+        if (error) {
+          console.error('Failed to load profile:', error)
+          return
+        }
+
+        setMyProfile(data)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [userId])
 
   useEffect(() => {
     async function loadPosts() {
@@ -191,12 +191,8 @@ const [replyText, setReplyText] = useState('')
       (payload) => {
         const newReply = payload.new as Reply
 
-        // Only add it if the currently-open thread
-        // is the thread this reply belongs to
-        if (selectedPost?.id !== newReply.post_id) {
-          return
-        }
-
+        // Replies for other threads are harmless: the panel only shows
+        // replies whose post_id matches the open thread.
         setReplies((currentReplies) => {
           if (
             currentReplies.some(
@@ -215,7 +211,7 @@ const [replyText, setReplyText] = useState('')
   return () => {
     supabase.removeChannel(channel)
   }
-}, [selectedPost])
+}, [])
 
   useEffect(() => {
     if (!map.current || posts.length === 0) {
@@ -231,36 +227,44 @@ const [replyText, setReplyText] = useState('')
         .addTo(map.current!)
 
       marker.getElement().addEventListener('click', () => {
+        setProfileId(null)
         setSelectedPost(post)
       })
 
       markers.current.push(marker)
     })
-      }, [posts])
+  }, [posts])
 
-      useEffect(() => {
-  if (!selectedPost) {
-    setReplies([])
-    return
-  }
-
-  async function loadReplies() {
-    const { data, error } = await supabase
-      .from('replies')
-      .select('*')
-      .eq('post_id', selectedPost!.id)
-      .order('created_at', { ascending: true })
-
-    if (error) {
-      console.error('Failed to load replies:', error)
+  useEffect(() => {
+    if (!selectedPost) {
       return
     }
 
-    setReplies(data ?? [])
-  }
+    // Drop the response if another thread was opened before it arrived.
+    let ignore = false
 
-  loadReplies()
-}, [selectedPost])
+    supabase
+      .from('replies')
+      .select('*')
+      .eq('post_id', selectedPost.id)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (ignore) {
+          return
+        }
+
+        if (error) {
+          console.error('Failed to load replies:', error)
+          return
+        }
+
+        setReplies(data ?? [])
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [selectedPost])
 
 async function handleCreateReply() {
   if (!selectedPost || !replyText.trim()) {
@@ -356,7 +360,7 @@ async function handleCreateReply() {
 
   function handleOpenForm() {
     if (!session) {
-      openAuth('signup')
+      setAuthMode('signup')
       return
     }
 
@@ -406,44 +410,46 @@ async function handleCreateReply() {
     locationMarker.current = null
   }
 
-  function openAuth(mode: AuthMode) {
-    setAuthMode(mode)
-    setAuthMessage('')
-  }
-
-  async function handleAuthSubmit() {
-    setAuthMessage('')
-
-    const { data, error } =
-      authMode === 'signup'
-        ? await supabase.auth.signUp({
-            email: authEmail.trim(),
-            password: authPassword,
-            options: { data: { display_name: authName.trim() } },
-          })
-        : await supabase.auth.signInWithPassword({
-            email: authEmail.trim(),
-            password: authPassword,
-          })
-
-    if (error) {
-      setAuthMessage(error.message)
-      return
-    }
-
-    // With email confirmation on (the hosted default) sign-up returns no session.
-    if (!data.session) {
-      setAuthMessage('Check your email to confirm your account, then log in.')
-      return
-    }
-
-    setAuthMode(null)
-    setAuthPassword('')
-  }
-
   async function handleSignOut() {
     await supabase.auth.signOut()
     handleCloseForm()
+    setProfileId(null)
+  }
+
+  function openProfile(id: string) {
+    setSelectedPost(null)
+    setProfileId(id)
+  }
+
+  function openPostFromProfile(post: Post) {
+    setProfileId(null)
+    setSelectedPost(post)
+
+    map.current?.flyTo({
+      center: [post.longitude, post.latitude],
+      zoom: 15,
+    })
+  }
+
+  // The database renames old posts and replies too; mirror that locally.
+  function handleProfileSaved(profile: Profile) {
+    setMyProfile(profile)
+
+    setPosts((currentPosts) =>
+      currentPosts.map((post) =>
+        post.author_id === profile.id
+          ? { ...post, author_name: profile.display_name }
+          : post,
+      ),
+    )
+
+    setReplies((currentReplies) =>
+      currentReplies.map((reply) =>
+        reply.author_id === profile.id
+          ? { ...reply, author_name: profile.display_name }
+          : reply,
+      ),
+    )
   }
 
   useEffect(() => {
@@ -473,10 +479,9 @@ async function handleCreateReply() {
     }
   }, [isChoosingLocation])
 
-  const authFormComplete =
-    authEmail.trim() !== '' &&
-    authPassword !== '' &&
-    (authMode !== 'signup' || authName.trim() !== '')
+  const threadReplies = selectedPost
+    ? replies.filter((reply) => reply.post_id === selectedPost.id)
+    : []
 
   return (
     <div
@@ -519,14 +524,17 @@ async function handleCreateReply() {
           </h1>
 
           {session && (
-            <span style={{ fontSize: '14px', color: '#444' }}>
-              {session.user.user_metadata.display_name ??
-                session.user.email}
-            </span>
+            <button
+              onClick={() => openProfile(session.user.id)}
+              title="Your profile"
+              style={{ ...linkButtonStyle, color: '#222' }}
+            >
+              {me?.display_name ?? session.user.email}
+            </button>
           )}
 
           <button
-            onClick={session ? handleSignOut : () => openAuth('login')}
+            onClick={session ? handleSignOut : () => setAuthMode('login')}
             style={{
               border: '1px solid #ccc',
               background: 'white',
@@ -568,23 +576,7 @@ async function handleCreateReply() {
       )}
       {/* Thread details */}
 {selectedPost && (
-  <aside
-    style={{
-      position: 'absolute',
-      top: '16px',
-      right: '16px',
-      bottom: '16px',
-      width: '360px',
-      zIndex: 20,
-      background: 'white',
-      borderRadius: '20px',
-      padding: '24px',
-      boxSizing: 'border-box',
-      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.25)',
-      fontFamily: 'Arial, sans-serif',
-      overflowY: 'auto',
-    }}
-  >
+  <aside style={rightPanelStyle}>
     <button
       onClick={() => setSelectedPost(null)}
       style={{
@@ -609,7 +601,7 @@ async function handleCreateReply() {
       {selectedPost.title}
     </h2>
 
-    {selectedPost.author_name && (
+    {selectedPost.author_id && (
       <p
         style={{
           margin: '0 0 12px',
@@ -617,7 +609,13 @@ async function handleCreateReply() {
           color: '#777',
         }}
       >
-        by {selectedPost.author_name}
+        by{' '}
+        <button
+          onClick={() => openProfile(selectedPost.author_id!)}
+          style={{ ...linkButtonStyle, color: '#444' }}
+        >
+          {selectedPost.author_name}
+        </button>
       </p>
     )}
 
@@ -663,7 +661,7 @@ async function handleCreateReply() {
     marginBottom: '20px',
   }}
 >
-  {replies.length === 0 ? (
+  {threadReplies.length === 0 ? (
     <p
       style={{
         margin: 0,
@@ -674,7 +672,7 @@ async function handleCreateReply() {
       No replies yet.
     </p>
   ) : (
-    replies.map((reply) => (
+    threadReplies.map((reply) => (
       <div
         key={reply.id}
         style={{
@@ -684,17 +682,21 @@ async function handleCreateReply() {
           color: '#333',
         }}
       >
-        {reply.author_name && (
-          <div
+        {reply.author_id && (
+          <button
+            onClick={() => openProfile(reply.author_id!)}
             style={{
+              ...linkButtonStyle,
+              display: 'block',
               marginBottom: '4px',
               fontSize: '12px',
               fontWeight: 600,
               color: '#666',
+              textDecoration: 'none',
             }}
           >
             {reply.author_name}
-          </div>
+          </button>
         )}
         {reply.content}
       </div>
@@ -743,7 +745,7 @@ async function handleCreateReply() {
   </>
 ) : (
   <button
-    onClick={() => openAuth('signup')}
+    onClick={() => setAuthMode('signup')}
     style={{
       width: '100%',
       border: '1px solid #ccc',
@@ -979,158 +981,26 @@ async function handleCreateReply() {
         </aside>
       )}
 
-      {/* Sign up / log in */}
+      {profileId && (
+        <ProfilePanel
+          key={profileId}
+          profileId={profileId}
+          ownEmail={
+            profileId === userId ? (session?.user.email ?? '') : null
+          }
+          posts={posts}
+          onOpenPost={openPostFromProfile}
+          onSaved={handleProfileSaved}
+          onChangePassword={() => setAuthMode('new-password')}
+          onClose={() => setProfileId(null)}
+        />
+      )}
+
       {authMode && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 30,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(0, 0, 0, 0.35)',
-            fontFamily: 'Arial, sans-serif',
-          }}
-        >
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              handleAuthSubmit()
-            }}
-            style={{
-              width: '340px',
-              background: 'white',
-              borderRadius: '20px',
-              padding: '24px',
-              boxSizing: 'border-box',
-              boxShadow: '0 8px 30px rgba(0, 0, 0, 0.25)',
-            }}
-          >
-            <h2
-              style={{
-                margin: '0 0 24px',
-                fontSize: '24px',
-                fontWeight: 700,
-                color: '#111',
-              }}
-            >
-              {authMode === 'signup' ? 'Create an account' : 'Log in'}
-            </h2>
-
-            {authMode === 'signup' && (
-              <>
-                <label style={authLabelStyle}>Name</label>
-                <input
-                  value={authName}
-                  onChange={(event) => setAuthName(event.target.value)}
-                  placeholder="How neighbours will see you"
-                  autoComplete="nickname"
-                  style={authInputStyle}
-                />
-              </>
-            )}
-
-            <label style={authLabelStyle}>Email</label>
-            <input
-              type="email"
-              value={authEmail}
-              onChange={(event) => setAuthEmail(event.target.value)}
-              autoComplete="email"
-              style={authInputStyle}
-            />
-
-            <label style={authLabelStyle}>Password</label>
-            <input
-              type="password"
-              value={authPassword}
-              onChange={(event) => setAuthPassword(event.target.value)}
-              autoComplete={
-                authMode === 'signup' ? 'new-password' : 'current-password'
-              }
-              style={authInputStyle}
-            />
-
-            {authMessage && (
-              <p
-                role="alert"
-                style={{
-                  margin: '0 0 16px',
-                  padding: '10px 12px',
-                  background: '#f3f4f6',
-                  borderRadius: '8px',
-                  fontSize: '14px',
-                  color: '#333',
-                }}
-              >
-                {authMessage}
-              </p>
-            )}
-
-            <div
-              style={{
-                display: 'flex',
-                gap: '10px',
-                marginBottom: '16px',
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => setAuthMode(null)}
-                style={{
-                  flex: 1,
-                  border: '1px solid #ccc',
-                  background: 'white',
-                  color: '#333',
-                  padding: '12px',
-                  borderRadius: '10px',
-                  fontSize: '16px',
-                  cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-
-              <button
-                type="submit"
-                disabled={!authFormComplete}
-                style={{
-                  flex: 1,
-                  border: 'none',
-                  background: authFormComplete ? '#000' : '#ccc',
-                  color: 'white',
-                  padding: '12px',
-                  borderRadius: '10px',
-                  fontSize: '16px',
-                  fontWeight: 600,
-                  cursor: authFormComplete ? 'pointer' : 'not-allowed',
-                }}
-              >
-                {authMode === 'signup' ? 'Sign up' : 'Log in'}
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                openAuth(authMode === 'signup' ? 'login' : 'signup')
-              }
-              style={{
-                width: '100%',
-                border: 'none',
-                background: 'transparent',
-                color: '#555',
-                fontSize: '14px',
-                cursor: 'pointer',
-                textDecoration: 'underline',
-              }}
-            >
-              {authMode === 'signup'
-                ? 'Already have an account? Log in'
-                : 'New here? Create an account'}
-            </button>
-          </form>
-        </div>
+        <AuthPanel
+          initialMode={authMode}
+          onClose={() => setAuthMode(null)}
+        />
       )}
     </div>
   )
