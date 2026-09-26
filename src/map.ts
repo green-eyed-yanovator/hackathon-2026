@@ -1091,9 +1091,10 @@ function requestSource(m: MapState, z: number, x: number, y: number) {
   return fresh
 }
 
-// Keeps caches bounded: least recently drawn goes first.
+// Keeps caches bounded: least recently drawn goes first. Lets them run a quarter
+// over before trimming, so the sort happens now and then rather than every frame.
 function evict<T extends { used: number }>(cache: Map<string, T>, limit: number) {
-  if (cache.size <= limit) return
+  if (cache.size <= limit * 1.25) return
   const entries = [...cache.entries()].sort((a, b) => a[1].used - b[1].used)
   for (let i = 0; i < entries.length - limit; i++) cache.delete(entries[i][0])
 }

@@ -162,6 +162,13 @@ function ago(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
+// "right now", "5m ago", "3h ago", or "on 12 Sep".
+function since(iso: string) {
+  const text = ago(iso)
+  if (text === 'now') return 'right now'
+  return /\d[mhd]$/.test(text) ? `${text} ago` : `on ${text}`
+}
+
 function meters(m: number) {
   if (m < 50) return 'here'
   if (m < 1000) return `${Math.round(m / 10) * 10} m`
@@ -1111,7 +1118,7 @@ function ChatView({ id }: { id: string }) {
             {nameOf(id)}
             <small className="muted">
               {S.online.has(id) ? 'online' : 'offline'}
-              {loc && ` · ${away !== null ? meters(away) + ' away' : 'sharing location'} · ${ago(loc.updated_at)}`}
+              {loc && ` · ${away !== null ? meters(away) + ' away' : 'on the map'} ${since(loc.updated_at)}`}
             </small>
           </span>
         </button>
@@ -1923,8 +1930,29 @@ function Palette() {
 
 function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null> }) {
   const id = UI.hover
-  const posts = id ? S.posts.filter((p) => placeKey(p) === id) : []
-  if (!posts.length || narrow() || (UI.route.kind === 'pin' && posts.some((p) => p.id === UI.route.id))) return null
+  if (narrow() || !id) return null
+
+  if (id.startsWith('person:')) {
+    const userId = id.slice('person:'.length)
+    const loc = S.locations.get(userId)
+    const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
+    return (
+      <div className="hover-card person-card" ref={cardRef}>
+        <Avatar id={userId} size={32} dot />
+        <div>
+          <strong>{nameOf(userId)}</strong>
+          <div className="muted small">
+            {loc && `here ${since(loc.updated_at)}`}
+            {away !== null && ` · ${meters(away)} away`}
+          </div>
+          <div className="muted small">Click to message</div>
+        </div>
+      </div>
+    )
+  }
+
+  const posts = S.posts.filter((p) => placeKey(p) === id)
+  if (!posts.length || (UI.route.kind === 'pin' && posts.some((p) => p.id === UI.route.id))) return null
   const post = posts[0]
   const replies = S.replies.filter((r) => r.post_id === post.id).length
 
@@ -2004,14 +2032,14 @@ export default function App() {
         go(`user/${S.userId}`)
       }
     }
-    m.onHover = (marker) => ui({ hover: marker?.kind === 'pin' ? marker.id : null })
+    m.onHover = (marker) => ui({ hover: marker && marker.kind !== 'me' ? marker.id : null })
     m.onFrame = () => {
       // Keep the hover card glued to its pin, without a React render per frame.
       const card = cardRef.current
       const marker = m.markers.find((x) => x.id === UI.hover)
       if (card && marker) {
         const p = project(m, marker.x, marker.y)
-        const lift = m.theme.blip === 'pin' ? 52 : 26
+        const lift = marker.kind === 'pin' && m.theme.blip === 'pin' ? 52 : 26
         card.style.transform = `translate(${Math.round(p.x - card.offsetWidth / 2)}px, ${Math.round(p.y - lift - card.offsetHeight)}px)`
       }
 
