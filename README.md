@@ -53,11 +53,11 @@ Already have a local database you want to keep? Apply new migrations with
 docker exec -i supabase_db_hackathon-2026 psql -U postgres < supabase/seed.sql
 ```
 
-In development the sign-in sheet has one-tap buttons for these (never in a
-production build). Demo accounts (password `neighbour`): `maya@aroundhere.demo`,
+Demo accounts (password `neighbour`): `maya@aroundhere.demo`,
 `tom@aroundhere.demo`, `priya@aroundhere.demo`, `lucas@aroundhere.demo`,
 `hannah@aroundhere.demo`, `ben@aroundhere.demo`. Maya has friends on the map,
-a friend request waiting and unread messages.
+a friend request waiting and unread messages. In development the sign-in
+sheet has one-tap buttons for them (never in a production build).
 
 Emails (sign-in codes, password resets) land in Mailpit at http://127.0.0.1:54324.
 
@@ -185,7 +185,8 @@ Where people are and when they're around is the sensitive part, so:
 - **Those rows are never deleted, only updated.** Supabase realtime sends
   every DELETE to every client, whatever the row security, with the row's key,
   which for these tables is a person. Stopping sharing sets `shared = false`;
-  leaving sets `seen_at` far in the past.
+  leaving sets that device's `here = false` (the server stamps `seen_at`, so
+  no one's clock decides who looks online).
 - **Helper functions live in the `private` schema**, which the API doesn't
   expose. In `public`, `are_friends` or `has_blocked` would tell anyone who's
   friends with or blocked whom, and `notify` would let anyone send
