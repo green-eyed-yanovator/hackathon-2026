@@ -89,6 +89,7 @@ export const icons = {
   map: '!M3 5l6-2 6 2 6-2v16l-6 2-6-2-6 2zM9 5.2v13.6l6 2V7.2z',
   more: 'M5 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM12 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM19 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4z',
   minus: 'M4 11h16v2H4z',
+  info: '!M12 2a10 10 0 1 1 0 20 10 10 0 1 1 0-20zM11 10h2v8h-2zM11 6h2v2h-2z',
   menu: 'M3 5h18v2H3zM3 11h18v2H3zM3 17h18v2H3z',
 }
 
@@ -460,6 +461,17 @@ const POI_COLORS: Partial<Record<IconName, string>> = {
   film: '#d6456d', note: '#d6456d', book: '#c49a2c', tree: '#3f9e4f', train: '#4d6fa8', star: '#d8b02c',
   scissors: '#d06aa8', dumbbell: '#c4572c', ball: '#c4572c',
 }
+
+// What the place blips mean, for the legend.
+export const LEGEND: [IconName, string][] = [
+  ['fork', 'Restaurant'], ['burger', 'Fast food'], ['cup', 'Café, bakery'], ['glass', 'Bar, pub'],
+  ['bag', 'Shop'], ['shirt', 'Clothes'], ['cross', 'Hospital, pharmacy'], ['shield', 'Police, fire'],
+  ['fuel', 'Fuel'], ['wrench', 'Car repair'], ['bed', 'Hotel'], ['dollar', 'Bank'],
+  ['film', 'Cinema, theatre'], ['book', 'School, library'], ['tree', 'Park, garden'], ['train', 'Station'],
+  ['star', 'Sights'], ['scissors', 'Hairdresser'], ['dumbbell', 'Gym'], ['ball', 'Sports ground'],
+]
+
+export const poiColor = (icon: IconName) => POI_COLORS[icon] ?? '#888888'
 
 function nameOf(props: Props) {
   const name = props['name:latin'] ?? props.name

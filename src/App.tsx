@@ -14,7 +14,7 @@ import {
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, project, center, requestFrame, nearestStreet, findPlaces,
-  lngToX, latToY, icons, mapThemes, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
+  lngToX, latToY, icons, mapThemes, LEGEND, poiColor, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
 import './App.css'
@@ -91,6 +91,7 @@ const UI = {
   banner: null as { title: string; sub: string } | null,
   follow: false, // the camera keeps you in the middle until you move the map
   sheetFull: false, // phones: the open sheet is pulled up to full height
+  legend: false,
 }
 
 let map: MapState | null = null
@@ -2195,6 +2196,40 @@ function Palette() {
   )
 }
 
+// What everything on the map means, in the current style.
+function Legend() {
+  return (
+    <div className="panel legend">
+      <div className="section">Pins</div>
+      <div className="legend-grid">
+        {(Object.keys(flairs) as Flair[]).map((f) => (
+          <div key={f}>
+            <Blip flair={f} size={22} />
+            <span>{flairs[f].label}</span>
+          </div>
+        ))}
+        <div>
+          <span className="avatar" style={{ width: 22, height: 22, fontSize: 9, background: '#2f9e6b' }}>
+            FR
+          </span>
+          <span>A friend</span>
+        </div>
+      </div>
+      <div className="section">Places</div>
+      <div className="legend-grid">
+        {LEGEND.map(([icon, label]) => (
+          <div key={icon}>
+            <span className="blip small" style={{ width: 18, height: 18, background: poiColor(icon) }}>
+              <Icon name={icon} size={11} />
+            </span>
+            <span>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 //
 // The hover card that follows a pin on the map.
 //
@@ -2368,6 +2403,7 @@ export default function App() {
       if (e.key === 'Escape') {
         if (UI.palette) ui({ palette: false })
         else if (UI.auth) ui({ auth: null })
+        else if (UI.legend) ui({ legend: false })
         else if (UI.route.kind) go('')
         return
       }
@@ -2480,7 +2516,11 @@ export default function App() {
         <button className={UI.follow ? 'icon-btn tool follow' : S.here ? 'icon-btn tool on' : 'icon-btn tool'} onClick={locate} aria-label="Where am I" title="Where am I (L)">
           <Icon name="locate" />
         </button>
+        <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend })} aria-label="Legend" title="What the blips mean">
+          <Icon name="info" />
+        </button>
       </div>
+      {UI.legend && <Legend />}
 
       {route.kind !== 'new' && (
         <button className="fab hide-narrow" onClick={startCompose} title="New pin (N)">
