@@ -15,6 +15,10 @@ them, until you stop or just for an hour, and see each other on the map with
 your photos. Tap a friend to talk; you'll see when they're typing. Your dot
 only shows while you have the app open.
 
+Looking after each other: block someone (they can't message or add you,
+and their pins and replies disappear for you), or report a pin; reports
+land in the `reports` table for whoever runs the neighbourhood.
+
 Accounts: sign up with email and password, sign in with a password or an
 emailed code, reset a forgotten password by code, change email or password,
 pick a profile photo, delete your account. New accounts get a short
