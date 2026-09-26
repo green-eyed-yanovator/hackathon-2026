@@ -799,6 +799,8 @@ export type MapState = {
 
   tileUrl: string | null
   sources: Map<string, SourceEntry>
+  queue: { key: string; z: number; x: number; y: number; entry: SourceEntry }[] // tiles waiting to download
+  fetching: number
   rasters: Map<string, Raster>
   sprites: Map<string, Sprite>
   textures: Map<string, CanvasPattern>
@@ -846,7 +848,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(),
+    fade: null, tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
   }
@@ -1208,29 +1210,48 @@ function requestSource(m: MapState, z: number, x: number, y: number) {
 
   const fresh: SourceEntry = { state: 'loading', tile: null, used: m.frameCount }
   m.sources.set(key, fresh)
-  const url = m.tileUrl.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y))
-
-  fetch(url)
-    .then((response) => {
-      if (!response.ok) throw new Error(`tile ${key}: ${response.status}`)
-      return response.arrayBuffer()
-    })
-    .then((buffer) => {
-      fresh.tile = decodeTile(new Uint8Array(buffer), z, x, y)
-      fresh.state = 'ready'
-      m.onTile()
-    })
-    .catch(() => {
-      // Forget it after a while so a network blip doesn't leave a hole for good.
-      fresh.state = 'error'
-      setTimeout(() => {
-        if (m.sources.get(key) === fresh) m.sources.delete(key)
-        requestFrame(m)
-      }, 5000)
-    })
-    .finally(() => requestFrame(m))
-
+  m.queue.push({ key, z, x, y, entry: fresh })
+  pumpFetches(m)
   return fresh
+}
+
+// A few downloads at a time, in the order the frame asked (middle of the screen
+// first), so on a slow connection the middle fills in first instead of every tile
+// crawling in together. Tiles nobody has wanted for a while are dropped unfetched.
+function pumpFetches(m: MapState) {
+  while (m.fetching < 4 && m.queue.length) {
+    const job = m.queue.shift()!
+    if (m.frameCount - job.entry.used > 2) {
+      if (m.sources.get(job.key) === job.entry) m.sources.delete(job.key)
+      continue
+    }
+
+    m.fetching++
+    const url = m.tileUrl!.replace('{z}', String(job.z)).replace('{x}', String(job.x)).replace('{y}', String(job.y))
+    fetch(url)
+      .then((response) => {
+        if (!response.ok) throw new Error(`tile ${job.key}: ${response.status}`)
+        return response.arrayBuffer()
+      })
+      .then((buffer) => {
+        job.entry.tile = decodeTile(new Uint8Array(buffer), job.z, job.x, job.y)
+        job.entry.state = 'ready'
+        m.onTile()
+      })
+      .catch(() => {
+        // Forget it after a while so a network blip doesn't leave a hole for good.
+        job.entry.state = 'error'
+        setTimeout(() => {
+          if (m.sources.get(job.key) === job.entry) m.sources.delete(job.key)
+          requestFrame(m)
+        }, 5000)
+      })
+      .finally(() => {
+        m.fetching--
+        pumpFetches(m)
+        requestFrame(m)
+      })
+  }
 }
 
 // Keeps caches bounded: least recently drawn goes first. Lets them run a quarter
@@ -2349,6 +2370,7 @@ function drawTiles(m: MapState, v: View) {
 
   const budgetEnd = performance.now() + 7
   let unfinished = false
+  let blank = 0 // tiles with nothing at all to show yet
 
   for (const w of wanted) {
     const sx = w.x * v.tileSize - v.left
@@ -2360,6 +2382,7 @@ function drawTiles(m: MapState, v: View) {
       // Stand-in: the nearest ancestor we already painted, cropped and scaled up.
       // A fresh tile fades in over it rather than popping.
       unfinished = true
+      let stoodIn = false
       for (let up = 1; up <= 6 && v.z - up >= 0; up++) {
         const px = w.x >> up
         const py = w.y >> up
@@ -2368,8 +2391,10 @@ function drawTiles(m: MapState, v: View) {
         parent.used = m.frameCount
         const part = parent.canvas.width / 2 ** up
         c.drawImage(parent.canvas, (w.x - (px << up)) * part, (w.y - (py << up)) * part, part, part, sx, sy, v.tileSize + 0.5, v.tileSize + 0.5)
+        stoodIn = true
         break
       }
+      if (!raster && !stoodIn) blank++
     }
 
     if (raster) {
@@ -2384,6 +2409,21 @@ function drawTiles(m: MapState, v: View) {
   // on huge screens), and every source tile that's still useful.
   evict(m.rasters, Math.min(160, Math.max(48, wanted.length * 3)))
   evict(m.sources, 32)
+
+  // On a slow connection, say so rather than showing an empty map.
+  if (blank > 0) {
+    const text = 'Loading map…'
+    c.font = `600 12px ${sans}`
+    const w = c.measureText(text).width + 24
+    c.fillStyle = 'rgba(20, 22, 26, 0.75)'
+    c.beginPath()
+    c.roundRect(m.width / 2 - w / 2, m.height / 2 - 14, w, 28, 14)
+    c.fill()
+    c.fillStyle = '#fff'
+    c.textAlign = 'center'
+    c.textBaseline = 'middle'
+    c.fillText(text, m.width / 2, m.height / 2 + 0.5)
+  }
   return unfinished
 }
 

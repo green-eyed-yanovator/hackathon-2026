@@ -286,7 +286,6 @@ body {
   font-size: 14px;
   line-height: 1.4;
   color: var(--fg);
-  background: #888;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }

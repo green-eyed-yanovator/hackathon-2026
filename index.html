@@ -11,9 +11,25 @@
     <meta name="theme-color" content="#16171b" />
     <meta name="description" content="What's happening on your street: a map of pins from people nearby." />
     <title>AroundHere</title>
+    <style>
+      /* Shown until the app's script arrives: the map's colour and the mark, breathing. */
+      html, body { margin: 0; height: 100%; background: #f3f1ec; }
+      @media (prefers-color-scheme: dark) { html, body { background: #16181d; } }
+      .splash { position: fixed; inset: 0; display: grid; place-items: center; }
+      .splash img { width: 56px; height: 56px; animation: breathe 1.4s ease-in-out infinite; }
+      @keyframes breathe { 50% { transform: scale(0.88); opacity: 0.7; } }
+    </style>
+    <script>
+      // The last map style's colour, so there's no flash of the wrong one.
+      try {
+        var land = { day: '#f3f1ec', night: '#16181d', coast: '#8b9468', metro: '#2b3138', frontier: '#dcc9a0', radar: '#030b06', neon: '#1a0b2e' }
+        var theme = localStorage.getItem('aroundhere.theme')
+        if (land[theme]) document.documentElement.style.background = land[theme]
+      } catch (e) {}
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="splash"><img src="/favicon.svg" alt="" /></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
