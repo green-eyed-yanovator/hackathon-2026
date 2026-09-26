@@ -8,8 +8,15 @@ pin on what's going on:
 - Want to see if the neighbours would back a bench in the park?
 
 Pins are threads: people reply, say they're in, save them, and message each
-other. Add friends, share your location with them, and see each other on the
-map. Tap a friend to talk.
+other. Pins can have a time, so tonight's BBQ counts down in the feed and
+ripples on the map while it's on. Add friends, share your location with them,
+and see each other on the map (with your photos). Tap a friend to talk; you'll
+see when they're typing.
+
+Accounts: sign up with email and password, sign in with a password or an
+emailed code, reset a forgotten password by code, change email or password,
+pick a profile photo, delete your account. New accounts get a short
+getting-started list.
 
 ## Running it
 
@@ -51,12 +58,19 @@ Press `T` to cycle, or pick one in Settings.
 | Phosphor   | Green CRT tracking screen with glow, scanlines and a sweep |
 
 Each style changes the map, the blips and people, the whole interface, and the
-screen effect on top.
+screen effect on top. The game styles cover the map in place blips from
+further out, like a pause-menu map; the legend (the `i` button) says what
+they mean.
 
 ## Keys
 
-`/` or `Ctrl K` search and commands · `N` new pin · `L` where am I ·
+`/` or `Ctrl K` search pins, people, streets and commands · `N` new pin ·
+`J` `K` next and previous pin · `L` where am I (again to follow you) ·
 `T` next map style · `F` friends · `I` inbox · `+` `−` zoom · `Esc` close
+
+On phones: the tab bar at the bottom, sheets you can drag up to full height
+or down to close, pinch and double-tap to zoom. It installs to the home
+screen like an app.
 
 ## How it's built
 
