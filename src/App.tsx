@@ -330,9 +330,10 @@ function buildMarkers(posts: Post[]): Marker[] {
   for (const [userId, loc] of S.locations) {
     if (userId === S.userId) continue
     const name = nameOf(userId)
+    const unreadFrom = S.messages.filter((m) => m.sender_id === userId && m.recipient_id === S.userId && !m.read_at).length
     markers.push({
       id: `person:${userId}`, kind: 'person', x: lngToX(loc.longitude), y: latToY(loc.latitude), icon: 'user',
-      color: `hsl(${hue(userId)} 55% 45%)`, count: 0,
+      color: `hsl(${hue(userId)} 55% 45%)`, count: unreadFrom,
       flags: (Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0) | (S.online.has(userId) ? MARK_ONLINE : 0),
       text: initials(name), name: name.split(' ')[0],
       accuracy: loc.accuracy ?? 0, heading: loc.heading, image: S.profiles.get(userId)?.avatar_url ?? null,

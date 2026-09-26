@@ -1997,6 +1997,22 @@ function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx
     c.lineWidth = 2
     c.stroke()
   }
+
+  // Unread messages from them: a count, top left, asking to be tapped.
+  if (marker.count > 0) {
+    const bx = sx - r * 0.8
+    const by = sy - r * 0.8
+    c.beginPath()
+    c.arc(bx, by, 8, 0, Math.PI * 2)
+    c.fillStyle = '#ef3b3b'
+    c.fill()
+    c.strokeStyle = '#fff'
+    c.lineWidth = 1.5
+    c.stroke()
+    c.fillStyle = '#fff'
+    c.font = `700 10px ${sans}`
+    c.fillText(marker.count > 9 ? '9+' : String(marker.count), bx, by + 0.5)
+  }
   c.restore()
 }
 
