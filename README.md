@@ -212,6 +212,7 @@ Where people are and when they're around is the sensitive part, so:
 - Blocks are private to the blocker, and `notify` stops at them.
 - **Photos only come from the project's own storage.** The columns can be
   written directly, and a picture on someone's own server would tell them who
-  looked at it: a profile shows initials instead, a pin leaves it out.
+  looked at it, so whatever host a stored address names, the app fetches the
+  picture from its own storage by its path in the bucket (or not at all).
 
 Map data © OpenStreetMap contributors, tiles by OpenFreeMap.
