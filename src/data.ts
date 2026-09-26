@@ -376,8 +376,8 @@ export function setIncomingHandler(handler: typeof onIncoming) {
   onIncoming = handler
 }
 
-async function loadPrivate(userId: string) {
-  const [saved, notifications, messages, settings, friendships, locations, blocks, presence] = await Promise.all([
+async function loadPrivate(userId: string, attempt = 0) {
+  const results = await Promise.all([
     supabase.from('saved_posts').select('post_id, created_at'),
     supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(60),
     supabase.from('messages').select('*').order('created_at', { ascending: false }).limit(1000),
@@ -386,8 +386,15 @@ async function loadPrivate(userId: string) {
     supabase.from('locations').select('*'),
     supabase.from('blocks').select('blocked'),
     supabase.from('presence').select('user_id, device, here, seen_at'),
-  ])
+  ] as const)
   if (S.userId !== userId) return
+  // A network blip keeps what we had, rather than emptying the inbox and the
+  // friends off the map, and tries again in a bit.
+  if (results.some((r) => r.error)) {
+    if (attempt < 3) setTimeout(() => S.userId === userId && loadPrivate(userId, attempt + 1), 5000)
+    return
+  }
+  const [saved, notifications, messages, settings, friendships, locations, blocks, presence] = results
 
   S.saved = saved.data ?? []
   // A reload keeps any older notifications already paged in.
@@ -534,7 +541,8 @@ async function refreshFriendsNow() {
 }
 
 async function refreshLocations() {
-  const { data } = await supabase.from('locations').select('*')
+  const { data, error } = await supabase.from('locations').select('*')
+  if (error) return // keep who we had; a blip shouldn't take friends off the map
   S.locations = new Map((data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
   changed()
 }
