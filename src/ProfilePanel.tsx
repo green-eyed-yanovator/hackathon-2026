@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 
+import type { InboxApi } from './inbox'
 import { supabase } from './lib/supabase'
-import type { Post, Profile } from './types'
+import Messages from './Messages'
+import Notifications from './Notifications'
+import Pins, { PostList } from './Pins'
+import type { MenuTab, NotificationRow, Post, Profile } from './types'
 import {
   inputStyle,
   labelStyle,
@@ -11,25 +15,42 @@ import {
   secondaryButtonStyle,
 } from './ui'
 
+// Tabs shown only on the signed-in user's own profile.
+export type OwnMenu = {
+  tab: MenuTab
+  onTabChange: (tab: MenuTab) => void
+  inbox: InboxApi
+  savedIds: string[]
+  messageWith: string | null
+  onMessageWith: (otherId: string | null) => void
+  onOpenNotification: (notification: NotificationRow) => void
+  onOpenProfile: (id: string) => void
+}
+
 type Props = {
   profileId: string
   // Only set when this is the signed-in user's own profile.
   ownEmail: string | null
-  // Every post is already loaded for the map, so the list is filtered locally.
+  menu: OwnMenu | null
+  // Every post is already loaded for the map, so lists are filtered locally.
   posts: Post[]
   onOpenPost: (post: Post) => void
   onSaved: (profile: Profile) => void
   onChangePassword: () => void
+  // Set when a signed-in user views someone else's profile.
+  onMessage: (() => void) | null
   onClose: () => void
 }
 
 export default function ProfilePanel({
   profileId,
   ownEmail,
+  menu,
   posts,
   onOpenPost,
   onSaved,
   onChangePassword,
+  onMessage,
   onClose,
 }: Props) {
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -122,7 +143,86 @@ export default function ProfilePanel({
         ×
       </button>
 
-      {!profile ? (
+      {menu && (
+        <nav
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '4px',
+            marginBottom: '20px',
+            borderBottom: '1px solid #eee',
+          }}
+        >
+          {(
+            [
+              ['profile', 'Profile', 0],
+              ['pins', 'Pins', 0],
+              ['notifications', 'Notifications', menu.inbox.unreadNotifications],
+              ['messages', 'Messages', menu.inbox.unreadMessages],
+            ] as const
+          ).map(([tab, label, unread]) => (
+            <button
+              key={tab}
+              onClick={() => menu.onTabChange(tab)}
+              style={{
+                padding: '8px 6px',
+                border: 'none',
+                borderBottom: menu.tab === tab ? '2px solid #000' : '2px solid transparent',
+                background: 'transparent',
+                fontSize: '13px',
+                fontWeight: menu.tab === tab ? 700 : 500,
+                color: menu.tab === tab ? '#111' : '#666',
+                cursor: 'pointer',
+              }}
+            >
+              {label}
+              {unread > 0 && (
+                <span
+                  style={{
+                    marginLeft: '4px',
+                    padding: '1px 6px',
+                    borderRadius: '999px',
+                    background: '#dc2626',
+                    color: 'white',
+                    fontSize: '11px',
+                  }}
+                >
+                  {unread}
+                </span>
+              )}
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {menu?.tab === 'pins' ? (
+        <Pins
+          userId={profileId}
+          posts={posts}
+          savedIds={menu.savedIds}
+          onOpenPost={onOpenPost}
+        />
+      ) : menu?.tab === 'notifications' ? (
+        <Notifications
+          notifications={menu.inbox.notifications}
+          onOpen={menu.onOpenNotification}
+          onMarkAllRead={() =>
+            menu.inbox.markNotificationsRead(
+              menu.inbox.notifications.map((notification) => notification.id),
+            )
+          }
+        />
+      ) : menu?.tab === 'messages' ? (
+        <Messages
+          userId={profileId}
+          messages={menu.inbox.messages}
+          withUser={menu.messageWith}
+          onSelect={menu.onMessageWith}
+          onSend={menu.inbox.sendMessage}
+          onRead={menu.inbox.markConversationRead}
+          onOpenProfile={menu.onOpenProfile}
+        />
+      ) : !profile ? (
         <p style={{ color: '#777' }}>{message || 'Loading...'}</p>
       ) : editing ? (
         <form
@@ -258,39 +358,19 @@ export default function ProfilePanel({
             </>
           )}
 
+          {onMessage && (
+            <div style={{ display: 'flex', marginBottom: '24px' }}>
+              <button onClick={onMessage} style={primaryButtonStyle(true)}>
+                Message {profile.display_name}
+              </button>
+            </div>
+          )}
+
           <h3 style={{ margin: '0 0 12px', fontSize: '18px', color: '#111' }}>
             Posts
           </h3>
 
-          {authoredPosts.length === 0 ? (
-            <p style={{ margin: 0, color: '#777', fontSize: '14px' }}>
-              No posts yet.
-            </p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {authoredPosts.map((post) => (
-                <button
-                  key={post.id}
-                  onClick={() => onOpenPost(post)}
-                  style={{
-                    textAlign: 'left',
-                    border: 'none',
-                    padding: '12px',
-                    background: '#f3f4f6',
-                    borderRadius: '10px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <div style={{ fontSize: '15px', fontWeight: 600, color: '#222' }}>
-                    {post.title}
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#777', marginTop: '2px' }}>
-                    {new Date(post.created_at).toLocaleDateString()}
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
+          <PostList posts={authoredPosts} empty="No posts yet." onOpenPost={onOpenPost} />
         </>
       )}
     </aside>

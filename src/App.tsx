@@ -11,9 +11,17 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import type { Session } from '@supabase/supabase-js'
 import AuthPanel from './AuthPanel'
+import { useInbox } from './inbox'
 import ProfilePanel from './ProfilePanel'
 import { supabase } from './lib/supabase'
-import type { AuthMode, Post, Profile, Reply } from './types'
+import type {
+  AuthMode,
+  MenuTab,
+  NotificationRow,
+  Post,
+  Profile,
+  Reply,
+} from './types'
 import { linkButtonStyle, rightPanelStyle } from './ui'
 
 setWorkerUrl(workerUrl)
@@ -53,10 +61,48 @@ const [replyText, setReplyText] = useState('')
   const [myProfile, setMyProfile] = useState<Profile | null>(null)
   const [authMode, setAuthMode] = useState<AuthMode | null>(null)
   const [profileId, setProfileId] = useState<string | null>(null)
+  const [menuTab, setMenuTab] = useState<MenuTab>('profile')
+  const [messageWith, setMessageWith] = useState<string | null>(null)
+  const [saved, setSaved] = useState<{ owner: string | null; ids: string[] }>({
+    owner: null,
+    ids: [],
+  })
 
   const userId = session?.user.id ?? null
-  // Ignore a profile left over from a previous session.
+  // Ignore a profile or saved pins left over from a previous session.
   const me = myProfile?.id === userId ? myProfile : null
+  const savedIds = saved.owner === userId ? saved.ids : []
+
+  const inbox = useInbox(userId)
+  const unreadTotal = inbox.unreadNotifications + inbox.unreadMessages
+
+  useEffect(() => {
+    if (!userId) {
+      return
+    }
+
+    let ignore = false
+
+    supabase
+      .from('saved_posts')
+      .select('post_id')
+      .then(({ data, error }) => {
+        if (ignore) {
+          return
+        }
+
+        if (error) {
+          console.error('Failed to load saved pins:', error)
+          return
+        }
+
+        setSaved({ owner: userId, ids: data.map((row) => row.post_id) })
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [userId])
 
   useEffect(() => {
     // Fires once with the stored session (INITIAL_SESSION), then on every sign-in/out.
@@ -419,6 +465,48 @@ async function handleCreateReply() {
   function openProfile(id: string) {
     setSelectedPost(null)
     setProfileId(id)
+    setMenuTab('profile')
+  }
+
+  function openMenu(tab: MenuTab, withUser: string | null = null) {
+    if (!userId) {
+      return
+    }
+
+    setSelectedPost(null)
+    setProfileId(userId)
+    setMenuTab(tab)
+    setMessageWith(withUser)
+  }
+
+  function openNotification(notification: NotificationRow) {
+    inbox.markNotificationsRead([notification.id])
+
+    const post = posts.find((candidate) => candidate.id === notification.post_id)
+
+    if (post) {
+      openPostFromProfile(post)
+    }
+  }
+
+  async function toggleSave(postId: string) {
+    const isSaved = savedIds.includes(postId)
+
+    const { error } = isSaved
+      ? await supabase.from('saved_posts').delete().eq('post_id', postId)
+      : await supabase.from('saved_posts').insert({ post_id: postId })
+
+    if (error) {
+      console.error('Failed to update saved pins:', error)
+      return
+    }
+
+    setSaved({
+      owner: userId,
+      ids: isSaved
+        ? savedIds.filter((id) => id !== postId)
+        : [...savedIds, postId],
+    })
   }
 
   function openPostFromProfile(post: Post) {
@@ -530,6 +618,23 @@ async function handleCreateReply() {
               style={{ ...linkButtonStyle, color: '#222' }}
             >
               {me?.display_name ?? session.user.email}
+              {unreadTotal > 0 && (
+                <span
+                  title={`${unreadTotal} unread`}
+                  style={{
+                    marginLeft: '6px',
+                    padding: '1px 7px',
+                    borderRadius: '999px',
+                    background: '#dc2626',
+                    color: 'white',
+                    fontSize: '12px',
+                    fontWeight: 700,
+                    display: 'inline-block',
+                  }}
+                >
+                  {unreadTotal}
+                </span>
+              )}
             </button>
           )}
 
@@ -617,6 +722,23 @@ async function handleCreateReply() {
           {selectedPost.author_name}
         </button>
       </p>
+    )}
+
+    {session && (
+      <button
+        onClick={() => toggleSave(selectedPost.id)}
+        style={{
+          marginBottom: '16px',
+          padding: '6px 12px',
+          border: '1px solid #ccc',
+          borderRadius: '999px',
+          background: savedIds.includes(selectedPost.id) ? '#fef3c7' : 'white',
+          fontSize: '14px',
+          cursor: 'pointer',
+        }}
+      >
+        {savedIds.includes(selectedPost.id) ? '★ Saved' : '☆ Save'}
+      </button>
     )}
 
     <p
@@ -988,10 +1110,29 @@ async function handleCreateReply() {
           ownEmail={
             profileId === userId ? (session?.user.email ?? '') : null
           }
+          menu={
+            profileId === userId
+              ? {
+                  tab: menuTab,
+                  onTabChange: (tab) => openMenu(tab),
+                  inbox,
+                  savedIds,
+                  messageWith,
+                  onMessageWith: setMessageWith,
+                  onOpenNotification: openNotification,
+                  onOpenProfile: openProfile,
+                }
+              : null
+          }
           posts={posts}
           onOpenPost={openPostFromProfile}
           onSaved={handleProfileSaved}
           onChangePassword={() => setAuthMode('new-password')}
+          onMessage={
+            userId && profileId !== userId
+              ? () => openMenu('messages', profileId)
+              : null
+          }
           onClose={() => setProfileId(null)}
         />
       )}

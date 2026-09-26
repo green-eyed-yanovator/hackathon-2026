@@ -32,3 +32,26 @@ export type AuthMode =
   | 'code-login'
   | 'reset'
   | 'new-password'
+
+export type NotificationRow = {
+  id: string
+  kind: 'reply' | 'saved_reply' | 'save'
+  actor_id: string | null
+  actor_name: string | null
+  post_id: string | null
+  post_title: string | null
+  preview: string | null
+  created_at: string
+  read_at: string | null
+}
+
+export type Message = {
+  id: string
+  sender_id: string
+  recipient_id: string
+  body: string
+  created_at: string
+  read_at: string | null
+}
+
+export type MenuTab = 'profile' | 'pins' | 'notifications' | 'messages'
