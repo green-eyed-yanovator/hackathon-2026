@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 
 import {
   S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
-  friendIds, friendshipWith, isOnline, locationOf, conversations, readable, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
+  friendIds, friendshipWith, isOnline, locationOf, conversations, readable, unreadMessages, visibleNotifications, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
   createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, report, toggleInterest, toggleSave, saveProfile,
   uploadAvatar, changeEmail, deleteAccount, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
   loadOlderNotifications, setMutedKinds,
@@ -232,6 +232,7 @@ function play(kind: 'sting' | 'tick') {
   const out = a.createGain()
   out.gain.value = 0.5
   out.connect(a.destination)
+  setTimeout(() => out.disconnect(), 3000) // every sound is over by then
   const style = shown()
 
   if (kind === 'tick') {
@@ -440,7 +441,8 @@ function visiblePosts() {
   const friends = new Set(friendIds())
   const { joined, active } = stats()
   // Pins nobody has touched in a month quietly leave the map; Past still has them.
-  const recent = (p: Post) => (active.get(p.id) ?? 0) > Date.now() - 30 * 86400000
+  // An event still to come counts as recent however long ago it was pinned.
+  const recent = (p: Post) => Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
 
   return S.posts.filter((p) => {
     if (p.author_id && S.blocked.has(p.author_id)) return false
@@ -1862,10 +1864,10 @@ function ChatView({ id }: { id: string }) {
 //
 
 function InboxView() {
-  const [tab, setTab] = useState<'activity' | 'messages'>(S.messages.some((m) => m.recipient_id === S.userId && !m.read_at) ? 'messages' : 'activity')
+  const [tab, setTab] = useState<'activity' | 'messages'>(unreadMessages().length > 0 ? 'messages' : 'activity')
   if (!S.userId) return <SignInFirst title="Inbox" icon="bell" why="Replies to your pins, friend requests and messages land here." />
 
-  const notifications = [...S.notifications].reverse()
+  const notifications = visibleNotifications().reverse()
   const unreadCount = notifications.filter((n) => !n.read_at).length
   const convos = conversations()
 
@@ -3082,9 +3084,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const unreadNotes = S.notifications.filter((n) => !n.read_at).length
-  const unreadMessages = S.messages.filter((m) => m.recipient_id === S.userId && !m.read_at).length
-  const unread = unreadNotes + unreadMessages
+  const unread = visibleNotifications().filter((n) => !n.read_at).length + unreadMessages().length
   const incomingRequests = S.friendships.filter((f) => !f.accepted_at && f.addressee === S.userId).length
 
   useEffect(() => {

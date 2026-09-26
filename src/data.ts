@@ -197,6 +197,16 @@ export function friendIds() {
   return ids
 }
 
+// What's waiting for me, not counting anyone I've blocked (their old messages
+// and notifications stay out of sight, and out of the badges).
+export function unreadMessages() {
+  return S.messages.filter((m) => m.recipient_id === S.userId && !m.read_at && !S.blocked.has(m.sender_id))
+}
+
+export function visibleNotifications() {
+  return S.notifications.filter((n) => !(n.actor_id && S.blocked.has(n.actor_id)))
+}
+
 // Online dots are for friends only; strangers don't learn when you're around.
 export function isOnline(id: string) {
   return S.online.has(id) && (id === S.userId || friendIds().includes(id))
@@ -225,6 +235,8 @@ function upsert<T>(list: T[], row: T, same: (a: T, b: T) => boolean, atStart = f
 const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
 const sameInterest = (a: Interest, b: Interest) => a.user_id === b.user_id && a.post_id === b.post_id
 
+let retrying = false // a reload is already waiting
+
 async function loadPublic() {
   const [posts, replies, media, interests, profiles] = await Promise.all([
     supabase.from('posts').select('*').order('created_at', { ascending: false }),
@@ -238,7 +250,13 @@ async function loadPublic() {
     fail('Loading pins', posts.error)
     S.offline = true
     changed()
-    setTimeout(loadPublic, 5000)
+    if (!retrying) {
+      retrying = true
+      setTimeout(() => {
+        retrying = false
+        loadPublic()
+      }, 5000)
+    }
     return
   }
   S.offline = false
@@ -316,8 +334,12 @@ async function loadPrivate(userId: string) {
   if (S.userId !== userId) return
 
   S.saved = saved.data ?? []
-  S.notifications = (notifications.data ?? []).reverse()
-  S.hasOlderNotifications = (notifications.data?.length ?? 0) === 60
+  // A reload keeps any older notifications already paged in.
+  const fresh: Notification[] = (notifications.data ?? []).reverse()
+  const oldestFresh = fresh[0] ? time(fresh[0].created_at) : Infinity
+  const keptOlder = S.notifications.filter((n) => time(n.created_at) < oldestFresh)
+  S.notifications = [...keptOlder, ...fresh]
+  if (!keptOlder.length) S.hasOlderNotifications = (notifications.data?.length ?? 0) === 60
   S.messages = (messages.data ?? []).reverse()
   S.mutedKinds = settings.data?.muted_kinds ?? []
   S.friendships = friendships.data ?? []
@@ -346,6 +368,7 @@ function subscribePrivate(userId: string) {
       const n = row as Notification
       upsert(S.notifications, n, byId)
       changed()
+      if (n.actor_id && S.blocked.has(n.actor_id)) return // (the server stops these too, since the block)
       const text = describeNotification(n)
       onIncoming(`${n.actor_name ?? 'Someone'} ${text}`, n.preview ?? '', n.post_id ? `pin/${n.post_id}` : n.actor_id ? `user/${n.actor_id}` : 'inbox')
     })
@@ -438,11 +461,10 @@ export function start() {
       if (S.userId && S.sharing) withdrawNow()
       return
     }
-    if (S.userId && S.sharing) pushLocation(true)
     if (hiddenAt && Date.now() - hiddenAt > 30000) {
       loadPublic()
-      if (S.userId) loadPrivate(S.userId)
-    }
+      if (S.userId) loadPrivate(S.userId) // which also puts my dot back, if I share
+    } else if (S.userId && S.sharing) pushLocation(true)
   })
   window.addEventListener('pagehide', () => {
     if (S.userId && S.sharing) withdrawNow()

@@ -801,7 +801,9 @@ export type MapState = {
   // The settled map (land, tiles, labels) kept as one bitmap, so frames that only
   // animate pins, the radar sweep or pulses just blit it and draw those on top.
   base: HTMLCanvasElement
-  baseDirty: boolean
+  baseDirty: boolean // something besides the camera changed (tiles, markers, style, size)
+  baseCamera: string // the camera the base was taken at; any other camera redraws
+  markerKey: string // what the markers were last time, so an unchanged set doesn't redraw
 
   tileUrl: string | null
   sources: Map<string, SourceEntry>
@@ -855,7 +857,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, radar: null, base: document.createElement('canvas'), baseDirty: true, tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
+    fade: null, radar: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
   }
@@ -928,7 +930,14 @@ export function setMarkers(m: MapState, markers: Marker[]) {
     if (marker.kind === 'pin' && !m.born.has(marker.id)) m.born.set(marker.id, first ? 0 : now)
   }
   m.markers = markers
-  m.baseDirty = true // markers claim label space, so the labels move with them
+  // Markers claim label space, so the labels move with them; but only a change in
+  // where they are (or what kind) matters, not every render.
+  let key = ''
+  for (const marker of markers) key += `${marker.id}:${marker.kind}:${marker.x}:${marker.y};`
+  if (key !== m.markerKey) {
+    m.markerKey = key
+    m.baseDirty = true
+  }
   if (m.hovered) m.hovered = markers.find((marker) => marker.id === m.hovered!.id) ?? null
   requestFrame(m)
 }
@@ -1102,10 +1111,10 @@ function attachInput(m: MapState) {
         return
       }
       m.lastTap = now
-      if (m.radar && Math.hypot(p.x - m.radar.x, p.y - m.radar.y) <= m.radar.r) {
-        // The radar is a button: back to where you are (or where it's looking).
-        const me = m.markers.find((marker) => marker.kind === 'me')
-        if (me) flyTo(m, xToLng(me.x), yToLat(me.y), Math.max(m.zoom, 16))
+      const me = m.markers.find((marker) => marker.kind === 'me')
+      if (me && m.radar && Math.hypot(p.x - m.radar.x, p.y - m.radar.y) <= m.radar.r) {
+        // The radar is a button: back to where you are.
+        flyTo(m, xToLng(me.x), yToLat(me.y), Math.max(m.zoom, 16))
         return
       }
       const marker = pickMarker(m, p.x, p.y)
@@ -1275,6 +1284,7 @@ function pumpFetches(m: MapState) {
         job.entry.state = 'error'
         setTimeout(() => {
           if (m.sources.get(job.key) === job.entry) m.sources.delete(job.key)
+          m.baseDirty = true // so the frame asks for it again
           requestFrame(m)
         }, 5000)
       })
@@ -2382,9 +2392,13 @@ function frame(m: MapState, time: number) {
 
   const dt = Math.min(time - (m.lastTime || time), 50)
   let keepGoing = stepCamera(m, time)
-  if (keepGoing) m.baseDirty = true
   const view = viewOf(m)
   const c = m.ctx
+
+  // The base is only good for the exact camera it was taken at: drags and pinches
+  // move the camera directly, without going through the flights above.
+  const camera = `${m.x}|${m.y}|${m.zoom}`
+  if (camera !== m.baseCamera) m.baseDirty = true
 
   if (m.baseDirty) {
     c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
@@ -2411,6 +2425,7 @@ function frame(m: MapState, time: number) {
       b.setTransform(1, 0, 0, 1, 0, 0)
       b.drawImage(m.canvas, 0, 0)
       m.baseDirty = false
+      m.baseCamera = camera
     }
   } else {
     c.setTransform(1, 0, 0, 1, 0, 0)
@@ -2463,7 +2478,6 @@ function drawTiles(m: MapState, v: View) {
       const shift = v.z - sourceFor(v.z)
       const failed = !raster && m.sources.get(`${sourceFor(v.z)}/${w.x >> shift}/${w.y >> shift}`)?.state === 'error'
       if (!failed) unfinished = true
-      else broken++
       let stoodIn = false
       for (let up = 1; up <= 6 && v.z - up >= 0; up++) {
         const px = w.x >> up
@@ -2476,7 +2490,10 @@ function drawTiles(m: MapState, v: View) {
         stoodIn = true
         break
       }
-      if (!raster && !stoodIn) blank++
+      if (!raster && !stoodIn) {
+        blank++
+        if (failed) broken++
+      }
     }
 
     if (raster) {
