@@ -2225,6 +2225,31 @@ function drawDraft(c: CanvasRenderingContext2D, t: MapTheme, sx: number, sy: num
 
 type Box = { x0: number; y0: number; x1: number; y1: number }
 
+function hits(placed: Box[], b: Box) {
+  for (const p of placed) if (b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0) return true
+  return false
+}
+
+// What a frame covers: the whole zoom level its tiles come from, scaled to the
+// fractional zoom, and the range of those tiles on screen.
+type View = { z: number; size: number; tileSize: number; left: number; top: number; tx0: number; ty0: number; tx1: number; ty1: number }
+
+function viewOf(m: MapState): View {
+  const z = clamp(Math.round(m.zoom), 0, MAX_ZOOM)
+  const count = 2 ** z
+  const size = worldSize(m)
+  const tileSize = TILE * 2 ** (m.zoom - z)
+  const left = m.x * size - m.width / 2
+  const top = m.y * size - m.height / 2
+  return {
+    z, size, tileSize, left, top,
+    tx0: Math.max(0, Math.floor(left / tileSize)),
+    ty0: Math.max(0, Math.floor(top / tileSize)),
+    tx1: Math.min(count - 1, Math.floor((left + m.width) / tileSize)),
+    ty1: Math.min(count - 1, Math.floor((top + m.height) / tileSize)),
+  }
+}
+
 function frame(m: MapState, time: number) {
   m.frameRequested = false
   if (m.destroyed || m.width === 0) return
@@ -2232,59 +2257,72 @@ function frame(m: MapState, time: number) {
 
   const dt = Math.min(time - (m.lastTime || time), 50)
   let keepGoing = stepCamera(m, time)
-  const t = m.theme
+  const view = viewOf(m)
   const c = m.ctx
-  const size = worldSize(m)
 
   c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
-  c.fillStyle = t.land
+  c.fillStyle = m.theme.land
   c.fillRect(0, 0, m.width, m.height)
 
-  // Tiles at the nearest whole zoom, scaled to the fractional zoom.
-  const z = clamp(Math.round(m.zoom), 0, MAX_ZOOM)
-  const count = 2 ** z
-  const tileSize = TILE * 2 ** (m.zoom - z)
-  const left = m.x * size - m.width / 2
-  const top = m.y * size - m.height / 2
-  const tx0 = Math.max(0, Math.floor(left / tileSize))
-  const ty0 = Math.max(0, Math.floor(top / tileSize))
-  const tx1 = Math.min(count - 1, Math.floor((left + m.width) / tileSize))
-  const ty1 = Math.min(count - 1, Math.floor((top + m.height) / tileSize))
+  if (drawTiles(m, view)) keepGoing = true
 
-  // Paint the tiles nearest the middle first, within a few milliseconds.
+  // Markers claim their space first so labels never cover them.
+  m.visible = cluster(m)
+  const placed: Box[] = []
+  for (const marker of m.visible) {
+    const p = project(m, marker.x, marker.y)
+    const lift = marker.kind === 'pin' && m.theme.blip === 'pin' ? 22 : 0
+    placed.push({ x0: p.x - 16, y0: p.y - 16 - lift, x1: p.x + 16, y1: p.y + 16 - lift + (marker.kind === 'person' ? 20 : 0) })
+  }
+
+  if (drawLabels(m, view, placed, dt)) keepGoing = true
+  const animated = drawMarkers(m, view, time)
+  if (drawFade(m, time)) keepGoing = true
+
+  m.onFrame()
+
+  if (keepGoing) requestFrame(m)
+  else if (animated) {
+    // Pulses don't need 60 fps; let the battery breathe.
+    setTimeout(() => requestFrame(m), 33)
+  }
+}
+
+// The tiles, nearest the middle first, painting new ones within a few
+// milliseconds. Returns true while some are still missing or fading in.
+function drawTiles(m: MapState, v: View) {
+  const c = m.ctx
   const wanted: { x: number; y: number; d: number }[] = []
-  for (let ty = ty0; ty <= ty1; ty++) {
-    for (let tx = tx0; tx <= tx1; tx++) {
-      const dx = (tx + 0.5) * tileSize - (left + m.width / 2)
-      const dy = (ty + 0.5) * tileSize - (top + m.height / 2)
+  for (let ty = v.ty0; ty <= v.ty1; ty++) {
+    for (let tx = v.tx0; tx <= v.tx1; tx++) {
+      const dx = (tx + 0.5) * v.tileSize - (v.left + m.width / 2)
+      const dy = (ty + 0.5) * v.tileSize - (v.top + m.height / 2)
       wanted.push({ x: tx, y: ty, d: dx * dx + dy * dy })
     }
   }
   wanted.sort((a, b) => a.d - b.d)
 
   const budgetEnd = performance.now() + 7
-  let missing = 0
+  let unfinished = false
 
   for (const w of wanted) {
-    const sx = w.x * tileSize - left
-    const sy = w.y * tileSize - top
-    const raster = tileRaster(m, z, w.x, w.y, performance.now() < budgetEnd)
+    const sx = w.x * v.tileSize - v.left
+    const sy = w.y * v.tileSize - v.top
+    const raster = tileRaster(m, v.z, w.x, w.y, performance.now() < budgetEnd)
     const fading = raster ? Math.min(1, (performance.now() - raster.born) / 180) : 0
 
     if (fading < 1) {
       // Stand-in: the nearest ancestor we already painted, cropped and scaled up.
       // A fresh tile fades in over it rather than popping.
-      if (!raster) missing++
-      else keepGoing = true
-      for (let up = 1; up <= 6 && z - up >= 0; up++) {
-        const pz = z - up
+      unfinished = true
+      for (let up = 1; up <= 6 && v.z - up >= 0; up++) {
         const px = w.x >> up
         const py = w.y >> up
-        const parent = m.rasters.get(`${pz}/${px}/${py}`)
+        const parent = m.rasters.get(`${v.z - up}/${px}/${py}`)
         if (!parent) continue
         parent.used = m.frameCount
         const part = parent.canvas.width / 2 ** up
-        c.drawImage(parent.canvas, (w.x - (px << up)) * part, (w.y - (py << up)) * part, part, part, sx, sy, tileSize + 0.5, tileSize + 0.5)
+        c.drawImage(parent.canvas, (w.x - (px << up)) * part, (w.y - (py << up)) * part, part, part, sx, sy, v.tileSize + 0.5, v.tileSize + 0.5)
         break
       }
     }
@@ -2292,47 +2330,39 @@ function frame(m: MapState, time: number) {
     if (raster) {
       // Pad by a hair so seams between scaled tiles don't show.
       c.globalAlpha = fading
-      c.drawImage(raster.canvas, sx, sy, tileSize + 0.5, tileSize + 0.5)
+      c.drawImage(raster.canvas, sx, sy, v.tileSize + 0.5, v.tileSize + 0.5)
       c.globalAlpha = 1
     }
   }
-  if (missing > 0) keepGoing = true
 
   // Keep a screenful or two of tiles around, and every source tile that's still useful.
   evict(m.rasters, Math.max(48, wanted.length * 3))
   evict(m.sources, 48)
+  return unfinished
+}
 
-  // Labels: collect from the source tiles under the view, then place greedily by rank.
-  const placed: Box[] = []
-  const hits = (b: Box) => {
-    for (const p of placed) if (b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0) return true
-    return false
-  }
-
-  // Markers claim their space first so labels never cover them.
-  m.visible = cluster(m)
-  for (const marker of m.visible) {
-    const p = project(m, marker.x, marker.y)
-    const lift = marker.kind === 'pin' && t.blip === 'pin' ? 22 : 0
-    placed.push({ x0: p.x - 16, y0: p.y - 16 - lift, x1: p.x + 16, y1: p.y + 16 - lift + (marker.kind === 'person' ? 20 : 0) })
-  }
-
-  const sz = sourceFor(z)
-  const shift = z - sz
+// Labels and place blips from the source tiles under the view, placed greedily
+// by rank wherever they don't collide. Returns true while some are fading in.
+function drawLabels(m: MapState, v: View, placed: Box[], dt: number) {
+  const t = m.theme
+  const c = m.ctx
+  const sz = sourceFor(v.z)
+  const shift = v.z - sz
   const labels: Label[] = []
-  for (let ty = ty0 >> shift; ty <= ty1 >> shift; ty++) {
-    for (let tx = tx0 >> shift; tx <= tx1 >> shift; tx++) {
+  for (let ty = v.ty0 >> shift; ty <= v.ty1 >> shift; ty++) {
+    for (let tx = v.tx0 >> shift; tx <= v.tx1 >> shift; tx++) {
       const entry = m.sources.get(`${sz}/${tx}/${ty}`)
       if (entry?.tile) for (const label of entry.tile.labels) labels.push(label)
     }
   }
   labels.sort((a, b) => a.rank - b.rank)
 
-  const roadsPlaced = new Map<string, { x: number; y: number }[]>()
-  let drawn = 0
   // The crime-sprawl maps are covered in blips from further out; ink and plain maps keep them for close up.
   const poiEarly = t.blip === 'square' || t.blip === 'round' ? 2 : t.blip === 'ring' ? 1 : 0
-  const showPoi = z >= 15 - poiEarly
+  const showPoi = v.z >= 15 - poiEarly
+  const named = new Map<string, { x: number; y: number }[]>() // where each road or river name went
+  let drawn = 0
+  let fading = false
 
   // A label placed this frame keeps fading in from where it was last frame; one
   // that dropped out starts again from nothing next time it gets room.
@@ -2341,7 +2371,7 @@ function frame(m: MapState, time: number) {
   const fadeIn = (label: Label) => {
     const a = Math.min(1, (alphaBefore.get(label) ?? 0) + dt / 220)
     alphaNow.set(label, a)
-    if (a < 1) keepGoing = true
+    if (a < 1) fading = true
     c.globalAlpha = a
   }
 
@@ -2349,14 +2379,14 @@ function frame(m: MapState, time: number) {
     if (drawn > 140) break
     if (m.zoom < label.minZoom - (label.kind === 'poi' ? poiEarly : 0) || m.zoom > label.maxZoom) continue
     if (label.kind === 'poi' && !showPoi) continue
-    const sx = (label.x - m.x) * size + m.width / 2
-    const sy = (label.y - m.y) * size + m.height / 2
+    const sx = (label.x - m.x) * v.size + m.width / 2
+    const sy = (label.y - m.y) * v.size + m.height / 2
     if (sx < -60 || sy < -30 || sx > m.width + 60 || sy > m.height + 30) continue
 
     if (label.kind === 'poi') {
       const s = poiSprite(m, label.icon!, label.color!)
       const box = { x0: sx - 10, y0: sy - 10, x1: sx + 10, y1: sy + 10 }
-      if (hits(box)) continue
+      if (hits(placed, box)) continue
       placed.push(box)
       fadeIn(label)
       c.drawImage(s.canvas, sx - s.width / 2, sy - s.height / 2, s.width, s.height)
@@ -2364,10 +2394,9 @@ function frame(m: MapState, time: number) {
 
       // Names next to blips once there's room.
       if (label.text && m.zoom >= 17.5) {
-        const nameLabel: Label = { ...label, kind: 'park', size: 10.5 }
-        const ns = labelSprite(m, nameLabel)
+        const ns = labelSprite(m, { ...label, kind: 'park', size: 10.5 })
         const nameBox = { x0: sx + 10, y0: sy - ns.height / 2, x1: sx + 10 + ns.width, y1: sy + ns.height / 2 }
-        if (!hits(nameBox)) {
+        if (!hits(placed, nameBox)) {
           placed.push(nameBox)
           c.drawImage(ns.canvas, sx + 9, sy - ns.height / 2, ns.width, ns.height)
         }
@@ -2377,87 +2406,100 @@ function frame(m: MapState, time: number) {
     }
 
     const s = labelSprite(m, label)
+    let box: Box
 
-    // Roads, and rivers that follow their own line.
     if (label.kind === 'road' || label.path) {
-      const seen = roadsPlaced.get(label.text)
-      const spacing = label.kind === 'water' ? 480 : 220 // a river's name needn't repeat as often as a street's
-      if (seen?.some((p) => Math.hypot(p.x - sx, p.y - sy) < spacing)) continue
+      // Roads, and rivers that follow their own line: one name per stretch.
+      const seen = named.get(label.text)
+      const apart = label.kind === 'water' ? 480 : 220 // a river's name needn't repeat as often as a street's
+      if (seen?.some((p) => Math.hypot(p.x - sx, p.y - sy) < apart)) continue
 
-      if (label.length * size < s.width + 12) {
-        // No straight stretch long enough: bend the name along the road instead.
-        if (!label.path || label.pathLength * size < s.width + 24) continue
-        const font = labelFont(t, label)
-        const text = [...labelText(t, label)]
-        const spacing = t.caps ? 0.8 : 0
-        const widths = text.map((ch) => advance(font, ch) + spacing)
-        const glyphs = alongPath(m, label.path, widths, widths.reduce((a, b) => a + b, 0))
-        if (!glyphs) continue
-
-        const half = label.size / 2 + 3
-        const box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }
-        for (const g of glyphs) {
-          box.x0 = Math.min(box.x0, g.x - half)
-          box.y0 = Math.min(box.y0, g.y - half)
-          box.x1 = Math.max(box.x1, g.x + half)
-          box.y1 = Math.max(box.y1, g.y + half)
-        }
-        if (hits(box)) continue
-        placed.push(box)
-        if (seen) seen.push({ x: sx, y: sy })
-        else roadsPlaced.set(label.text, [{ x: sx, y: sy }])
-
+      if (label.length * v.size >= s.width + 12) {
+        const cos = Math.abs(Math.cos(label.angle))
+        const sin = Math.abs(Math.sin(label.angle))
+        const hw = (s.width * cos + s.height * sin) / 2
+        const hh = (s.width * sin + s.height * cos) / 2
+        box = { x0: sx - hw, y0: sy - hh, x1: sx + hw, y1: sy + hh }
+        if (hits(placed, box)) continue
+        c.save()
         fadeIn(label)
-        const r = m.ratio
-        for (let i = 0; i < glyphs.length; i++) {
-          if (text[i] === ' ') continue
-          const g = glyphs[i]
-          const gs = glyphSprite(m, t, font, label.size, label.kind === 'water' ? t.waterLabel : t.labelColor, text[i])
-          const cos = Math.cos(g.angle)
-          const sin = Math.sin(g.angle)
-          c.setTransform(r * cos, r * sin, -r * sin, r * cos, r * g.x, r * g.y)
-          c.drawImage(gs.canvas, -gs.width / 2, -gs.height / 2, gs.width, gs.height)
-        }
-        c.setTransform(r, 0, 0, r, 0, 0)
-        c.globalAlpha = 1
-        drawn++
-        continue
+        c.translate(sx, sy)
+        c.rotate(label.angle)
+        c.drawImage(s.canvas, -s.width / 2, -s.height / 2, s.width, s.height)
+        c.restore()
+      } else {
+        // No straight stretch long enough: bend the name along the line instead.
+        if (!label.path || label.pathLength * v.size < s.width + 24) continue
+        const bent = drawBentName(m, label, placed, fadeIn)
+        if (!bent) continue
+        box = bent
       }
-
-      const cos = Math.abs(Math.cos(label.angle))
-      const sin = Math.abs(Math.sin(label.angle))
-      const hw = (s.width * cos + s.height * sin) / 2
-      const hh = (s.width * sin + s.height * cos) / 2
-      const box = { x0: sx - hw, y0: sy - hh, x1: sx + hw, y1: sy + hh }
-      if (hits(box)) continue
-      placed.push(box)
       if (seen) seen.push({ x: sx, y: sy })
-      else roadsPlaced.set(label.text, [{ x: sx, y: sy }])
-      c.save()
+      else named.set(label.text, [{ x: sx, y: sy }])
+    } else {
+      box = { x0: sx - s.width / 2, y0: sy - s.height / 2, x1: sx + s.width / 2, y1: sy + s.height / 2 }
+      if (hits(placed, box)) continue
       fadeIn(label)
-      c.translate(sx, sy)
-      c.rotate(label.angle)
-      c.drawImage(s.canvas, -s.width / 2, -s.height / 2, s.width, s.height)
-      c.restore()
-      drawn++
-      continue
+      c.drawImage(s.canvas, box.x0, box.y0, s.width, s.height)
     }
 
-    const box = { x0: sx - s.width / 2, y0: sy - s.height / 2, x1: sx + s.width / 2, y1: sy + s.height / 2 }
-    if (hits(box)) continue
     placed.push(box)
-    fadeIn(label)
-    c.drawImage(s.canvas, box.x0, box.y0, s.width, s.height)
     c.globalAlpha = 1
     drawn++
   }
+
   m.labelAlpha = alphaNow
   evict(m.sprites, 600)
+  return fading
+}
 
-  // Markers: people under pins, me on top, the one under the mouse above all.
-  const metersPerPixel = (40075016.686 * Math.cos((yToLat(m.y) * Math.PI) / 180)) / size
+// A name laid letter by letter along its road or river. Returns the space it
+// took, or null if it didn't fit or the line bends too sharply to read.
+function drawBentName(m: MapState, label: Label, placed: Box[], fadeIn: (label: Label) => void): Box | null {
+  const t = m.theme
+  const c = m.ctx
+  const font = labelFont(t, label)
+  const text = [...labelText(t, label)]
+  const spacing = t.caps ? 0.8 : 0
+  const widths = text.map((ch) => advance(font, ch) + spacing)
+  const glyphs = alongPath(m, label.path!, widths, widths.reduce((a, b) => a + b, 0))
+  if (!glyphs) return null
+
+  const half = label.size / 2 + 3
+  const box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }
+  for (const g of glyphs) {
+    box.x0 = Math.min(box.x0, g.x - half)
+    box.y0 = Math.min(box.y0, g.y - half)
+    box.x1 = Math.max(box.x1, g.x + half)
+    box.y1 = Math.max(box.y1, g.y + half)
+  }
+  if (hits(placed, box)) return null
+
+  fadeIn(label)
+  const color = label.kind === 'water' ? t.waterLabel : t.labelColor
+  const r = m.ratio
+  for (let i = 0; i < glyphs.length; i++) {
+    if (text[i] === ' ') continue
+    const g = glyphs[i]
+    const gs = glyphSprite(m, t, font, label.size, color, text[i])
+    const cos = Math.cos(g.angle)
+    const sin = Math.sin(g.angle)
+    c.setTransform(r * cos, r * sin, -r * sin, r * cos, r * g.x, r * g.y)
+    c.drawImage(gs.canvas, -gs.width / 2, -gs.height / 2, gs.width, gs.height)
+  }
+  c.setTransform(r, 0, 0, r, 0, 0)
+  return box
+}
+
+// People under pins, me on top, the selected one above all. Returns true if
+// anything drawn pulses, so frames should keep coming (slowly).
+function drawMarkers(m: MapState, v: View, time: number) {
+  const t = m.theme
+  const c = m.ctx
+  const metersPerPixel = (40075016.686 * Math.cos((yToLat(m.y) * Math.PI) / 180)) / v.size
   let animated = false
   const ordered = [...m.visible].sort((a, b) => order(a) - order(b) || a.y - b.y)
+
   for (const marker of ordered) {
     const p = project(m, marker.x, marker.y)
     if (p.x < -60 || p.y < -60 || p.x > m.width + 60 || p.y > m.height + 60) continue
@@ -2477,26 +2519,24 @@ function frame(m: MapState, time: number) {
       animated = true
     }
   }
+  return animated
+}
 
-  if (m.fade) {
-    const t = (time - m.fade.start) / 500
-    if (t >= 1) m.fade = null
-    else {
-      c.setTransform(1, 0, 0, 1, 0, 0)
-      c.globalAlpha = 1 - t * t
-      c.drawImage(m.fade.canvas, 0, 0)
-      c.globalAlpha = 1
-      keepGoing = true
-    }
+// After a style switch, the old picture fades out over the new one.
+function drawFade(m: MapState, time: number) {
+  if (!m.fade) return false
+  const t = (time - m.fade.start) / 500
+  if (t >= 1) {
+    m.fade = null
+    return false
   }
-
-  m.onFrame()
-
-  if (keepGoing) requestFrame(m)
-  else if (animated) {
-    // Pulses don't need 60 fps; let the battery breathe.
-    setTimeout(() => requestFrame(m), 33)
-  }
+  const c = m.ctx
+  c.setTransform(1, 0, 0, 1, 0, 0)
+  c.globalAlpha = 1 - t * t
+  c.drawImage(m.fade.canvas, 0, 0)
+  c.globalAlpha = 1
+  c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
+  return true
 }
 
 function order(marker: Marker) {
