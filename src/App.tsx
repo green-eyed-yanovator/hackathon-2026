@@ -2555,37 +2555,34 @@ function AuthView() {
     if (!valid || busy) return
     setBusy(true)
     setMessage('')
-    const done = (ok: string | null) => {
+    // Stay open and say something, or close and say something.
+    const say = (text: string) => {
       setBusy(false)
-      if (ok !== null) setMessage(ok)
+      setMessage(text)
+    }
+    const finish = (text: string) => {
+      setBusy(false)
+      close()
+      toast(text)
     }
 
     if (mode === 'signup') {
       const { data, error } = await supabase.auth.signUp({ email: trimmed, password, options: { data: { display_name: name.trim() } } })
-      if (error) return done(error.message)
-      if (!data.session) return done('Check your email to confirm your account, then sign in.')
-      done(null)
-      close()
-      toast(`Welcome, ${name.trim().split(' ')[0]}!`)
-      return
+      if (error) return say(error.message)
+      if (!data.session) return say('Check your email to confirm your account, then sign in.')
+      return finish(`Welcome, ${name.trim().split(' ')[0]}!`)
     }
 
     if (mode === 'signin') {
       const { error } = await supabase.auth.signInWithPassword({ email: trimmed, password })
-      if (error) return done(error.message === 'Invalid login credentials' ? 'That email and password don’t match.' : error.message)
-      done(null)
-      close()
-      toast('Signed in')
-      return
+      if (error) return say(error.message === 'Invalid login credentials' ? 'That email and password don’t match.' : error.message)
+      return finish('Signed in')
     }
 
     if (mode === 'new-password') {
       const { error } = await supabase.auth.updateUser({ password })
-      if (error) return done(error.message)
-      done(null)
-      close()
-      toast('Password updated')
-      return
+      if (error) return say(error.message)
+      return finish('Password updated')
     }
 
     // Codes: email a 6-digit code, then verify it.
@@ -2593,20 +2590,19 @@ function AuthView() {
       const { error } = mode === 'reset'
         ? await supabase.auth.resetPasswordForEmail(trimmed)
         : await supabase.auth.signInWithOtp({ email: trimmed, options: { shouldCreateUser: false } })
-      if (error) return done(error.code === 'otp_disabled' ? 'No account with that email yet.' : error.message)
+      if (error) return say(error.code === 'otp_disabled' ? 'No account with that email yet.' : error.message)
       setCodeSent(true)
-      return done(`We emailed a 6-digit code to ${trimmed}.`)
+      return say(`We emailed a 6-digit code to ${trimmed}.`)
     }
 
     const { error } = await supabase.auth.verifyOtp({ email: trimmed, token: code.trim(), type: mode === 'reset' ? 'recovery' : 'email' })
-    if (error) return done(error.message)
-    done(null)
+    if (error) return say(error.message)
     if (mode === 'reset') {
-      switchTo('new-password')
-      return
+      // A verified reset code signs you in; now you choose the new password.
+      setBusy(false)
+      return switchTo('new-password')
     }
-    close()
-    toast('Signed in')
+    finish('Signed in')
   }
 
   const social = (['google', 'github'] as const).filter((p) => providers[p])
