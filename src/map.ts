@@ -805,6 +805,7 @@ export type MapState = {
   sprites: Map<string, Sprite>
   textures: Map<string, CanvasPattern>
   images: Map<string, HTMLImageElement>
+  born: Map<string, number> // when each pin first appeared, so new ones drop in
   frameCount: number
   frameRequested: boolean
   destroyed: boolean
@@ -848,7 +849,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(),
+    fade: null, tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {},
   }
@@ -903,6 +904,12 @@ export function setTheme(m: MapState, name: string) {
 }
 
 export function setMarkers(m: MapState, markers: Marker[]) {
+  // Pins seen for the first time after the first batch drop onto the map.
+  const now = performance.now()
+  const first = m.born.size === 0
+  for (const marker of markers) {
+    if (marker.kind === 'pin' && !m.born.has(marker.id)) m.born.set(marker.id, first ? 0 : now)
+  }
   m.markers = markers
   if (m.hovered) m.hovered = markers.find((marker) => marker.id === m.hovered!.id) ?? null
   requestFrame(m)
@@ -1920,14 +1927,29 @@ function poiSprite(m: MapState, icon: IconName, color: string) {
 }
 
 // The pin for a post: a teardrop in plain themes, a big blip in game themes.
-function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean, time: number) {
+function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean, time: number, age: number) {
   const selected = (marker.flags & MARK_SELECTED) !== 0
   const resolved = (marker.flags & MARK_RESOLVED) !== 0
   const color = resolved ? '#8c8c8c' : marker.color
-  const grow = selected ? 1.25 : hover ? 1.12 : 1
+  let grow = selected ? 1.25 : hover ? 1.12 : 1
+
+  // A new pin falls in from above and settles with a little bounce.
+  let drop = 0
+  if (age < 600) {
+    const k = age / 600
+    drop = -60 * (1 - k) * (1 - k)
+    grow *= 1 + 0.25 * Math.sin(k * Math.PI) * (1 - k)
+    c.save()
+    c.globalAlpha = Math.min(1, k * 2) * 0.3
+    c.beginPath()
+    c.ellipse(sx, sy, 10 * k, 4 * k, 0, 0, Math.PI * 2)
+    c.fillStyle = '#000'
+    c.fill()
+    c.restore()
+  }
 
   c.save()
-  c.translate(sx, sy)
+  c.translate(sx, sy + drop)
   c.scale(grow, grow)
   if (resolved) c.globalAlpha = 0.7
 
@@ -2592,6 +2614,7 @@ function drawMarkers(m: MapState, v: View, time: number) {
   const c = m.ctx
   const metersPerPixel = (40075016.686 * Math.cos((yToLat(m.y) * Math.PI) / 180)) / v.size
   let animated = false
+  let dropping = false
   const ordered = [...m.visible].sort((a, b) => order(a) - order(b) || a.y - b.y)
 
   for (const marker of ordered) {
@@ -2599,7 +2622,10 @@ function drawMarkers(m: MapState, v: View, time: number) {
     if (p.x < -60 || p.y < -60 || p.x > m.width + 60 || p.y > m.height + 60) continue
     const hover = m.hovered?.id === marker.id || m.highlight === marker.id
     if (marker.kind === 'pin') {
-      drawPin(c, t, marker, p.x, p.y, hover, time)
+      const born = m.born.get(marker.id) ?? 0
+      const age = born ? time - born : Infinity
+      drawPin(c, t, marker, p.x, p.y, hover, time, age)
+      if (age < 600) dropping = true
       if (marker.flags & (MARK_NEW | MARK_LIVE) || t.blip === 'ring') animated = true
     } else if (marker.kind === 'cluster') {
       drawCluster(c, t, marker, p.x, p.y, hover)
@@ -2613,6 +2639,8 @@ function drawMarkers(m: MapState, v: View, time: number) {
       animated = true
     }
   }
+  // A drop needs every frame to look right; pulses can make do with fewer.
+  if (dropping) requestFrame(m)
   return animated
 }
 
