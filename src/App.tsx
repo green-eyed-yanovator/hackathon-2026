@@ -827,6 +827,23 @@ function pinInLink(url: string) {
 
 const pinLink = (post: Post) => `${window.location.origin}/#pin/${post.id}`
 
+// A person in a list: their face and name (tap to open their profile), a line
+// under the name, and whatever you can do with them on the right.
+function PersonRow({ id, sub, children }: { id: string; sub?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="row">
+      <button className="plain person" onClick={() => go(`user/${id}`)}>
+        <Avatar id={id} size={34} dot />
+        <div>
+          <strong>{nameOf(id)}</strong>
+          {sub && <div className="muted small">{sub}</div>}
+        </div>
+      </button>
+      {children}
+    </div>
+  )
+}
+
 function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
   return (
     <div className="empty">
@@ -2094,13 +2111,9 @@ function FriendsView() {
         <>
           <div className="section">Requests</div>
           {incoming.map((id) => (
-            <div key={id} className="row">
-              <button className="plain person" onClick={() => go(`user/${id}`)}>
-                <Avatar id={id} size={36} />
-                <strong>{nameOf(id)}</strong>
-              </button>
+            <PersonRow key={id} id={id}>
               <FriendButton id={id} />
-            </div>
+            </PersonRow>
           ))}
         </>
       )}
@@ -2111,17 +2124,7 @@ function FriendsView() {
         const loc = locationOf(id)
         const away = loc && S.here ? distance(S.here.latitude, S.here.longitude, loc.latitude, loc.longitude) : null
         return (
-          <div key={id} className="row">
-            <button className="plain person" onClick={() => go(`user/${id}`)}>
-              <Avatar id={id} size={36} dot />
-              <div>
-                <strong>{nameOf(id)}</strong>
-                <div className="muted small">
-                  {isOnline(id) ? 'online' : 'offline'}
-                  {loc && ` · ${away !== null ? awayText(away) : 'on the map'}`}
-                </div>
-              </div>
-            </button>
+          <PersonRow key={id} id={id} sub={`${isOnline(id) ? 'online' : 'offline'}${loc ? ` · ${away !== null ? awayText(away) : 'on the map'}` : ''}`}>
             <div className="btn-row tight">
               {loc && (
                 <button className="icon-btn" title="Show on map" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
@@ -2132,7 +2135,7 @@ function FriendsView() {
                 <Icon name="chat" />
               </button>
             </div>
-          </div>
+          </PersonRow>
         )
       })}
 
@@ -2140,13 +2143,9 @@ function FriendsView() {
         <>
           <div className="section">Sent</div>
           {outgoing.map((id) => (
-            <div key={id} className="row">
-              <button className="plain person" onClick={() => go(`user/${id}`)}>
-                <Avatar id={id} size={32} />
-                <span>{nameOf(id)}</span>
-              </button>
+            <PersonRow key={id} id={id}>
               <FriendButton id={id} />
-            </div>
+            </PersonRow>
           ))}
         </>
       )}
@@ -2154,18 +2153,9 @@ function FriendsView() {
       <div className="section">People around here</div>
       <input className="input" placeholder="Search by name or neighbourhood" value={query} onChange={(e) => setQuery(e.target.value)} />
       {others.map((p) => (
-        <div key={p.id} className="row">
-          <button className="plain person" onClick={() => go(`user/${p.id}`)}>
-            <Avatar id={p.id} size={32} dot />
-            <div>
-              <span>{p.display_name}</span>
-              <div className="muted small">
-                {[p.neighbourhood, nearest.has(p.id) && `pins ${awayText(nearest.get(p.id)!)}`].filter(Boolean).join(' · ')}
-              </div>
-            </div>
-          </button>
+        <PersonRow key={p.id} id={p.id} sub={[p.neighbourhood, nearest.has(p.id) && `pins ${awayText(nearest.get(p.id)!)}`].filter(Boolean).join(' · ')}>
           <FriendButton id={p.id} />
-        </div>
+        </PersonRow>
       ))}
     </Panel>
   )
@@ -2315,15 +2305,11 @@ function SettingsView() {
             <>
               <div className="section">Blocked</div>
               {[...S.blocked].map((id) => (
-                <div key={id} className="row">
-                  <button className="plain person" onClick={() => go(`user/${id}`)}>
-                    <Avatar id={id} size={28} />
-                    <span>{nameOf(id)}</span>
-                  </button>
+                <PersonRow key={id} id={id}>
                   <button className="btn small" onClick={() => unblock(id)}>
                     Unblock
                   </button>
-                </div>
+                </PersonRow>
               ))}
             </>
           )}
