@@ -2492,10 +2492,10 @@ textarea::placeholder {
 }
 
 [data-theme='radar'] .fx {
-  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px), radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.75));
-}
-
-[data-theme='radar'] .fx {
+  /* Scanlines, range rings every 160 px from the middle, a dark rim, and a flicker now and then. */
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.28) 0 1px, transparent 1px 3px),
+    repeating-radial-gradient(circle at center, transparent 0 158px, rgba(88, 255, 156, 0.22) 158px 160px),
+    radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.75));
   animation: flicker 7s infinite steps(1);
 }
 
