@@ -2417,7 +2417,7 @@ function Legend() {
       <div className="legend-grid">
         {LEGEND.map(([icon, label]) => (
           <div key={icon}>
-            <span className="blip small" style={{ width: 18, height: 18, background: poiColor(icon) }}>
+            <span className="blip" style={{ width: 18, height: 18, background: poiColor(icon) }}>
               <Icon name={icon} size={11} />
             </span>
             <span>{label}</span>
