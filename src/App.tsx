@@ -1281,7 +1281,7 @@ function PostView({ post }: { post: Post }) {
       icon={<Blip flair={post.flair} size={24} />}
       onBack={siblings.length > 1 ? () => go(`place/${placeKey(post)}`) : undefined}
       foot={
-        me ? (
+        editing ? undefined : me ? (
           <Composer
             people={[...new Set([post.author_id, ...replies.map((r) => r.author_id), ...friendIds(), ...S.profiles.keys()])].filter(
               (id): id is string => !!id && id !== me && !S.blocked.has(id),
@@ -1331,7 +1331,9 @@ function PostView({ post }: { post: Post }) {
           <input className="input title-input" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} autoFocus />
           <textarea className="input" rows={5} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
           <label className="field when-field">
-            <span>When</span>
+            <span>
+              When <em className="muted">· optional</em>
+            </span>
             <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
           </label>
           <div className="btn-row">
@@ -1402,164 +1404,168 @@ function PostView({ post }: { post: Post }) {
         </div>
       )}
 
-      <div className="actions">
-        <button className={iAmIn ? 'btn on' : 'btn'} aria-pressed={iAmIn} onClick={() => interest(post.id)}>
-          <Icon name="thumb" size={16} /> {iAmIn ? "I'm in" : 'Interested'}
-          {interested.length > 0 && <b>{interested.length}</b>}
-        </button>
-        {me && (
-          <button className={saved ? 'btn on gold' : 'btn'} aria-pressed={saved} onClick={() => saveToggle(post.id, saved)}>
-            <Icon name="star" size={16} /> {saved ? 'Saved' : 'Save'}
-          </button>
-        )}
-        {me && post.author_id && !mine && (
-          <button className="btn" onClick={() => go(`chat/${post.author_id}`)}>
-            <Icon name="chat" size={16} /> Message
-          </button>
-        )}
-        {me && friendIds().length > 0 && (
-          <button className={sending ? 'btn on' : 'btn'} onClick={() => setSending(!sending)} title="Send to a friend">
-            <Icon name="send" size={16} />
-          </button>
-        )}
-        <button className="btn" onClick={copyLink} title="Copy link">
-          <Icon name="link" size={16} />
-        </button>
-        <a className="btn" href={directions(post)} target="_blank" rel="noreferrer noopener" title="Directions in your maps app">
-          <Icon name="arrow" size={16} /> Get there
-        </a>
-      </div>
-
-      {sending && (
-        <div className="send-to">
-          <span className="muted small">Send to</span>
-          {friendIds().map((id) => (
-            <button
-              key={id}
-              className="chip-person"
-              onClick={async () => {
-                setSending(false)
-                if (await sendMessage(id, `${post.title} ${pinLink(post)}`)) toast(`Sent to ${firstName(id)}`)
-                else failed("Couldn't send")
-              }}
-            >
-              <Avatar id={id} size={22} />
-              {firstName(id)}
+      {!editing && (
+        <>
+          <div className="actions">
+            <button className={iAmIn ? 'btn on' : 'btn'} aria-pressed={iAmIn} onClick={() => interest(post.id)}>
+              <Icon name="thumb" size={16} /> {iAmIn ? "I'm in" : 'Interested'}
+              {interested.length > 0 && <b>{interested.length}</b>}
             </button>
-          ))}
-        </div>
-      )}
-
-      {mine && !editing && (
-        <div className="actions">
-          <button className="btn" onClick={() => setEditing(true)}>
-            <Icon name="pencil" size={16} /> Edit
-          </button>
-          {!post.resolved_at && (
-            <button className="btn" onClick={() => resolve(post.id)} title="Done, found, sorted: moves it to Past">
-              <Icon name="check" size={16} /> Resolve
+            {me && (
+              <button className={saved ? 'btn on gold' : 'btn'} aria-pressed={saved} onClick={() => saveToggle(post.id, saved)}>
+                <Icon name="star" size={16} /> {saved ? 'Saved' : 'Save'}
+              </button>
+            )}
+            {me && post.author_id && !mine && (
+              <button className="btn" onClick={() => go(`chat/${post.author_id}`)}>
+                <Icon name="chat" size={16} /> Message
+              </button>
+            )}
+            {me && friendIds().length > 0 && (
+              <button className={sending ? 'btn on' : 'btn'} onClick={() => setSending(!sending)} title="Send to a friend">
+                <Icon name="send" size={16} />
+              </button>
+            )}
+            <button className="btn" onClick={copyLink} title="Copy link">
+              <Icon name="link" size={16} />
             </button>
-          )}
-          <button className={confirmDelete ? 'btn danger' : 'btn'} onClick={remove}>
-            <Icon name="trash" size={16} /> {confirmDelete ? 'Really delete?' : 'Delete'}
-          </button>
-        </div>
-      )}
+            <a className="btn" href={directions(post)} target="_blank" rel="noreferrer noopener" title="Directions in your maps app">
+              <Icon name="arrow" size={16} /> Get there
+            </a>
+          </div>
 
-      {me && !mine && post.author_id && (
-        <div className="report">
-          {reporting ? (
-            <>
-              <span className="muted small">What's wrong with it?</span>
-              {(
-                [
-                  ['spam', 'Spam or ad'],
-                  ['unkind', 'Unkind or hateful'],
-                  ['unsafe', 'Unsafe or illegal'],
-                  ['other', 'Something else'],
-                ] as const
-              ).map(([reason, label]) => (
+          {sending && (
+            <div className="send-to">
+              <span className="muted small">Send to</span>
+              {friendIds().map((id) => (
                 <button
-                  key={reason}
-                  className="btn small"
+                  key={id}
+                  className="chip-person"
                   onClick={async () => {
-                    setReporting(false)
-                    if (await report(post.id, reason)) toast('Thanks, someone will take a look')
-                    else failed("Couldn't send the report")
+                    setSending(false)
+                    if (await sendMessage(id, `${post.title} ${pinLink(post)}`)) toast(`Sent to ${firstName(id)}`)
+                    else failed("Couldn't send")
                   }}
                 >
-                  {label}
+                  <Avatar id={id} size={22} />
+                  {firstName(id)}
                 </button>
               ))}
-              <button className="link small" onClick={() => setReporting(false)}>
-                Cancel
-              </button>
-            </>
-          ) : (
-            <button className="link small quiet-danger" onClick={() => setReporting(true)}>
-              Report this pin
-            </button>
+            </div>
           )}
-        </div>
-      )}
 
-      {interested.length > 0 && (
-        <div className="facepile">
-          <span>
-            {interested.slice(0, 5).map((id) => (
-              <Avatar key={id} id={id} size={24} />
-            ))}
-          </span>
-          <span className="muted small">
-            {interestedNames.length <= 2
-              ? `${interestedNames.join(' and ')} ${interestedNames.length === 1 && interestedNames[0] !== 'You' ? 'is' : 'are'} in`
-              : `${interestedNames.slice(0, 2).join(', ')} and ${plural(interestedNames.length - 2, 'other')} are in`}
-          </span>
-        </div>
-      )}
-
-      <div className="section">{replies.length ? plural(replies.length, 'reply', 'replies') : 'Replies'}</div>
-      {replies.length === 0 && <p className="muted">No replies yet. Start the conversation.</p>}
-      {replies.map((r) => (
-        <div key={r.id} className="reply">
-          <button className="plain" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
-            <Avatar id={r.author_id} size={30} />
-          </button>
-          <div>
-            <div className="small">
-              <button className="plain name" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
-                {r.author_id ? nameOf(r.author_id, r.author_name) : 'Anonymous'}
+          {mine && (
+            <div className="actions">
+              <button className="btn" onClick={() => setEditing(true)}>
+                <Icon name="pencil" size={16} /> Edit
               </button>
-              {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
-              <span className="muted"> · {ago(r.created_at)}</span>
-              {me && r.author_id === me && (
-                <button
-                  className={doomedReply === r.id ? 'link danger-link' : 'link quiet'}
-                  onClick={async () => {
-                    if (doomedReply !== r.id) return setDoomedReply(r.id)
-                    if (!(await deleteReply(r.id))) failed("Couldn't delete")
-                  }}
-                  onBlur={() => setDoomedReply(null)}
-                >
-                  {doomedReply === r.id ? 'really delete?' : 'delete'}
+              {!post.resolved_at && (
+                <button className="btn" onClick={() => resolve(post.id)} title="Done, found, sorted: moves it to Past">
+                  <Icon name="check" size={16} /> Resolve
+                </button>
+              )}
+              <button className={confirmDelete ? 'btn danger' : 'btn'} onClick={remove}>
+                <Icon name="trash" size={16} /> {confirmDelete ? 'Really delete?' : 'Delete'}
+              </button>
+            </div>
+          )}
+
+          {me && !mine && post.author_id && (
+            <div className="report">
+              {reporting ? (
+                <>
+                  <span className="muted small">What's wrong with it?</span>
+                  {(
+                    [
+                      ['spam', 'Spam or ad'],
+                      ['unkind', 'Unkind or hateful'],
+                      ['unsafe', 'Unsafe or illegal'],
+                      ['other', 'Something else'],
+                    ] as const
+                  ).map(([reason, label]) => (
+                    <button
+                      key={reason}
+                      className="btn small"
+                      onClick={async () => {
+                        setReporting(false)
+                        if (await report(post.id, reason)) toast('Thanks, someone will take a look')
+                        else failed("Couldn't send the report")
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button className="link small" onClick={() => setReporting(false)}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button className="link small quiet-danger" onClick={() => setReporting(true)}>
+                  Report this pin
                 </button>
               )}
             </div>
-            <div className="reply-text">
-              <Mentions text={r.content} />
+          )}
+
+          {interested.length > 0 && (
+            <div className="facepile">
+              <span>
+                {interested.slice(0, 5).map((id) => (
+                  <Avatar key={id} id={id} size={24} />
+                ))}
+              </span>
+              <span className="muted small">
+                {interestedNames.length <= 2
+                  ? `${interestedNames.join(' and ')} ${interestedNames.length === 1 && interestedNames[0] !== 'You' ? 'is' : 'are'} in`
+                  : `${interestedNames.slice(0, 2).join(', ')} and ${plural(interestedNames.length - 2, 'other')} are in`}
+              </span>
             </div>
-            <button
-              className={liked.has(r.id) ? 'like on' : 'like'}
-              aria-pressed={liked.has(r.id)}
-              aria-label={liked.has(r.id) ? 'Unlike' : 'Like'}
-              onClick={() => !needAccount() && toggleLike(r.id).then((ok) => ok || failed("Couldn't update"))}
-            >
-              <Icon name="heart" size={13} />
-              {(likes.get(r.id) ?? 0) > 0 && <span>{likes.get(r.id)}</span>}
-            </button>
-          </div>
-        </div>
-      ))}
+          )}
+
+          <div className="section">{replies.length ? plural(replies.length, 'reply', 'replies') : 'Replies'}</div>
+          {replies.length === 0 && <p className="muted">No replies yet. Start the conversation.</p>}
+          {replies.map((r) => (
+            <div key={r.id} className="reply">
+              <button className="plain" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
+                <Avatar id={r.author_id} size={30} />
+              </button>
+              <div>
+                <div className="small">
+                  <button className="plain name" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
+                    {r.author_id ? nameOf(r.author_id, r.author_name) : 'Anonymous'}
+                  </button>
+                  {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
+                  <span className="muted"> · {ago(r.created_at)}</span>
+                  {me && r.author_id === me && (
+                    <button
+                      className={doomedReply === r.id ? 'link danger-link' : 'link quiet'}
+                      onClick={async () => {
+                        if (doomedReply !== r.id) return setDoomedReply(r.id)
+                        if (!(await deleteReply(r.id))) failed("Couldn't delete")
+                      }}
+                      onBlur={() => setDoomedReply(null)}
+                    >
+                      {doomedReply === r.id ? 'really delete?' : 'delete'}
+                    </button>
+                  )}
+                </div>
+                <div className="reply-text">
+                  <Mentions text={r.content} />
+                </div>
+                <button
+                  className={liked.has(r.id) ? 'like on' : 'like'}
+                  aria-pressed={liked.has(r.id)}
+                  aria-label={liked.has(r.id) ? 'Unlike' : 'Like'}
+                  onClick={() => !needAccount() && toggleLike(r.id).then((ok) => ok || failed("Couldn't update"))}
+                >
+                  <Icon name="heart" size={13} />
+                  {(likes.get(r.id) ?? 0) > 0 && <span>{likes.get(r.id)}</span>}
+                </button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
       <div ref={endRef} />
     </Panel>
   )

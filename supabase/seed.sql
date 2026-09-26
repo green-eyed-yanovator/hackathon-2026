@@ -100,6 +100,12 @@ begin
     from place;
   end loop;
 
+  -- A second thread at the clean-up spot, so one marker holds two.
+  insert into public.posts (place_id, title, description, latitude, longitude, flair, author_id, author_name, created_at)
+  select post.place_id, 'Anyone want the leftover bin bags?', 'Twenty or so, heavy duty. Next to the gate after the clean-up.', post.latitude, post.longitude,
+    'general', tom, (select display_name from public.profiles where id = tom), now() - interval '20 hours'
+  from public.posts post where post.title = 'Street clean-up, Saturday 9am' and post.author_id = hannah;
+
   -- Replies, as (post title, author, text, minutes after the post).
   create temporary table demo_replies (post text, author uuid, body text, after int) on commit drop;
   insert into demo_replies values
