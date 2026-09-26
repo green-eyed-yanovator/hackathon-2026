@@ -87,6 +87,7 @@ const UI = {
   view: initialView(),
   draft: null as { latitude: number; longitude: number } | null,
   alerts: stored('aroundhere.alerts') === 'on',
+  started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
   banner: null as { title: string; sub: string } | null,
 }
 
@@ -457,6 +458,20 @@ function Panel({ title, icon, onBack, children, foot, className = '' }: { title:
   )
 }
 
+// Text with its web addresses turned into links.
+function Linked({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s]*[^\s.,!?;:)\]'"])/g)
+  return parts.map((part, i) =>
+    i % 2 ? (
+      <a key={i} href={part} target="_blank" rel="noreferrer noopener">
+        {part.replace(/^https?:\/\/(www\.)?/, '')}
+      </a>
+    ) : (
+      part
+    ),
+  )
+}
+
 function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
   return (
     <div className="empty">
@@ -580,6 +595,42 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
   )
 }
 
+// A new account's first steps into the neighbourhood; each one opens the place to do it.
+function GettingStarted() {
+  const me = S.userId ? S.profiles.get(S.userId) : null
+  if (!me || UI.started) return null
+  const steps: [boolean, string, () => void][] = [
+    [!!(me.neighbourhood || me.bio), 'Tell neighbours who you are', () => go(`user/${me.id}`)],
+    [S.friendships.length > 0, 'Add a friend', () => go('friends')],
+    [S.sharing, 'Share your location with friends', () => go('friends')],
+    [S.posts.some((p) => p.author_id === me.id), 'Pin something', startCompose],
+  ]
+  if (steps.every(([done]) => done)) return null
+
+  return (
+    <div className="welcome started">
+      <div className="row-top">
+        <strong>Get started</strong>
+        <button
+          className="link small"
+          onClick={() => {
+            store('aroundhere.started', 'hidden')
+            ui({ started: true })
+          }}
+        >
+          Hide
+        </button>
+      </div>
+      {steps.map(([done, label, run]) => (
+        <button key={label} className={done ? 'step done' : 'step'} onClick={run}>
+          <i>{done && <Icon name="check" size={12} />}</i>
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function Feed() {
   const rows = sortedFeed(visiblePosts())
   const signedOut = !S.userId
@@ -638,7 +689,11 @@ function Feed() {
           </div>
         )}
 
-        {!S.ready ? (
+        <GettingStarted />
+
+        {S.offline ? (
+          <Empty icon="map">Can't reach AroundHere right now. Trying again…</Empty>
+        ) : !S.ready ? (
           <div className="skeleton">{[0, 1, 2, 3].map((i) => <div key={i} />)}</div>
         ) : rows.length === 0 ? (
           <Empty icon="pin">
@@ -787,7 +842,11 @@ function PostView({ post }: { post: Post }) {
       ) : (
         <>
           <h1 className="post-title">{post.title}</h1>
-          {post.description && <p className="post-body">{post.description}</p>}
+          {post.description && (
+            <p className="post-body">
+              <Linked text={post.description} />
+            </p>
+          )}
         </>
       )}
 
@@ -896,7 +955,9 @@ function PostView({ post }: { post: Post }) {
               {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
               <span className="muted"> · {ago(r.created_at)}</span>
             </div>
-            <div className="reply-text">{r.content}</div>
+            <div className="reply-text">
+              <Linked text={r.content} />
+            </div>
           </div>
         </div>
       ))}
@@ -1047,7 +1108,11 @@ function ProfileView({ id }: { id: string }) {
           </div>
         </div>
       ) : (
-        profile.bio && <p className="post-body">{profile.bio}</p>
+        profile.bio && (
+          <p className="post-body">
+            <Linked text={profile.bio} />
+          </p>
+        )
       )}
 
       <div className="stats">
@@ -1199,7 +1264,7 @@ function ChatView({ id }: { id: string }) {
             <div key={m.id} className="bubble-wrap">
               {showDay && <div className="day">{day}</div>}
               <div className={`bubble ${mineMsg ? 'out' : 'in'}${tail ? ' tail' : ''}`}>
-                {m.body}
+                <Linked text={m.body} />
                 {tail && (
                   <span className="stamp">
                     {new Date(m.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}

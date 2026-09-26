@@ -656,6 +656,58 @@ kbd {
   font-size: 15px;
 }
 
+.welcome.started {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.welcome.started .row-top {
+  margin-bottom: 6px;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-weight: 550;
+}
+
+.step i {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line2);
+  flex: none;
+}
+
+.step.done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.step.done i {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+
+.step:not(.done):hover {
+  color: var(--accent);
+}
+
+.post-body a,
+.reply-text a,
+.bubble a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
 .welcome p {
   margin: 6px 0 12px;
   color: var(--muted);

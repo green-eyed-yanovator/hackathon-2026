@@ -81,6 +81,7 @@ export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'n
 
 export const S = {
   ready: false,
+  offline: false, // the server couldn't be reached; loading retries on its own
   authKnown: false, // true once the stored session has been read
   session: null as Session | null,
   userId: null as string | null,
@@ -217,7 +218,14 @@ async function loadPublic() {
     supabase.from('profiles').select('*'),
   ])
 
-  if (posts.error) fail('Loading pins', posts.error)
+  if (posts.error) {
+    fail('Loading pins', posts.error)
+    S.offline = true
+    changed()
+    setTimeout(loadPublic, 5000)
+    return
+  }
+  S.offline = false
   S.posts = posts.data ?? []
   S.replies = replies.data ?? []
   S.media = media.data ?? []
