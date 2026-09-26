@@ -647,7 +647,7 @@ export const MARK_ONLINE = 64 // a person with the app open right now
 
 export type Marker = {
   id: string
-  kind: 'pin' | 'person' | 'me' | 'draft'
+  kind: 'pin' | 'person' | 'me' | 'draft' | 'cluster'
   x: number // world
   y: number
   icon: IconName
@@ -678,6 +678,8 @@ export type MapState = {
   themeName: string
 
   markers: Marker[]
+  visible: Marker[] // markers as drawn this frame, with crowded pins merged into clusters
+  labelAlpha: Map<Label, number> // labels fade in rather than pop
   hovered: Marker | null
   highlight: string | null // a marker lit up from outside, e.g. hovering its row in a list
   draftMode: boolean
@@ -747,7 +749,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
   const m: MapState = {
     canvas, ctx: canvas.getContext('2d')!, width: 0, height: 0, ratio: 1,
     x: lngToX(lng), y: latToY(lat), zoom, theme: mapThemes[themeName] ?? mapThemes.day, themeName,
-    markers: [], hovered: null, highlight: null, draftMode: false,
+    markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, downTime: 0, moved: false, pinchDistance: 0, lastTap: 0, lastPointer: 'mouse', samples: [],
     fade: null, tileUrl: null, sources: new Map(), rasters: new Map(), sprites: new Map(), textures: new Map(),
@@ -855,12 +857,12 @@ function zoomAround(m: MapState, zoom: number, sx: number, sy: number) {
 
 function pickMarker(m: MapState, sx: number, sy: number) {
   // Last drawn is on top, so search backwards.
-  for (let i = m.markers.length - 1; i >= 0; i--) {
-    const marker = m.markers[i]
+  for (let i = m.visible.length - 1; i >= 0; i--) {
+    const marker = m.visible[i]
     if (marker.kind === 'draft') continue
     const p = project(m, marker.x, marker.y)
     const cy = marker.kind === 'pin' && m.theme.blip === 'pin' ? p.y - 20 : p.y
-    const r = marker.kind === 'me' ? 14 : 18
+    const r = marker.kind === 'me' ? 14 : marker.kind === 'cluster' ? 24 : 18
     if ((sx - p.x) ** 2 + (sy - cy) ** 2 <= r * r) return marker
   }
   return null
@@ -962,6 +964,11 @@ function attachInput(m: MapState) {
       }
       m.lastTap = now
       const marker = pickMarker(m, p.x, p.y)
+      if (marker?.kind === 'cluster') {
+        // A crowd of pins: go closer until they separate.
+        flyTo(m, xToLng(marker.x), yToLat(marker.y), m.zoom + 2)
+        return
+      }
       const world = unproject(m, p.x, p.y)
       m.onClick(marker, xToLng(world.x), yToLat(world.y))
       return
@@ -1790,6 +1797,79 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
   c.restore()
 }
 
+// Several pins too close to tell apart at this zoom: one badge with how many threads.
+function drawCluster(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean) {
+  const r = Math.min(24, 13 + Math.sqrt(marker.count) * 3) * (hover ? 1.1 : 1)
+  const fill = t.blip === 'stamp' ? '#e9d8b0' : t.blip === 'ring' ? '#031009' : t.blip === 'square' ? '#111' : '#1d1f24'
+  const ink = t.blip === 'stamp' || t.blip === 'ring' ? t.blipInk : '#fff'
+
+  c.save()
+  c.shadowColor = t.blip === 'ring' ? (t.glow ?? 'transparent') : 'rgba(0,0,0,0.35)'
+  c.shadowBlur = 8
+  c.beginPath()
+  if (t.blip === 'square') c.rect(sx - r, sy - r, 2 * r, 2 * r)
+  else c.arc(sx, sy, r, 0, Math.PI * 2)
+  c.fillStyle = fill
+  c.fill()
+  c.shadowColor = 'transparent'
+  c.lineWidth = 3
+  c.strokeStyle = t.blip === 'stamp' || t.blip === 'ring' ? t.blipInk : marker.color
+  c.stroke()
+  c.fillStyle = ink
+  c.font = `800 ${r > 18 ? 15 : 13}px ${t.blip === 'stamp' ? t.font : sans}`
+  c.textAlign = 'center'
+  c.textBaseline = 'middle'
+  c.fillText(String(marker.count), sx, sy + 1)
+  if (marker.flags & MARK_NEW) {
+    c.beginPath()
+    c.arc(sx + r * 0.72, sy - r * 0.72, 5, 0, Math.PI * 2)
+    c.fillStyle = '#ef3b3b'
+    c.fill()
+    c.strokeStyle = '#fff'
+    c.lineWidth = 1.5
+    c.stroke()
+  }
+  c.restore()
+}
+
+// Greedy screen-space clustering: pins closer than a thumb's width merge, the
+// selected pin always stays itself. Zoomed in, places are already far apart.
+function cluster(m: MapState) {
+  const out: Marker[] = []
+  const radius = m.zoom < 14.5 ? 40 : 0
+  const groups: { marker: Marker; sx: number; sy: number; members: Marker[] }[] = []
+
+  for (const marker of m.markers) {
+    if (marker.kind !== 'pin' || radius === 0 || marker.flags & MARK_SELECTED) {
+      out.push(marker)
+      continue
+    }
+    const p = project(m, marker.x, marker.y)
+    const group = groups.find((g) => (g.sx - p.x) ** 2 + (g.sy - p.y) ** 2 < radius * radius)
+    if (group) group.members.push(marker)
+    else groups.push({ marker, sx: p.x, sy: p.y, members: [marker] })
+  }
+
+  for (const g of groups) {
+    if (g.members.length === 1) {
+      out.push(g.marker)
+      continue
+    }
+    let x = 0
+    let y = 0
+    let count = 0
+    let flags = 0
+    for (const member of g.members) {
+      x += member.x
+      y += member.y
+      count += member.count
+      flags |= member.flags & MARK_NEW
+    }
+    out.push({ ...g.marker, id: `cluster:${g.marker.id}`, kind: 'cluster', x: x / g.members.length, y: y / g.members.length, count, flags })
+  }
+  return out
+}
+
 function drawPerson(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean) {
   const r = hover ? 17 : 15
   c.save()
@@ -1934,6 +2014,7 @@ function frame(m: MapState, time: number) {
   if (m.destroyed || m.width === 0) return
   m.frameCount++
 
+  const dt = Math.min(time - (m.lastTime || time), 50)
   let keepGoing = stepCamera(m, time)
   const t = m.theme
   const c = m.ctx
@@ -2006,7 +2087,8 @@ function frame(m: MapState, time: number) {
   }
 
   // Markers claim their space first so labels never cover them.
-  for (const marker of m.markers) {
+  m.visible = cluster(m)
+  for (const marker of m.visible) {
     const p = project(m, marker.x, marker.y)
     const lift = marker.kind === 'pin' && t.blip === 'pin' ? 22 : 0
     placed.push({ x0: p.x - 16, y0: p.y - 16 - lift, x1: p.x + 16, y1: p.y + 16 - lift + (marker.kind === 'person' ? 20 : 0) })
@@ -2027,6 +2109,17 @@ function frame(m: MapState, time: number) {
   let drawn = 0
   const showPoi = z >= 15
 
+  // A label placed this frame keeps fading in from where it was last frame; one
+  // that dropped out starts again from nothing next time it gets room.
+  const alphaBefore = m.labelAlpha
+  const alphaNow = new Map<Label, number>()
+  const fadeIn = (label: Label) => {
+    const a = Math.min(1, (alphaBefore.get(label) ?? 0) + dt / 220)
+    alphaNow.set(label, a)
+    if (a < 1) keepGoing = true
+    c.globalAlpha = a
+  }
+
   for (const label of labels) {
     if (drawn > 140) break
     if (m.zoom < label.minZoom || m.zoom > label.maxZoom) continue
@@ -2040,6 +2133,7 @@ function frame(m: MapState, time: number) {
       const box = { x0: sx - 10, y0: sy - 10, x1: sx + 10, y1: sy + 10 }
       if (hits(box)) continue
       placed.push(box)
+      fadeIn(label)
       c.drawImage(s.canvas, sx - s.width / 2, sy - s.height / 2, s.width, s.height)
       drawn++
 
@@ -2053,6 +2147,7 @@ function frame(m: MapState, time: number) {
           c.drawImage(ns.canvas, sx + 9, sy - ns.height / 2, ns.width, ns.height)
         }
       }
+      c.globalAlpha = 1
       continue
     }
 
@@ -2072,6 +2167,7 @@ function frame(m: MapState, time: number) {
       if (seen) seen.push({ x: sx, y: sy })
       else roadsPlaced.set(label.text, [{ x: sx, y: sy }])
       c.save()
+      fadeIn(label)
       c.translate(sx, sy)
       c.rotate(label.angle)
       c.drawImage(s.canvas, -s.width / 2, -s.height / 2, s.width, s.height)
@@ -2083,15 +2179,18 @@ function frame(m: MapState, time: number) {
     const box = { x0: sx - s.width / 2, y0: sy - s.height / 2, x1: sx + s.width / 2, y1: sy + s.height / 2 }
     if (hits(box)) continue
     placed.push(box)
+    fadeIn(label)
     c.drawImage(s.canvas, box.x0, box.y0, s.width, s.height)
+    c.globalAlpha = 1
     drawn++
   }
+  m.labelAlpha = alphaNow
   evict(m.sprites, 600)
 
   // Markers: people under pins, me on top, the one under the mouse above all.
   const metersPerPixel = (40075016.686 * Math.cos((yToLat(m.y) * Math.PI) / 180)) / size
   let animated = false
-  const ordered = [...m.markers].sort((a, b) => order(a) - order(b) || a.y - b.y)
+  const ordered = [...m.visible].sort((a, b) => order(a) - order(b) || a.y - b.y)
   for (const marker of ordered) {
     const p = project(m, marker.x, marker.y)
     if (p.x < -60 || p.y < -60 || p.x > m.width + 60 || p.y > m.height + 60) continue
@@ -2099,6 +2198,8 @@ function frame(m: MapState, time: number) {
     if (marker.kind === 'pin') {
       drawPin(c, t, marker, p.x, p.y, hover, time)
       if (marker.flags & MARK_NEW || t.blip === 'ring') animated = true
+    } else if (marker.kind === 'cluster') {
+      drawCluster(c, t, marker, p.x, p.y, hover)
     } else if (marker.kind === 'person') {
       drawPerson(c, t, marker, p.x, p.y, hover)
     } else if (marker.kind === 'me') {
@@ -2135,7 +2236,7 @@ function order(marker: Marker) {
   if (marker.flags & MARK_SELECTED) return 5
   switch (marker.kind) {
     case 'person': return 1
-    case 'pin': return 2
+    case 'pin': case 'cluster': return 2
     case 'me': return 3
     case 'draft': return 4
   }
