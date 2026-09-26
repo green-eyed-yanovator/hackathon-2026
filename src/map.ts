@@ -449,7 +449,7 @@ const POI_ICONS: Record<string, IconName> = {
   fuel: 'fuel', car: 'wrench', lodging: 'bed', bank: 'dollar',
   cinema: 'film', theatre: 'film', music: 'note',
   library: 'book', school: 'book', college: 'book', kindergarten: 'book',
-  park: 'tree', garden: 'tree', playground: 'tree', campsite: 'tree',
+  campsite: 'tree',
   railway: 'train', attraction: 'star', museum: 'star', art_gallery: 'star', monument: 'star', castle: 'star', zoo: 'star',
   hairdresser: 'scissors', fitness: 'dumbbell', stadium: 'ball', sports: 'ball',
 }
@@ -467,7 +467,7 @@ export const LEGEND: [IconName, string][] = [
   ['fork', 'Restaurant'], ['burger', 'Fast food'], ['cup', 'Café, bakery'], ['glass', 'Bar, pub'],
   ['bag', 'Shop'], ['shirt', 'Clothes'], ['cross', 'Hospital, pharmacy'], ['shield', 'Police, fire'],
   ['fuel', 'Fuel'], ['wrench', 'Car repair'], ['bed', 'Hotel'], ['dollar', 'Bank'],
-  ['film', 'Cinema, theatre'], ['book', 'School, library'], ['tree', 'Park, garden'], ['train', 'Station'],
+  ['film', 'Cinema, theatre'], ['book', 'School, library'], ['tree', 'Campsite'], ['train', 'Station'],
   ['star', 'Sights'], ['scissors', 'Hairdresser'], ['dumbbell', 'Gym'], ['ball', 'Sports ground'],
 ]
 
