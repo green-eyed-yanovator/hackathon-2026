@@ -1,5 +1,7 @@
 import type { CSSProperties } from 'react'
 
+import type { Flair } from './types'
+
 // Styles shared by the auth and profile panels.
 
 export const rightPanelStyle: CSSProperties = {
@@ -156,3 +158,14 @@ export function groupByDay<T>(items: T[], dateOf: (item: T) => string) {
 
   return groups
 }
+
+export const flairs: Record<Flair, { icon: string; label: string }> = {
+  general: { icon: '💬', label: 'General' },
+  food: { icon: '🍔', label: 'Food' },
+  music: { icon: '🎵', label: 'Music' },
+  sports: { icon: '🏀', label: 'Sports' },
+  event: { icon: '🎉', label: 'Event' },
+  lost: { icon: '🚨', label: 'Lost / Found' },
+}
+
+export const flairIcon = (flair: string) => flairs[flair as Flair]?.icon ?? '💬'

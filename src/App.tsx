@@ -22,27 +22,48 @@ import type { Session } from '@supabase/supabase-js'
 import AuthPanel from './AuthPanel'
 import { describeNotification, useInbox, type Incoming } from './inbox'
 import NotificationCenter from './NotificationCenter'
+import PlacePanel from './PlacePanel'
 import PostPanel from './PostPanel'
 import ProfilePanel from './ProfilePanel'
 import SearchBox from './SearchBox'
 import { supabase } from './lib/supabase'
 import type {
   AuthMode,
+  Flair,
   Interest,
   MapFilter,
   NotificationRow,
   Post,
+  PostMedia,
   Profile,
   Reply,
   Saved,
 } from './types'
-import { ago, avatar } from './ui'
+import { ago, avatar, flairIcon, flairs } from './ui'
 
 setWorkerUrl(workerUrl)
 
 type Location = {
   latitude: number
   longitude: number
+}
+
+// Posts without a place (older ones) each count as their own place.
+const placeKey = (post: Post) => post.place_id ?? post.id
+
+// Great-circle distance in metres, for snapping new posts to nearby places.
+function metersBetween(
+  a: { latitude: number; longitude: number },
+  b: { latitude: number; longitude: number },
+) {
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180
+  const dLat = toRadians(b.latitude - a.latitude)
+  const dLng = toRadians(b.longitude - a.longitude)
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(a.latitude)) * Math.cos(toRadians(b.latitude)) * Math.sin(dLng / 2) ** 2
+
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
 }
 
 // The open panel lives in the URL (#pin/<id>, #user/<id>, #chat/<id>), so the
@@ -84,6 +105,9 @@ const [replies, setReplies] = useState<Reply[]>([])
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [flair, setFlair] = useState<Flair>('general')
+  const [mediaFiles, setMediaFiles] = useState<File[]>([])
+  const [media, setMedia] = useState<PostMedia[]>([])
 
   const [selectedLocation, setSelectedLocation] =
     useState<Location | null>(null)
@@ -328,9 +352,24 @@ const [replies, setReplies] = useState<Reply[]>([])
       setInterests(data ?? [])
     }
 
+    async function loadMedia() {
+      const { data, error } = await supabase
+        .from('post_media')
+        .select('*')
+        .order('created_at', { ascending: true })
+
+      if (error) {
+        console.error('Failed to load media:', error)
+        return
+      }
+
+      setMedia(data ?? [])
+    }
+
     loadPosts()
     loadReplies()
     loadInterests()
+    loadMedia()
 
     if (!mapContainer.current || map.current) {
       return
@@ -340,12 +379,12 @@ const [replies, setReplies] = useState<Reply[]>([])
       container: mapContainer.current,
       style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [138.6007, -34.9285],
-      zoom: 12,
+      zoom: 15,
     })
 
     map.current.addControl(
       new NavigationControl(),
-      'bottom-right',
+      'top-right',
     )
 
     return () => {
@@ -421,6 +460,16 @@ const [replies, setReplies] = useState<Reply[]>([])
           const row = payload.new as Interest
           setInterests((current) =>
             current.some((existing) => same(existing, row)) ? current : [...current, row],
+          )
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'post_media' },
+        (payload) => {
+          const row = payload.new as PostMedia
+          setMedia((current) =>
+            current.some((existing) => existing.id === row.id) ? current : [...current, row],
           )
         },
       )
@@ -529,7 +578,7 @@ const [replies, setReplies] = useState<Reply[]>([])
   const visibleKey = visiblePosts.map((post) => post.id).join(',')
 
   // Called from marker listeners, so it always sees the latest go().
-  const openPin = useEffectEvent((postId: string) => go(`pin/${postId}`))
+  const openRoute = useEffectEvent((path: string) => go(path))
 
   useEffect(() => {
     if (!map.current) {
@@ -541,38 +590,56 @@ const [replies, setReplies] = useState<Reply[]>([])
 
     const visible = new Set(visibleKey.split(','))
 
-    // Your pins are black, saved pins gold, the rest blue; a red dot means
-    // unread activity. The number is the reply count.
-    markers.current = posts
-      .filter((post) => visible.has(post.id))
-      .map((post) => {
-        const element = document.createElement('div')
-        element.className = [
-          'pin',
-          userId && post.author_id === userId && 'mine',
-          savedIds.includes(post.id) && 'saved',
-          newActivityIds.has(post.id) && 'new',
-          post.resolved_at && 'resolved',
-        ]
-          .filter(Boolean)
-          .join(' ')
-        element.setAttribute('aria-label', post.title)
-        element.innerHTML = '<div class="pin-head"><span></span></div>'
-        element.querySelector('span')!.textContent = replyCounts[post.id]
-          ? String(replyCounts[post.id])
-          : ''
+    // One marker per place (posts within ~30 m), showing the newest post's
+    // flair; a number when several threads share the spot. Black if any are
+    // yours, gold if saved, a red dot for unread activity.
+    const places = new globalThis.Map<string, Post[]>()
+    for (const post of posts) {
+      if (!visible.has(post.id)) continue
+      const key = placeKey(post)
+      places.set(key, [...(places.get(key) ?? []), post])
+    }
 
-        element.addEventListener('click', () => openPin(post.id))
-        element.addEventListener('mouseenter', () => setHoveredPostId(post.id))
-        element.addEventListener('mouseleave', () => setHoveredPostId(null))
+    markers.current = [...places.entries()].map(([key, placePosts]) => {
+      // posts are newest first
+      const newest = placePosts[0]
+      const element = document.createElement('div')
+      element.className = [
+        'pin',
+        userId && placePosts.some((post) => post.author_id === userId) && 'mine',
+        placePosts.some((post) => savedIds.includes(post.id)) && 'saved',
+        placePosts.some((post) => newActivityIds.has(post.id)) && 'new',
+        placePosts.every((post) => post.resolved_at) && 'resolved',
+      ]
+        .filter(Boolean)
+        .join(' ')
+      element.setAttribute(
+        'aria-label',
+        placePosts.length === 1 ? newest.title : `${placePosts.length} threads here`,
+      )
+      element.innerHTML = '<div class="pin-head"><span></span></div>'
+      element.querySelector('span')!.textContent = flairIcon(newest.flair)
 
-        pinElements.current.set(post.id, element)
+      if (placePosts.length > 1) {
+        const count = document.createElement('b')
+        count.className = 'pin-count'
+        count.textContent = String(placePosts.length)
+        element.append(count)
+      }
 
-        return new Marker({ element, anchor: 'bottom' })
-          .setLngLat([post.longitude, post.latitude])
-          .addTo(map.current!)
-      })
-  }, [posts, visibleKey, replyCounts, savedIds, newActivityIds, userId])
+      element.addEventListener('click', () =>
+        openRoute(placePosts.length === 1 ? `pin/${newest.id}` : `place/${key}`),
+      )
+      element.addEventListener('mouseenter', () => setHoveredPostId(newest.id))
+      element.addEventListener('mouseleave', () => setHoveredPostId(null))
+
+      for (const post of placePosts) pinElements.current.set(post.id, element)
+
+      return new Marker({ element, anchor: 'bottom' })
+        .setLngLat([newest.longitude, newest.latitude])
+        .addTo(map.current!)
+    })
+  }, [posts, visibleKey, savedIds, newActivityIds, userId])
 
   // Hover and "open" states just toggle classes; no need to rebuild markers.
   const selectedPostId = selectedPost?.id ?? null
@@ -600,7 +667,7 @@ const [replies, setReplies] = useState<Reply[]>([])
     const meta = document.createElement('div')
     meta.className = 'pin-preview-meta'
     meta.textContent = [
-      post.author_name ?? 'Anonymous',
+      `${flairIcon(post.flair)} ${post.author_name ?? 'Anonymous'}`,
       ago(post.created_at),
       `💬 ${replyCounts[post.id] ?? 0}`,
       interestCounts[post.id] ? `👍 ${interestCounts[post.id]}` : null,
@@ -611,6 +678,16 @@ const [replies, setReplies] = useState<Reply[]>([])
     description.className = 'pin-preview-description'
     description.textContent = post.description
     card.append(title, meta, description)
+
+    const others = posts.filter(
+      (candidate) => candidate.id !== post.id && placeKey(candidate) === placeKey(post),
+    ).length
+    if (others > 0) {
+      const more = document.createElement('div')
+      more.className = 'pin-preview-meta'
+      more.textContent = `+ ${others} more ${others === 1 ? 'thread' : 'threads'} here`
+      card.append(more)
+    }
 
     const popup = new Popup({
       closeButton: false,
@@ -728,9 +805,10 @@ function handlePostDeleted(postId: string) {
       return
     }
 
-    locationMarker.current = new Marker({
-      color: '#000000',
-    })
+    const dot = document.createElement('div')
+    dot.className = 'location-dot'
+
+    locationMarker.current = new Marker({ element: dot })
       .setLngLat([
         location.longitude,
         location.latitude,
@@ -799,13 +877,46 @@ function handlePostDeleted(postId: string) {
     return
   }
 
+  // Posts within 30 m of an existing place join it and share its marker.
+  // Every place already has posts in memory, so no extra request is needed.
+  const nearby = posts.find(
+    (post) =>
+      post.place_id &&
+      metersBetween(post, selectedLocation) <= 30,
+  )
+
+  let place = nearby
+    ? { id: nearby.place_id!, latitude: nearby.latitude, longitude: nearby.longitude }
+    : null
+
+  if (!place) {
+    const { data: newPlace, error: placeError } = await supabase
+      .from('places')
+      .insert({
+        latitude: selectedLocation.latitude,
+        longitude: selectedLocation.longitude,
+      })
+      .select()
+      .single()
+
+    if (placeError) {
+      console.error('Failed to create place:', placeError)
+      showToast("Couldn't save the location, try again")
+      return
+    }
+
+    place = newPlace
+  }
+
   const { data, error } = await supabase
     .from('posts')
     .insert({
+      place_id: place!.id,
       title: title.trim(),
       description: description.trim(),
-      latitude: selectedLocation.latitude,
-      longitude: selectedLocation.longitude,
+      latitude: place!.latitude,
+      longitude: place!.longitude,
+      flair,
     })
     .select()
     .single()
@@ -814,6 +925,41 @@ function handlePostDeleted(postId: string) {
     console.error('Failed to create post:', error)
     alert('Failed to create thread.')
     return
+  }
+
+  // Photos and videos go to storage in a folder named after the post.
+  for (const file of mediaFiles) {
+    const extension = file.name.split('.').pop() ?? 'file'
+    const path = `${data.id}/${crypto.randomUUID()}.${extension}`
+
+    const { error: uploadError } = await supabase.storage
+      .from('post-media')
+      .upload(path, file)
+
+    if (uploadError) {
+      console.error('Failed to upload media:', uploadError)
+      showToast(`Couldn't upload ${file.name}`)
+      continue
+    }
+
+    const { data: row, error: mediaError } = await supabase
+      .from('post_media')
+      .insert({
+        post_id: data.id,
+        media_type: file.type.startsWith('video/') ? 'video' : 'image',
+        url: supabase.storage.from('post-media').getPublicUrl(path).data.publicUrl,
+      })
+      .select()
+      .single()
+
+    if (mediaError) {
+      console.error('Failed to save media record:', mediaError)
+      continue
+    }
+
+    setMedia((current) =>
+      current.some((existing) => existing.id === row.id) ? current : [...current, row],
+    )
   }
 
   // Immediately show the new marker; realtime may have added it already.
@@ -835,6 +981,8 @@ function handlePostDeleted(postId: string) {
 
     setTitle('')
     setDescription('')
+    setFlair('general')
+    setMediaFiles([])
     setSelectedLocation(null)
 
     locationMarker.current?.remove()
@@ -1031,14 +1179,17 @@ function handlePostDeleted(postId: string) {
     ? replies.filter((reply) => reply.post_id === selectedPost.id)
     : []
 
+  const placePosts = route.kind === 'place'
+    ? posts.filter((post) => placeKey(post) === route.id)
+    : []
+  const selectedPlacePosts = selectedPost
+    ? posts.filter((post) => placeKey(post) === placeKey(selectedPost))
+    : []
+
   return (
-    <div
-      ref={mapContainer}
-      style={{
-        width: '100%',
-        height: '100vh',
-      }}
-    >
+    <div className="app">
+      <div ref={mapContainer} className="map-canvas" />
+
       {/* Header */}
       <header
         style={{
@@ -1202,10 +1353,23 @@ function handlePostDeleted(postId: string) {
         </button>
       )}
       {/* Thread details */}
+{placePosts.length > 0 && (
+  <PlacePanel
+    posts={placePosts}
+    replyCounts={replyCounts}
+    onOpenPost={(post) => go(`pin/${post.id}`)}
+    onHoverPost={setHoveredPostId}
+    onClose={() => go('')}
+  />
+)}
+
 {selectedPost && (
   <PostPanel
     key={selectedPost.id}
     post={selectedPost}
+    media={media.filter((item) => item.post_id === selectedPost.id)}
+    placeCount={selectedPlacePosts.length}
+    onBackToPlace={() => go(`place/${placeKey(selectedPost)}`)}
     replies={threadReplies}
     userId={userId}
     saved={savedIds.includes(selectedPost.id)}
@@ -1345,6 +1509,34 @@ function handlePostDeleted(postId: string) {
               resize: 'vertical',
             }}
           />
+
+          <div className="form-label">Flair</div>
+          <div className="flair-picker" role="radiogroup" aria-label="Flair">
+            {(Object.keys(flairs) as Flair[]).map((key) => (
+              <button
+                key={key}
+                type="button"
+                role="radio"
+                aria-checked={flair === key}
+                onClick={() => setFlair(key)}
+              >
+                {flairs[key].icon} {flairs[key].label}
+              </button>
+            ))}
+          </div>
+
+          <div className="form-label">Photos or videos</div>
+          <label className="media-picker">
+            <input
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              onChange={(event) => setMediaFiles(Array.from(event.target.files ?? []))}
+            />
+            {mediaFiles.length === 0
+              ? '📷 Add photos or videos'
+              : `📎 ${mediaFiles.length} file${mediaFiles.length === 1 ? '' : 's'} selected`}
+          </label>
 
           {/* Location */}
           <div

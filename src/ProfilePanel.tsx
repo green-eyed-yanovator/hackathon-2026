@@ -11,7 +11,7 @@ import InlineEdit from './InlineEdit'
 import { supabase } from './lib/supabase'
 import Chat, { ConversationList } from './Messages'
 import type { Interest, MapFilter, NotificationRow, Post, Profile, Reply, Saved } from './types'
-import { ago, avatar, linkButtonStyle, newestFirst, primaryButtonStyle, rightPanelStyle } from './ui'
+import { ago, avatar, flairIcon, linkButtonStyle, newestFirst, primaryButtonStyle, rightPanelStyle } from './ui'
 
 // Present only on the signed-in user's own profile.
 export type OwnMenu = {
@@ -359,7 +359,7 @@ export default function ProfilePanel({
 
             return (
               <button key={post.id} className="row" onClick={() => onOpenPost(post)} {...hoverProps(post.id)}>
-                <span className="row-icon">📍</span>
+                <span className="row-icon">{flairIcon(post.flair)}</span>
                 <div className="row-main">
                   <div className="row-title" style={{ fontWeight: 600 }}>{post.title}</div>
                   <div className="row-meta">

@@ -9,6 +9,19 @@ export type Post = {
   author_name: string | null
   edited_at: string | null
   resolved_at: string | null
+  // Posts within ~30 m share a place and one marker; older posts have none.
+  place_id: string | null
+  flair: Flair
+}
+
+export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
+
+export type PostMedia = {
+  id: string
+  post_id: string
+  media_type: 'image' | 'video'
+  url: string
+  created_at: string
 }
 
 export type Reply = {

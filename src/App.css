@@ -238,3 +238,26 @@
 .load-older { width: 100%; margin-top: 12px; padding: 10px; border: 1px solid #e5e7eb; border-radius: 10px; background: white; color: #444; font: 14px Arial, sans-serif; cursor: pointer; }
 .load-older:hover { background: #f7f7f8; }
 .activity-day { margin: 10px 0 2px; font-size: 12px; font-weight: 600; color: #999; }
+
+/* Layout: the map owns its own container; panels float above it. */
+.app { position: relative; width: 100%; height: 100vh; overflow: hidden; font-family: Arial, sans-serif; }
+.map-canvas { position: absolute; inset: 0; }
+
+/* Flair emoji inside the pin, and a count when several threads share a place. */
+.pin-head span { font-size: 15px; }
+.pin-count { position: absolute; top: -8px; left: -6px; min-width: 18px; padding: 1px 5px; box-sizing: border-box; border: 2px solid white; border-radius: 999px; background: #111; color: white; font: 700 11px Arial, sans-serif; line-height: 14px; text-align: center; }
+.pin.mine .pin-count { background: #2563eb; }
+.location-dot { width: 18px; height: 18px; box-sizing: border-box; border: 3px solid white; border-radius: 50%; background: #2563eb; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+
+/* Create form */
+.form-label { margin-bottom: 6px; font-weight: 600; color: #333; }
+.flair-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+.flair-picker button { padding: 6px 10px; border: 1px solid #ddd; border-radius: 999px; background: white; font: 13px Arial, sans-serif; cursor: pointer; }
+.flair-picker button[aria-checked='true'] { border-color: #111; background: #111; color: white; }
+.media-picker { display: block; margin-bottom: 20px; padding: 12px; border: 1.5px dashed #d1d5db; border-radius: 10px; color: #555; font-size: 14px; text-align: center; cursor: pointer; }
+.media-picker:hover { border-color: #9ca3af; background: #f9fafb; }
+.media-picker input { display: none; }
+
+/* Post gallery */
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; margin: 4px 0 10px; }
+.gallery img, .gallery video { display: block; width: 100%; height: 140px; border-radius: 10px; object-fit: cover; background: #111; }

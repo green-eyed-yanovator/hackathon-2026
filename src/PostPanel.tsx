@@ -3,11 +3,15 @@ import { useState } from 'react'
 import { useNames } from './inbox'
 import InlineEdit from './InlineEdit'
 import { supabase } from './lib/supabase'
-import type { Post, Reply, Revision } from './types'
-import { ago, avatar, linkButtonStyle, rightPanelStyle } from './ui'
+import type { Post, PostMedia, Reply, Revision } from './types'
+import { ago, avatar, flairs, linkButtonStyle, rightPanelStyle } from './ui'
 
 type Props = {
   post: Post
+  media: PostMedia[]
+  // How many threads share this pin's place; above 1 shows a way back to the list.
+  placeCount: number
+  onBackToPlace: () => void
   // This pin's replies, oldest first.
   replies: Reply[]
   userId: string | null
@@ -38,6 +42,9 @@ function describeInterested(names: string[]) {
 
 export default function PostPanel({
   post,
+  media,
+  placeCount,
+  onBackToPlace,
   replies,
   userId,
   saved,
@@ -145,6 +152,12 @@ export default function PostPanel({
         ×
       </button>
 
+      {placeCount > 1 && (
+        <button onClick={onBackToPlace} style={{ ...linkButtonStyle, display: 'block', marginBottom: '10px', fontSize: '13px' }}>
+          ← {placeCount} threads here
+        </button>
+      )}
+
       {post.author_id ? (
         <button
           className="row"
@@ -154,12 +167,14 @@ export default function PostPanel({
           {avatar(post.author_id, post.author_name, 36)}
           <div className="row-main">
             <div style={{ fontWeight: 600 }}>{post.author_name}</div>
-            <div className="row-meta">Posted {ago(post.created_at)}</div>
+            <div className="row-meta">
+              Posted {ago(post.created_at)} · {flairs[post.flair]?.icon} {flairs[post.flair]?.label}
+            </div>
           </div>
         </button>
       ) : (
         <div className="row-meta" style={{ marginBottom: '12px' }}>
-          Posted {ago(post.created_at)}
+          Posted {ago(post.created_at)} · {flairs[post.flair]?.icon} {flairs[post.flair]?.label}
         </div>
       )}
 
@@ -221,6 +236,20 @@ export default function PostPanel({
                 <div style={{ color: '#666', whiteSpace: 'pre-wrap' }}>{revision.description}</div>
               </div>
             ))
+          )}
+        </div>
+      )}
+
+      {media.length > 0 && (
+        <div className="gallery">
+          {media.map((item) =>
+            item.media_type === 'video' ? (
+              <video key={item.id} src={item.url} controls preload="metadata" />
+            ) : (
+              <a key={item.id} href={item.url} target="_blank" rel="noreferrer">
+                <img src={item.url} alt="" loading="lazy" />
+              </a>
+            ),
           )}
         </div>
       )}

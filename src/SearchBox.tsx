@@ -1,7 +1,7 @@
 import { useState, type RefObject } from 'react'
 
 import type { Post } from './types'
-import { ago } from './ui'
+import { ago, flairIcon } from './ui'
 
 type Props = {
   query: string
@@ -74,7 +74,7 @@ export default function SearchBox({ query, onQuery, results, onOpen, inputRef }:
                 onMouseEnter={() => setHighlight(index)}
                 onClick={() => choose(post)}
               >
-                <span className="row-icon">📍</span>
+                <span className="row-icon">{flairIcon(post.flair)}</span>
                 <div className="row-main">
                   <div className="row-title" style={{ fontWeight: 600 }}>{post.title}</div>
                   <div className="row-meta row-title">
