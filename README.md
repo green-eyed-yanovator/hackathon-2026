@@ -34,7 +34,8 @@ What you can do:
 - **Accounts.** Sign up with email and password, sign in with a password or
   an emailed code, reset a forgotten password by code, change email or
   password, pick a profile photo, delete your account. New accounts get a
-  short getting-started list.
+  short getting-started list. Settings turns off any kind of notification,
+  one by one.
 
 ## Running it
 
