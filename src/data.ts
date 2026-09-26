@@ -423,11 +423,21 @@ export function start() {
   loadPublic()
   subscribePublic()
 
-  // Sharing only while the app is in view.
+  // Sharing only while the app is in view. And coming back after a while
+  // (a phone in a pocket, a laptop asleep) reloads what realtime couldn't
+  // deliver while we were away.
+  let hiddenAt = 0
   document.addEventListener('visibilitychange', () => {
-    if (!S.userId || !S.sharing) return
-    if (document.visibilityState === 'hidden') withdrawNow()
-    else pushLocation(true)
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now()
+      if (S.userId && S.sharing) withdrawNow()
+      return
+    }
+    if (S.userId && S.sharing) pushLocation(true)
+    if (hiddenAt && Date.now() - hiddenAt > 30000) {
+      loadPublic()
+      if (S.userId) loadPrivate(S.userId)
+    }
   })
   window.addEventListener('pagehide', () => {
     if (S.userId && S.sharing) withdrawNow()
