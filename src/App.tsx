@@ -5,16 +5,28 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 import {
-  S, useStore, changed, start, stats, supabase, supabaseUrl, supabaseKey, lastError, flairs, placeKey, nameOf, time, distance,
-  friendIds, friendshipWith, isOnline, locationOf, conversations, readable, unreadMessages, visibleNotifications, describeNotification, typingChannel, setIncomingHandler, watchHere, setSharing, enableCompass,
-  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleLike, report, toggleInterest, toggleSave, saveProfile,
-  uploadAvatar, changeEmail, deleteAccount, checkOut, block, unblock, requestFriend, acceptFriend, removeFriend, sendMessage, markConversationRead, markNotificationsRead,
-  loadOlderNotifications, setMutedKinds,
+  // The store and its helpers.
+  S, useStore, changed, start, stats, takeError, time, distance, placeKey, flairs,
+  supabase, supabaseUrl, supabaseKey,
+  // People.
+  nameOf, friendIds, friendshipWith, isOnline, locationOf, saveProfile, uploadAvatar,
+  requestFriend, acceptFriend, removeFriend, block, unblock,
+  // Pins.
+  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleLike, toggleInterest, toggleSave, report,
+  // Messages and notifications.
+  conversations, readable, unreadMessages, visibleNotifications, describeNotification, typingChannel,
+  sendMessage, markConversationRead, markNotificationsRead, loadOlderNotifications, setMutedKinds, setIncomingHandler,
+  // Where I am.
+  watchHere, setSharing, enableCompass, checkOut,
+  // Accounts.
+  changeEmail, deleteAccount,
   type Flair, type Post, type Revision, type Notification,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setRadar, RADAR_WIDE, setTheme, flyTo, zoomBy, glideBy, project, center, requestFrame, nearestStreet, findPlaces,
-  lngToX, latToY, icons, mapThemes, LEGEND, poiColor, MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
+  createMap, destroyMap, setMarkers, setRadar, setTheme, flyTo, zoomBy, glideBy, requestFrame,
+  project, center, lngToX, latToY, nearestStreet, findPlaces,
+  icons, mapThemes, LEGEND, poiColor, RADAR_WIDE,
+  MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
   type IconName, type MapState, type Marker,
 } from './map'
 import './App.css'
@@ -291,7 +303,7 @@ function celebrate(title: string, sub: string) {
 }
 
 function failed(fallback: string) {
-  toast(lastError || fallback)
+  toast(takeError() || fallback)
 }
 
 function applyTheme(id: string) {

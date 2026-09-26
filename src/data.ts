@@ -180,12 +180,19 @@ export function stats() {
   return st
 }
 
-// Where something went wrong, in words for a toast. Set by actions, read by the UI.
-export let lastError = ''
+// Where something went wrong, in words for a toast. Set by actions, taken (and
+// cleared) by the UI, so an old failure is never reported for a new one.
+let lastError = ''
 function fail(what: string, error: { message: string } | null) {
   console.error(what, error)
   lastError = error?.message ?? what
   return false
+}
+
+export function takeError() {
+  const error = lastError
+  lastError = ''
+  return error
 }
 
 //
