@@ -15,7 +15,7 @@ What you can do:
 
 - **Pins are threads.** Reply (mention people with `@`, heart a good reply), say you're in, save,
   or share. Give a pin a time and it counts down in the feed, shows under
-  Soon, and ripples on the map while it's on.
+  Soon, ripples on the map while it's on, and goes to your calendar in a tap.
 - **Get there.** A walking route along the streets, drawn on the map (a GPS
   line in the game styles, on the radar too) with the minutes it takes and
   the street most of it is on. It shortens as you walk, finds a new way if

@@ -930,6 +930,11 @@ kbd {
   font-size: 14px;
 }
 
+.when-add {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .when-line.now {
   background: color-mix(in srgb, #16a34a 14%, transparent);
   color: #16a34a;

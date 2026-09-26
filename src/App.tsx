@@ -918,6 +918,34 @@ function pinInLink(url: string) {
 
 const pinLink = (post: Post) => `${window.location.origin}/#pin/${post.id}`
 
+// A pin with a time, for the phone's calendar: a small .ics written out by hand
+// (RFC 5545), two hours long, with the way back to the pin in its notes.
+function addToCalendar(post: Post, street: string) {
+  const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+  const text = (s: string) => s.replace(/[\\;,]/g, (c) => '\\' + c).replace(/\n/g, '\\n')
+  const start = time(post.starts_at!)
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//AroundHere//EN', 'BEGIN:VEVENT',
+    `UID:${post.id}@aroundhere`,
+    `DTSTAMP:${stamp(Date.now())}`,
+    `DTSTART:${stamp(start)}`,
+    `DTEND:${stamp(start + 2 * 3600000)}`,
+    `SUMMARY:${text(post.title)}`,
+    `DESCRIPTION:${text(`${post.description}\n\n${pinLink(post)}`)}`,
+    `LOCATION:${text(street || `${post.latitude.toFixed(5)}, ${post.longitude.toFixed(5)}`)}`,
+    `GEO:${post.latitude.toFixed(6)};${post.longitude.toFixed(6)}`,
+    'END:VEVENT', 'END:VCALENDAR',
+  ]
+  // Lines longer than 75 characters fold onto the next, which starts with a space.
+  const folded = lines.map((line) => line.match(/.{1,74}/g)!.join('\r\n ')).join('\r\n')
+  const url = URL.createObjectURL(new Blob([folded + '\r\n'], { type: 'text/calendar' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${post.title.replace(/[^\w\s-]/g, '').trim().slice(0, 40) || 'event'}.ics`
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 // A person in a list: their face and name (tap to open their profile), a line
 // under the name, and whatever you can do with them on the right.
 function PersonRow({ id, sub, children }: { id: string; sub?: ReactNode; children?: ReactNode }) {
@@ -1428,6 +1456,11 @@ function PostView({ post }: { post: Post }) {
               {soon === null && <span className="muted">· over</span>}
               {soon === 'now' && <span>· happening now</span>}
               {soon?.startsWith('in ') && <span className="muted">· {soon}</span>}
+              {soon !== null && (
+                <button className="link small when-add" onClick={() => addToCalendar(post, street)} title="Save it to your calendar">
+                  Add to calendar
+                </button>
+              )}
             </div>
           )}
           {post.description && (
