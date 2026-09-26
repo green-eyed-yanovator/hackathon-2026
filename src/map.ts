@@ -922,6 +922,14 @@ export function panBy(m: MapState, dx: number, dy: number) {
   requestFrame(m)
 }
 
+// Like a fling: sets the map drifting so it comes to rest about (dx, dy) px away.
+export function glideBy(m: MapState, dx: number, dy: number) {
+  m.fly = null
+  m.vx += dx / 280 // the fling's decay (280 ms) turns speed into this much distance
+  m.vy += dy / 280
+  requestFrame(m)
+}
+
 function zoomAround(m: MapState, zoom: number, sx: number, sy: number) {
   const before = unproject(m, sx, sy)
   m.zoom = clamp(zoom, MIN_ZOOM, MAX_ZOOM)
