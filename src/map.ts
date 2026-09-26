@@ -2323,8 +2323,8 @@ function frame(m: MapState, time: number) {
 
   const roadsPlaced = new Map<string, { x: number; y: number }[]>()
   let drawn = 0
-  // Game maps are covered in blips from further out; plain maps keep them for close up.
-  const poiEarly = t.blip === 'pin' ? 0 : 2
+  // The crime-sprawl maps are covered in blips from further out; ink and plain maps keep them for close up.
+  const poiEarly = t.blip === 'square' || t.blip === 'round' ? 2 : t.blip === 'ring' ? 1 : 0
   const showPoi = z >= 15 - poiEarly
 
   // A label placed this frame keeps fading in from where it was last frame; one
