@@ -2212,9 +2212,43 @@ function AuthView() {
 
 type Command = { key: string; icon: ReactNode; label: string; hint?: string; run: () => void }
 
+// How well a query matches a short text: its letters in order, scoring runs of
+// letters and word starts, so "rndl" finds "Rundle". Every place the first letter
+// appears is tried as a start, and the best one counts. 0 is no match.
+function fuzzy(query: string, text: string | null | undefined) {
+  if (!query) return 1
+  if (!text) return 0
+  const t = text.toLowerCase()
+  if (t.includes(query)) return 100 + query.length
+  const q = query.replace(/ /g, '')
+  let best = 0
+
+  for (let start = t.indexOf(q[0]); start >= 0; start = t.indexOf(q[0], start + 1)) {
+    let score = 0
+    let at = start
+    let run = 0
+    for (let i = 0; i < q.length; i++) {
+      const found = t.indexOf(q[i], at)
+      if (found < 0) {
+        score = 0
+        break
+      }
+      run = i > 0 && found === at ? run + 1 : 1
+      score += 1 + run * 2 + (found === 0 || t[found - 1] === ' ' ? 5 : 0)
+      at = found + 1
+    }
+    best = Math.max(best, score)
+  }
+  // Letters scattered all over the text aren't a match anyone meant.
+  return best >= q.length * 5 ? best : 0
+}
+
 function paletteItems(query: string): { group: string; items: Command[] }[] {
   const q = query.trim().toLowerCase()
-  const match = (...texts: (string | null | undefined)[]) => !q || q.split(/\s+/).every((word) => texts.some((t) => t?.toLowerCase().includes(word)))
+  // Long texts (descriptions) only count on a plain match; scattered letters would find anything.
+  const inside = (text: string | null | undefined) => (q && text?.toLowerCase().includes(q) ? 10 : 0)
+  const ranked = <T,>(items: T[], score: (item: T) => number) =>
+    items.map((item) => ({ item, score: score(item) })).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).map((r) => r.item)
 
   const commands: Command[] = [
     { key: 'new', icon: <Icon name="plus" />, label: 'New pin', hint: 'N', run: startCompose },
@@ -2236,16 +2270,15 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
       key: `theme-${t.id}`, icon: <ThemeSwatch id={t.id} />, label: `Map style: ${t.name}`,
       hint: UI.theme === t.id ? 'current' : undefined, run: () => applyTheme(t.id),
     })),
-  ].filter((c) => match(c.label))
+  ]
+  const shownCommands = q ? ranked(commands, (c) => fuzzy(q, c.label)) : commands
 
-  const pins = S.posts
-    .filter((p) => match(p.title, p.description, p.author_name, flairs[p.flair]?.label))
+  const pins = (q ? ranked(S.posts, (p) => Math.max(fuzzy(q, p.title), fuzzy(q, p.author_name), fuzzy(q, flairs[p.flair]?.label), inside(p.description))) : S.posts)
     .slice(0, q ? 8 : 5)
     .map((p) => ({ key: p.id, icon: <Blip flair={p.flair} size={22} />, label: p.title, hint: p.resolved_at ? 'resolved' : ago(p.created_at), run: () => openPin(p) }))
 
   const people = q
-    ? [...S.profiles.values()]
-        .filter((p) => match(p.display_name, p.neighbourhood))
+    ? ranked([...S.profiles.values()], (p) => Math.max(fuzzy(q, p.display_name), inside(p.neighbourhood)))
         .slice(0, 6)
         .map((p) => ({ key: p.id, icon: <Avatar id={p.id} size={22} />, label: p.display_name, hint: p.neighbourhood ?? undefined, run: () => go(`user/${p.id}`) }))
     : []
@@ -2261,7 +2294,7 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
     { group: q ? 'Pins' : 'Recent pins', items: pins },
     { group: 'People', items: people },
     { group: 'On the map', items: places },
-    { group: 'Commands', items: commands },
+    { group: 'Commands', items: shownCommands },
   ].filter((g) => g.items.length)
 }
 
