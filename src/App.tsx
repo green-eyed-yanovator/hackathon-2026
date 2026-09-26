@@ -109,7 +109,7 @@ const UI = {
   follow: false, // the camera keeps you in the middle until you move the map
   sheetFull: false, // phones: the open sheet is pulled up to full height
   legend: false,
-  walk: null as string | null, // "Get there": the pin or friend being walked to, as a route ("pin/…", "user/…")
+  walk: null as string | null, // "Get there": what's being walked to: "pin/<id>", "user/<id>" or "spot/<lat>,<lng>/<name>"
 }
 
 // When this device last had the app open, for "new since your last visit".
@@ -684,10 +684,14 @@ function startCompose() {
 // Getting there on foot: the map works out the way along the streets and draws it.
 //
 
-// Where the walk is heading: a pin, or a friend, who may be moving.
+// Where the walk is heading: a pin, a friend (who may be moving), or a spot found by search.
 function walkTarget(to = UI.walk) {
   if (!to) return null
-  const [kind, id] = to.split('/')
+  const [kind, id, ...name] = to.split('/')
+  if (kind === 'spot') {
+    const [lat, lng] = id.split(',').map(Number)
+    return { lat, lng, name: name.join('/'), person: false }
+  }
   if (kind === 'pin') {
     const post = S.posts.find((p) => p.id === id)
     return post ? { lat: post.latitude, lng: post.longitude, name: post.title, person: false } : null
@@ -2988,17 +2992,24 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
         .map((p) => ({ key: p.id, icon: <Avatar id={p.id} size={22} />, label: p.display_name, hint: p.neighbourhood ?? undefined, run: () => go(`user/${p.id}`) }))
     : []
 
-  const places = q && map
-    ? findPlaces(map, q).map((p) => ({
-        key: `place:${p.kind}:${p.name}`, icon: <Icon name={p.kind === 'Street' ? 'map' : 'pin'} />, label: p.name, hint: p.kind,
-        run: () => reveal(p.lat, p.lng, p.kind === 'Area' ? 15 : 17, true),
-      }))
-    : []
+  // "walk rundle": places match what comes after, and the way there comes first.
+  const walking = /^(walk( to)?|go to|get to)\s+/i.exec(q)
+  const found = q && map ? findPlaces(map, walking ? q.slice(walking[0].length) : q) : []
+  const places = found.map((p) => ({
+    key: `place:${p.kind}:${p.name}`, icon: <Icon name={p.kind === 'Street' ? 'map' : 'pin'} />, label: p.name, hint: p.kind,
+    run: () => reveal(p.lat, p.lng, p.kind === 'Area' ? 15 : 17, true),
+  }))
+  const way = found[0] ? [{
+    key: 'walk-place', icon: <Icon name="arrow" />, label: `Walk to ${found[0].name}`,
+    run: () => walkTo(`spot/${found[0].lat.toFixed(6)},${found[0].lng.toFixed(6)}/${found[0].name}`),
+  }] : []
 
   return [
-    { group: q ? 'Pins' : 'Recent pins', items: pins },
+    { group: 'Get there', items: walking ? way : [] },
+    { group: q ? 'Pins' : 'Recent pins', items: walking ? [] : pins },
     { group: 'People', items: people },
     { group: 'On the map', items: places },
+    { group: 'Get there', items: walking ? [] : way },
     { group: 'Commands', items: shownCommands },
   ].filter((g) => g.items.length)
 }
@@ -3242,7 +3253,7 @@ function WalkBar() {
   else status = "Can't find a way there on foot"
   return (
     <div className="walk" role="status">
-      <button className="walk-main" onClick={() => go(UI.walk!)}>
+      <button className="walk-main" onClick={() => (UI.walk!.startsWith('spot/') ? reveal(target.lat, target.lng, 17, true) : go(UI.walk!))}>
         <Icon name="arrow" size={18} />
         <span>
           <strong>{target.name}</strong>
