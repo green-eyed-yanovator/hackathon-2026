@@ -1,0 +1,19 @@
+# Supabase's pinned compose file remains upstream. Only Caddy is public.
+services:
+  api-gw:
+    ports: !override
+      - "127.0.0.1:8000:8000/tcp"
+  supavisor:
+    ports: !reset []
+  auth:
+    environment:
+      GOTRUE_PASSWORD_MIN_LENGTH: "6"
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: "30"
+      GOTRUE_RATE_LIMIT_TOKEN_VERIFICATIONS: "30"
+      GOTRUE_RATE_LIMIT_SIGN_IN_SIGN_UPS: "30"
+      GOTRUE_SMTP_MAX_FREQUENCY: "60s"
+      GOTRUE_MAILER_OTP_LENGTH: "6"
+      GOTRUE_MAILER_OTP_EXP: "3600"
+      GOTRUE_MAILER_SECURE_EMAIL_CHANGE_ENABLED: "true"
+      GOTRUE_MAILER_TEMPLATES_MAGIC_LINK: "${SITE_URL}/email-templates/login_code.html"
+      GOTRUE_MAILER_TEMPLATES_RECOVERY: "${SITE_URL}/email-templates/reset_code.html"
