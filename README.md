@@ -1,5 +1,10 @@
 # AroundHere
 
+**[Try the live demo](https://aroundhere-209-38-82-91.nip.io/)** · [Hackathon submission](https://devpost.com/software/aroundhere-6swqom)
+
+Demo login: `maya@aroundhere.demo` / `neighbour`. You can also create an account.
+The hosted demo supports password sign-in; emailed sign-in and reset codes are not configured.
+
 A community social map for neighbours. Anyone can make an account and drop a
 pin on what's going on:
 
