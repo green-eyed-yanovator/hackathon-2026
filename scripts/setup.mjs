@@ -40,8 +40,8 @@ let settings
 let where
 if (process.argv.includes('--hosted') || !has('docker info')) {
   if (!existsSync('supabase/hosted.env')) {
-    console.error('Docker isn’t running, and there’s no shared project set up yet (supabase/hosted.env).')
-    console.error('Start Docker Desktop, OrbStack or Colima and run this again.')
+    console.error('There’s no shared Supabase project set up yet (supabase/hosted.env).')
+    console.error('Start Docker (Desktop, OrbStack or Colima) and run npm run setup to use a local one.')
     process.exit(1)
   }
   if (!process.argv.includes('--hosted')) console.log('No Docker running: using the shared Supabase project instead.')
