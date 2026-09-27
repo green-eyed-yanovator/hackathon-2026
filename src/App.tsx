@@ -20,14 +20,16 @@ import {
   watchHere, setSharing, enableCompass, checkOut,
   // Accounts.
   changeEmail, deleteAccount,
-  type Flair, type Post, type Revision, type Notification, type Area,
+  // City blocks and turf.
+  crews, turf, talk, blockOf, inRing, blockFor, say, unsay, vote, joinCrew, tagBlock, setTurnHandler,
+  type Flair, type Post, type Reply, type Revision, type Notification, type Crew, type Word,
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, requestFrame,
-  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, regionAt, snapToStreet,
+  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, findBlock,
   icons, mapThemes, LEGEND, poiColor,
   MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
-  type IconName, type MapState, type Marker, type Region,
+  type IconName, type MapState, type Marker, type Region, type Block,
 } from './map'
 import './App.css'
 
@@ -101,9 +103,14 @@ const UI = {
   feed: !narrow(),
   view: initialView(),
   draft: null as { latitude: number; longitude: number } | null,
-  draftArea: null as Area | null, // the area of the pin being made: a circle, or corners being tapped
-  district: null as { name: string; sub: string } | null, // an area just walked into, named in the corner
-  then: null as number | null, // looking at the city as it was: lore up to this year
+  draftBlocks: [] as string[], // the blocks the pin being made covers
+  picking: false, // making a pin, taps pick the blocks it covers instead of moving it
+  loose: null as Block | null, // a block found on the map by someone signed out: shown, not kept
+  spray: null as string | null, // the block being tagged: the spraying game is up
+  district: null as { name: string; sub: string } | null, // a block just walked into, named in the corner
+  then: null as number | null, // looking back: the moment the map shows, instead of now
+  thenSpan: 'week' as SpanId, // how far back the timeline reaches
+  playing: false, // the timeline running forward by itself
   alerts: stored('aroundhere.alerts') === 'on',
   sounds: stored('aroundhere.sounds') !== 'off',
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
@@ -178,7 +185,8 @@ function go(path: string) {
   UI.sheetFull = false
   if (UI.route.kind !== 'new') {
     UI.draft = null
-    UI.draftArea = null
+    UI.draftBlocks = []
+    UI.picking = false
   } else if (!UI.draft) UI.draft = viewCenter()
   changed()
 }
@@ -237,9 +245,28 @@ function pluck(at: number, freq: number, volume: number, out: AudioNode) {
   source.start(at)
 }
 
+// A can going off: a short burst of noise through a band-pass.
+function hiss(at: number, length: number, volume: number, out: AudioNode) {
+  const a = audio!
+  const buffer = a.createBuffer(1, Math.floor(a.sampleRate * length), a.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
+  const source = a.createBufferSource()
+  const filter = a.createBiquadFilter()
+  const gain = a.createGain()
+  source.buffer = buffer
+  filter.type = 'bandpass'
+  filter.frequency.value = 4500
+  filter.Q.value = 0.7
+  gain.gain.setValueAtTime(volume, at)
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + length)
+  source.connect(filter).connect(gain).connect(out)
+  source.start(at)
+}
+
 const hz = (semitonesFromA4: number) => 440 * 2 ** (semitonesFromA4 / 12)
 
-function play(kind: 'sting' | 'tick') {
+function play(kind: 'sting' | 'tick' | 'spray') {
   if (!UI.sounds) return
   try {
     audio ??= new AudioContext()
@@ -255,6 +282,10 @@ function play(kind: 'sting' | 'tick') {
   setTimeout(() => out.disconnect(), 3000) // every sound is over by then
   const style = shown()
 
+  if (kind === 'spray') {
+    hiss(t0, 0.16, 0.4, out)
+    return
+  }
   if (kind === 'tick') {
     const type: OscillatorType = style === 'coast' ? 'square' : style === 'neon' ? 'sawtooth' : 'sine'
     if (style === 'frontier') pluck(t0, hz(7), 0.5, out)
@@ -482,14 +513,14 @@ function visiblePosts() {
   const { joined, active } = stats()
   // Pins nobody has touched in a month quietly leave the map; Past still has them.
   // An event still to come counts as recent however long ago it was pinned.
-  // Lore is what a place remembers: it never goes quiet.
-  const recent = (p: Post) => p.flair === 'lore' || Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
+  const recent = (p: Post) => Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
 
+  const then = UI.then
   return S.posts.filter((p) => {
     if (p.author_id && S.blocked.has(p.author_id)) return false
-    // Then: the city's lore up to a year, and nothing else.
-    if (UI.then !== null) return p.flair === 'lore' && p.year !== null && p.year <= UI.then
     if (UI.flair && p.flair !== UI.flair) return false
+    // Back then: pinned by then, not resolved yet, and not a month old.
+    if (then !== null) return time(p.created_at) <= then && !(p.resolved_at && time(p.resolved_at) <= then) && then - time(p.created_at) < 30 * 86400000
     switch (UI.tab) {
       case 'around':
       case 'latest':
@@ -520,67 +551,241 @@ function sortedFeed(posts: Post[]) {
   return withMeta
 }
 
-// Pins that cover an area, for the map to mark out.
+// The block the open sheet is about: a kept one, or one found by someone signed out.
+function openBlock(): { id: string | null; ring: [number, number][]; latitude: number; longitude: number } | null {
+  if (UI.route.kind !== 'block') return null
+  if (UI.route.id === 'here') return UI.loose ? { id: null, ring: UI.loose.ring, latitude: UI.loose.lat, longitude: UI.loose.lng } : null
+  return S.blocks.get(UI.route.id) ?? null
+}
+
+// What the map marks out: blocks a crew holds, in its colour, flashing while
+// they're fought over; what people call the blocks they've named; the blocks
+// pins cover; and, strongest, the open block and the ones being picked.
 function buildRegions(posts: Post[]): Region[] {
-  return posts
-    .filter((p) => p.area)
-    .map((p) => ({
-      id: p.id, name: p.title, color: (flairs[p.flair] ?? flairs.general).color, lng: p.longitude, lat: p.latitude, area: p.area!,
-      selected: UI.route.kind === 'pin' && UI.route.id === p.id,
-    }))
+  const regions: Region[] = []
+  const at = UI.then ?? undefined
+  const { holder, hot } = turf(at)
+  const { names } = talk(at)
+  for (const block of S.blocks.values()) {
+    if (at !== undefined && time(block.created_at) > at) continue
+    const crew = holder.get(block.id)
+    const name = names.get(block.id) ?? ''
+    if (!crew && !name) continue
+    regions.push({
+      id: block.id, rings: [block.ring], color: crew ? crews[crew].color : '', look: crew ? 'turf' : 'plain',
+      name, lng: block.longitude, lat: block.latitude, hot: hot.has(block.id),
+    })
+  }
+  for (const p of posts) {
+    const rings = (p.blocks ?? []).map((id) => S.blocks.get(id)?.ring).filter((ring) => !!ring)
+    if (!rings.length) continue
+    const open = UI.route.kind === 'pin' && UI.route.id === p.id
+    regions.push({ id: `pin:${p.id}`, rings, color: (flairs[p.flair] ?? flairs.general).color, look: open ? 'picked' : 'area', name: '', lng: p.longitude, lat: p.latitude, hot: false })
+  }
+  const open = openBlock()
+  if (open) regions.push({ id: 'open', rings: [open.ring], color: '#f25c2a', look: 'picked', name: '', lng: open.longitude, lat: open.latitude, hot: false })
+  if (UI.route.kind === 'new' && UI.draftBlocks.length) {
+    const rings = UI.draftBlocks.map((id) => S.blocks.get(id)?.ring).filter((ring) => !!ring)
+    regions.push({ id: 'draft', rings, color: '#f25c2a', look: 'picked', name: '', lng: 0, lat: 0, hot: false })
+  }
+  return regions
 }
 
-// The area of the pin being made, while it's being made.
-function draftRegion(): Region | null {
-  const area = UI.draftArea
-  if (UI.route.kind !== 'new' || !area || !UI.draft || ('ring' in area && !area.ring.length)) return null
-  return { id: 'draft', name: '', color: '#f25c2a', lng: UI.draft.longitude, lat: UI.draft.latitude, area, selected: true }
-}
-
-// The middle of a ring of corners, where its pin goes.
-function ringMiddle(ring: [number, number][]) {
-  return { latitude: ring.reduce((sum, c) => sum + c[1], 0) / ring.length, longitude: ring.reduce((sum, c) => sum + c[0], 0) / ring.length }
-}
-
-// How big an area is, in words: "250 m around", "about 4 football pitches".
-function areaText(area: Area, lat: number) {
-  if ('r' in area) return `${area.r} m around`
+// How big a block is, in words: "about 4 football pitches".
+function sizeText(ring: [number, number][]) {
   const my = 111320 // metres in a degree of latitude
-  const mx = my * Math.cos((lat * Math.PI) / 180)
-  const [x0, y0] = area.ring[0]
+  const mx = my * Math.cos((ring[0][1] * Math.PI) / 180)
+  const [x0, y0] = ring[0]
   let twice = 0
-  area.ring.forEach(([x1, y1], i) => {
-    const [x2, y2] = area.ring[(i + 1) % area.ring.length]
+  ring.forEach(([x1, y1], i) => {
+    const [x2, y2] = ring[(i + 1) % ring.length]
     twice += (x1 - x0) * mx * (y2 - y0) * my - (x2 - x0) * mx * (y1 - y0) * my
   })
   const pitches = Math.abs(twice) / 2 / 7140
   if (pitches < 1) return 'smaller than a football pitch'
-  if (pitches < 60) return `about ${Math.round(pitches)} football pitch${Math.round(pitches) === 1 ? '' : 'es'}`
+  if (pitches < 60) return `about ${plural(Math.round(pitches), 'football pitch', 'football pitches')}`
   return `about ${((pitches * 7140) / 1e6).toFixed(1)} km²`
 }
 
-// "38 years ago", "last year".
-function yearsAgo(year: number) {
-  const n = new Date().getFullYear() - year
-  return n <= 0 ? 'this year' : n === 1 ? 'last year' : `${n} years ago`
+// How far a spot is from a block, in metres: 0 inside it.
+function metersToBlock(ring: [number, number][], lat: number, lng: number) {
+  if (inRing(ring, lng, lat)) return 0
+  const my = 111320
+  const mx = my * Math.cos((lat * Math.PI) / 180)
+  let best = Infinity
+  ring.forEach(([ax, ay], i) => {
+    const [bx, by] = ring[(i + 1) % ring.length]
+    const dx = (bx - ax) * mx
+    const dy = (by - ay) * my
+    const px = (lng - ax) * mx
+    const py = (lat - ay) * my
+    const t = dx || dy ? Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy))) : 0
+    best = Math.min(best, Math.hypot(px - t * dx, py - t * dy))
+  })
+  return best
 }
 
-// The years the lore on the map spans, for the Then slider: from the decade of
-// the oldest story to now.
-function loreSpan() {
-  const years = S.posts.filter((p) => p.flair === 'lore' && p.year).map((p) => p.year!)
-  const now = new Date().getFullYear()
-  return { from: Math.floor(Math.min(now - 10, ...years) / 10) * 10, to: now }
+const blockName = (id: string | null) => (id && talk().names.get(id)) || null
+
+// What to call a block when it has no name yet: the street it's on.
+function blockTitle(block: { id: string | null; latitude: number; longitude: number }) {
+  const name = blockName(block.id)
+  if (name) return name
+  const street = map ? nearestStreet(map, block.longitude, block.latitude) : ''
+  return street ? `A block off ${street}` : 'A block'
+}
+
+// Pins on a block, or covering it: what's gone on there, newest first. The
+// block's history builds itself from what people pin.
+function pinsOn(block: { id: string | null; ring: [number, number][] }) {
+  return S.posts
+    .filter((p) => !(p.author_id && S.blocked.has(p.author_id)) && ((block.id && p.blocks?.includes(block.id)) || inRing(block.ring, p.longitude, p.latitude)))
+    .sort((a, b) => time(b.created_at) - time(a.created_at))
+}
+
+const myCrew = () => (S.userId ? (S.profiles.get(S.userId)?.crew ?? null) : null)
+
+// Tapping the map between streets opens that block: one already kept, or one
+// found from the streets right now and kept from then on (for someone signed in).
+async function openBlockAt(lng: number, lat: number) {
+  if (!map) return
+  const kept = blockOf(lat, lng)
+  const found = kept ? null : await findBlock(map, lng, lat)
+  if (!kept && !found) return
+  const id = kept?.id ?? (S.userId ? await blockFor(found!) : null)
+  if (id) go(`block/${id}`)
+  else {
+    UI.loose = found
+    go('block/here')
+  }
+  // On a phone the sheet comes up over where you tapped: the block moves into view.
+  reveal(lat, lng)
+}
+
+// Making a pin, a tap picks the block it's on, or drops it if it was picked.
+async function pickBlock(lng: number, lat: number) {
+  if (!map) return
+  const kept = blockOf(lat, lng)
+  const found = kept ? null : await findBlock(map, lng, lat)
+  if (!kept && !found) return toast('No block there: pick one between the streets')
+  const id = kept?.id ?? (await blockFor(found!))
+  if (!id) return failed("Couldn't pick that block")
+  if (UI.route.kind !== 'new') return
+  const had = UI.draftBlocks.includes(id)
+  if (!had && UI.draftBlocks.length >= 12) return toast('Twelve blocks at most')
+  const blocks = had ? UI.draftBlocks.filter((b) => b !== id) : [...UI.draftBlocks, id]
+  // The pin goes in the first block picked, unless it's in one already.
+  const draft = UI.draft ?? viewCenter()
+  const inside = blocks.some((b) => {
+    const block = S.blocks.get(b)
+    return block && inRing(block.ring, draft.longitude, draft.latitude)
+  })
+  const first = S.blocks.get(blocks[0])
+  ui({ draftBlocks: blocks, draft: !inside && first ? { latitude: first.latitude, longitude: first.longitude } : draft })
+}
+
+// Tagging is done in person: signed in, in a crew, and standing in the block
+// or across the street from it. Then the spraying.
+async function startTag(blockId: string) {
+  if (needAccount()) return false
+  if (!myCrew()) return false // the sheet asks which crew first
+  const block = S.blocks.get(blockId)
+  if (!block) return false
+  const here = S.here ?? (await watchHere())
+  if (!here) {
+    toast("Turn on your location: you tag a block by being there")
+    return true
+  }
+  const away = metersToBlock(block.ring, here.latitude, here.longitude)
+  if (away > 50) {
+    toast(`You're ${meters(away)} away. Tagging is done in person`)
+    return true
+  }
+  ui({ spray: blockId })
+  return true
+}
+
+// Looking back: the map, the feed and the blocks as they were at a moment. The
+// timeline reaches back an hour, a day, a week, a month or a year, and moves a
+// minute at a time over the last hour, up to a day at a time over the year.
+const SPANS = [
+  { id: 'hour', label: 'Hour', span: 3600000, step: 60000 },
+  { id: 'day', label: 'Day', span: 86400000, step: 600000 },
+  { id: 'week', label: 'Week', span: 7 * 86400000, step: 3600000 },
+  { id: 'month', label: 'Month', span: 30 * 86400000, step: 6 * 3600000 },
+  { id: 'year', label: 'Year', span: 365 * 86400000, step: 86400000 },
+] as const
+type SpanId = (typeof SPANS)[number]['id']
+const spanOf = (id: SpanId) => SPANS.find((s) => s.id === id)!
+
+// "Now", "Today 2:35 pm", "Tue 9 Sep, 9 pm", "9 Sep 2025": as fine as the span.
+function thenText(at: number, span: SpanId) {
+  if (Date.now() - at < 60000) return 'Now'
+  const d = new Date(at)
+  const clock = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const today = startOfDay(new Date())
+  if (span === 'hour' || span === 'day') {
+    const day = startOfDay(d) === today ? 'Today' : startOfDay(d) === today - 86400000 ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short' })
+    return `${day} ${clock}`
+  }
+  if (span === 'week' || span === 'month') {
+    return `${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, ${d.toLocaleTimeString(undefined, { hour: 'numeric' })}`
+  }
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// Now, and the moment the timeline is at (never later than now).
+function thenNow() {
+  const now = Date.now()
+  return { now, at: Math.min(UI.then ?? now, now) }
+}
+
+let playTimer = 0
+
+function stopPlaying() {
+  window.clearInterval(playTimer)
+  UI.playing = false
 }
 
 function toggleThen() {
-  ui({ then: UI.then === null ? loreSpan().to : null })
+  stopPlaying()
+  ui({ then: UI.then === null ? Date.now() : null })
 }
 
-// A four-digit year typed in, or nothing.
-const typedYear = (text: string) => (/^\d{4}$/.test(text.trim()) ? Number(text.trim()) : null)
+// Somewhere on the timeline, kept within it.
+function setThen(at: number) {
+  const { span } = spanOf(UI.thenSpan)
+  const now = Date.now()
+  ui({ then: Math.max(now - span, Math.min(now, at)) })
+}
 
-// The area last walked into, so it's named once on the way in.
+function setSpan(id: SpanId) {
+  UI.thenSpan = id
+  setThen(UI.then ?? Date.now())
+}
+
+// Play: from the start of the span (or from where it is), up to now in about
+// ten seconds, the city filling in as it goes.
+function playThen() {
+  if (UI.playing) {
+    stopPlaying()
+    changed()
+    return
+  }
+  const { span } = spanOf(UI.thenSpan)
+  let at = UI.then === null || UI.then > Date.now() - span / 60 ? Date.now() - span : UI.then
+  UI.playing = true
+  setThen(at)
+  playTimer = window.setInterval(() => {
+    at += span / 125
+    if (at >= Date.now()) {
+      stopPlaying()
+      setThen(Date.now())
+    } else setThen(at)
+  }, 80)
+}
+
+// The block last walked into, so it's named once on the way in.
 let lastRegion = ''
 let districtTimer = 0
 
@@ -628,7 +833,7 @@ function buildMarkers(posts: Post[]): Marker[] {
     })
   }
 
-  // Friends are where they are now, so looking back in time leaves them out.
+  // Friends are where they are now, so looking back leaves them out.
   for (const userId of UI.then === null ? S.locations.keys() : []) {
     const loc = locationOf(userId)
     if (userId === S.userId || !loc) continue
@@ -1236,11 +1441,6 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
             </span>
           )}
           <span className="nowrap">{meters(away)}</span>
-          {post.year && (
-            <span className="when lore">
-              <Icon name="book" size={12} /> {post.year}
-            </span>
-          )}
           {soon && (
             <span className={soon === 'now' ? 'when now' : 'when'}>
               <Icon name="calendar" size={12} /> {soon}
@@ -1378,9 +1578,7 @@ function Feed() {
         ) : !S.ready ? (
           <div className="skeleton">{[0, 1, 2, 3].map((i) => <div key={i} />)}</div>
         ) : rows.length === 0 ? (
-          <Empty icon={UI.then !== null ? 'book' : 'pin'}>
-            {UI.then !== null ? `Nothing remembered from before ${UI.then} here yet. Pin some lore: a place, a year, what happened.` : EMPTY_TAB[UI.tab]}
-          </Empty>
+          <Empty icon="pin">{EMPTY_TAB[UI.tab]}</Empty>
         ) : (
           rows.map(({ post, away, active }, i) => {
             // In Latest, a line where the new stuff since your last visit ends.
@@ -1395,7 +1593,7 @@ function Feed() {
         )}
       </div>
       <footer className="feed-foot muted small">
-        {plural(rows.length, 'pin')} · {TAB_ORDER[UI.tab]}
+        {plural(rows.length, 'pin')} · {UI.then === null ? TAB_ORDER[UI.tab] : 'as it was then'}
       </footer>
     </aside>
   )
@@ -1423,7 +1621,6 @@ function PostView({ post }: { post: Post }) {
   const [title, setTitle] = useState(post.title)
   const [body, setBody] = useState(post.description)
   const [starts, setStarts] = useState(post.starts_at ? toLocalInput(post.starts_at) : '')
-  const [year, setYear] = useState(post.year ? String(post.year) : '')
   const [flair, setFlair] = useState<Flair>(post.flair)
   const [doomedReply, setDoomedReply] = useState<string | null>(null) // a reply of mine waiting for "really?"
   const [reporting, setReporting] = useState(false)
@@ -1436,6 +1633,11 @@ function PostView({ post }: { post: Post }) {
   const me = S.userId
   const mine = !!me && post.author_id === me
   const replies = S.replies.filter((r) => r.post_id === post.id && !(r.author_id && S.blocked.has(r.author_id)))
+  const said = replies.filter((r) => !r.deleted_at).length
+  const tree = threadOf(replies, (a: Reply, b: Reply) => time(a.created_at) - time(b.created_at))
+  const people = [...new Set([post.author_id, ...replies.map((r) => r.author_id), ...friendIds(), ...S.profiles.keys()])].filter(
+    (id): id is string => !!id && id !== me && !S.blocked.has(id),
+  )
   const { likes, liked } = stats()
   const media = S.media.filter((m) => m.post_id === post.id)
   const interested = S.interests.filter((i) => i.post_id === post.id).map((i) => i.user_id)
@@ -1455,8 +1657,7 @@ function PostView({ post }: { post: Post }) {
 
   async function save() {
     if (!title.trim()) return
-    const lore = flair === 'lore'
-    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), flair, starts_at: lore ? null : fromLocalInput(starts), year: lore ? typedYear(year) : null })) {
+    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), flair, starts_at: fromLocalInput(starts) })) {
       setEditing(false)
       setHistory(null)
     } else failed("Couldn't save")
@@ -1498,9 +1699,7 @@ function PostView({ post }: { post: Post }) {
       foot={
         editing ? undefined : me ? (
           <Composer
-            people={[...new Set([post.author_id, ...replies.map((r) => r.author_id), ...friendIds(), ...S.profiles.keys()])].filter(
-              (id): id is string => !!id && id !== me && !S.blocked.has(id),
-            )}
+            people={people}
             placeholder={`Reply to ${post.author_id ? firstName(post.author_id) : 'this pin'}…`}
             onSend={async (text) => {
               const ok = await reply(post.id, text)
@@ -1524,7 +1723,6 @@ function PostView({ post }: { post: Post }) {
               {ago(post.created_at)}
               {street && ` · ${street}`}
               {away !== null && ` · ${awayText(away)}`}
-              {post.area && ` · covers ${areaText(post.area, post.latitude)}`}
             </div>
           </div>
         </button>
@@ -1546,21 +1744,12 @@ function PostView({ post }: { post: Post }) {
           <FlairPick value={flair} onPick={setFlair} />
           <input className="input title-input" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} autoFocus />
           <textarea className="input" rows={5} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
-          {flair === 'lore' ? (
-            <label className="field when-field">
-              <span>
-                The year it happened <em className="muted">· optional</em>
-              </span>
-              <input className="input" inputMode="numeric" maxLength={4} placeholder="1986" value={year} onChange={(e) => setYear(e.target.value)} />
-            </label>
-          ) : (
-            <label className="field when-field">
-              <span>
-                When <em className="muted">· optional</em>
-              </span>
-              <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
-            </label>
-          )}
+          <label className="field when-field">
+            <span>
+              When <em className="muted">· optional</em>
+            </span>
+            <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+          </label>
           <div className="btn-row">
             <button className="btn" onClick={() => setEditing(false)}>
               Cancel
@@ -1573,13 +1762,7 @@ function PostView({ post }: { post: Post }) {
       ) : (
         <>
           <h1 className="post-title">{post.title}</h1>
-          {post.year && (
-            <div className="when-line lore">
-              <Icon name="book" size={16} />
-              <strong>{post.year}</strong>
-              <span className="muted">· {yearsAgo(post.year)}</span>
-            </div>
-          )}
+          {post.blocks && post.blocks.length > 0 && <Covers post={post} />}
           {post.starts_at && (
             <div className={soon === 'now' ? 'when-line now' : 'when-line'}>
               <Icon name="calendar" size={16} />
@@ -1759,47 +1942,63 @@ function PostView({ post }: { post: Post }) {
             </div>
           )}
 
-          <div className="section">{replies.length ? plural(replies.length, 'reply', 'replies') : 'Replies'}</div>
-          {replies.length === 0 && <p className="muted">No replies yet. Start the conversation.</p>}
-          {replies.map((r) => (
-            <div key={r.id} className="reply">
-              <button className="plain" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
-                <Avatar id={r.author_id} size={30} />
-              </button>
-              <div>
-                <div className="small">
-                  <button className="plain name" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
-                    {authorName(r)}
-                  </button>
-                  {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
-                  <span className="muted"> · {ago(r.created_at)}</span>
-                  {me && r.author_id === me && (
-                    <button
-                      className={doomedReply === r.id ? 'link danger-link' : 'link quiet'}
-                      onClick={async () => {
-                        if (doomedReply !== r.id) return setDoomedReply(r.id)
-                        if (!(await deleteReply(r.id))) failed("Couldn't delete")
-                      }}
-                      onBlur={() => setDoomedReply(null)}
-                    >
-                      {doomedReply === r.id ? 'really delete?' : 'delete'}
-                    </button>
-                  )}
-                </div>
-                <div className="reply-text">
-                  <Mentions text={r.content} />
-                </div>
-                <button
-                  className={liked.has(r.id) ? 'like on' : 'like'}
-                  aria-pressed={liked.has(r.id)}
-                  aria-label={liked.has(r.id) ? 'Unlike' : 'Like'}
-                  onClick={() => !needAccount() && toggleLike(r.id).then((ok) => ok || failed("Couldn't update"))}
-                >
-                  <Icon name="heart" size={13} />
-                  {(likes.get(r.id) ?? 0) > 0 && <span>{likes.get(r.id)}</span>}
-                </button>
-              </div>
-            </div>
+          <div className="section">{said ? plural(said, 'reply', 'replies') : 'Replies'}</div>
+          {said === 0 && <p className="muted">No replies yet. Start the conversation.</p>}
+          {tree.top.map((r) => (
+            <Thread
+              key={r.id}
+              item={r}
+              below={tree.below}
+              people={people}
+              answer={(r, text) => reply(post.id, text, r.id)}
+              main={(r, answer) =>
+                r.deleted_at ? (
+                  <div className="comment-text muted">[deleted]</div>
+                ) : (
+                  <>
+                    <div className="comment-head small">
+                      <button className="plain" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
+                        <Avatar id={r.author_id} size={22} />
+                      </button>
+                      <button className="plain name" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
+                        {authorName(r)}
+                      </button>
+                      {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
+                      <span className="muted"> · {ago(r.created_at)}</span>
+                      {me && r.author_id === me && (
+                        <button
+                          className={doomedReply === r.id ? 'link danger-link' : 'link quiet'}
+                          onClick={async () => {
+                            if (doomedReply !== r.id) return setDoomedReply(r.id)
+                            if (!(await deleteReply(r.id))) failed("Couldn't delete")
+                          }}
+                          onBlur={() => setDoomedReply(null)}
+                        >
+                          {doomedReply === r.id ? 'really delete?' : 'delete'}
+                        </button>
+                      )}
+                    </div>
+                    <div className="comment-text reply-text">
+                      <Mentions text={r.content} />
+                    </div>
+                    <div className="comment-actions">
+                      <button
+                        className={liked.has(r.id) ? 'like on' : 'like'}
+                        aria-pressed={liked.has(r.id)}
+                        aria-label={liked.has(r.id) ? 'Unlike' : 'Like'}
+                        onClick={() => !needAccount() && toggleLike(r.id).then((ok) => ok || failed("Couldn't update"))}
+                      >
+                        <Icon name="heart" size={13} />
+                        {(likes.get(r.id) ?? 0) > 0 && <span>{likes.get(r.id)}</span>}
+                      </button>
+                      <button className="link answer" onClick={answer}>
+                        Reply
+                      </button>
+                    </div>
+                  </>
+                )
+              }
+            />
           ))}
         </>
       )}
@@ -1950,7 +2149,9 @@ function ProfileView({ id }: { id: string }) {
           <Avatar id={id} size={64} dot />
         )}
         <div>
-          <h1>{profile.display_name}</h1>
+          <h1>
+            {profile.display_name} {profile.crew && <CrewBadge crew={profile.crew} />}
+          </h1>
           <div className="muted small">
             {profile.neighbourhood && <>{profile.neighbourhood} · </>}
             Joined {new Date(profile.created_at).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
@@ -2255,7 +2456,8 @@ function InboxView() {
       const post = S.posts.find((p) => p.id === n.post_id)
       if (post) openPin(post)
       else toast('That pin is gone')
-    } else if (n.actor_id) go(`user/${n.actor_id}`)
+    } else if (n.block_id) go(`block/${n.block_id}`)
+    else if (n.actor_id) go(`user/${n.actor_id}`)
   }
 
   return (
@@ -2470,6 +2672,7 @@ const MUTABLE: [string, string][] = [
   ['friend_accept', 'Friend requests accepted'],
   ['friend_post', 'Friends pinning something new'],
   ['mention', 'Someone mentioning you'],
+  ['turf', 'Another crew hitting blocks you tagged'],
   ['nearby_pin', 'New pins close to you'],
   ['friend_nearby', 'A friend a street away'],
   ['starting_soon', "Things you're in on, an hour before"],
@@ -2657,7 +2860,6 @@ function ComposeView() {
   const [body, setBody] = useState('')
   const [flair, setFlair] = useState<Flair>('general')
   const [starts, setStarts] = useState('')
-  const [year, setYear] = useState('')
   const [attached, setAttached] = useState<{ file: File; url: string }[]>([])
   const [busy, setBusy] = useState(false)
 
@@ -2680,7 +2882,6 @@ function ComposeView() {
 
   if (!S.userId) return <SignInFirst title="New pin" icon="plus" why="Join to pin what's happening around you." />
   const draft = UI.draft ?? viewCenter()
-  const area = UI.draftArea
   const street = map ? nearestStreet(map, draft.longitude, draft.latitude) : ''
 
   async function submit() {
@@ -2690,11 +2891,10 @@ function ComposeView() {
       title: title.trim(),
       description: body.trim(),
       flair,
-      startsAt: flair === 'lore' ? null : fromLocalInput(starts),
-      year: flair === 'lore' ? typedYear(year) : null,
+      startsAt: fromLocalInput(starts),
       latitude: draft.latitude,
       longitude: draft.longitude,
-      area: area && ('r' in area || area.ring.length >= 3) ? area : null,
+      blocks: UI.draftBlocks,
       files: attached.map((a) => a.file),
     })
     setBusy(false)
@@ -2740,39 +2940,28 @@ function ComposeView() {
 
       <div className="field area-field">
         <span>
-          Area <em className="muted">· a stretch of the city, not just a spot</em>
+          Where it happens <em className="muted">· a spot, or the blocks it takes over</em>
         </span>
         <div className="tabs">
-          <button className={!area ? 'tab on' : 'tab'} onClick={() => ui({ draftArea: null })}>
+          <button className={!UI.picking && !UI.draftBlocks.length ? 'tab on' : 'tab'} onClick={() => ui({ picking: false, draftBlocks: [] })}>
             A spot
           </button>
-          <button className={area && 'r' in area ? 'tab on' : 'tab'} onClick={() => ui({ draftArea: { r: 150 } })}>
-            A circle
-          </button>
-          <button className={area && 'ring' in area ? 'tab on' : 'tab'} onClick={() => ui({ draftArea: { ring: [] } })}>
+          <button className={UI.picking || UI.draftBlocks.length ? 'tab on' : 'tab'} onClick={() => ui({ picking: true })}>
             Some blocks
           </button>
         </div>
-        {area && 'r' in area && (
-          <label className="area-range">
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={Math.round((Math.log(area.r / 30) / Math.log(1000 / 30)) * 100)}
-              onChange={(e) => ui({ draftArea: { r: Math.round((30 * (1000 / 30) ** (Number(e.target.value) / 100)) / 10) * 10 } })}
-            />
-            <span>{area.r} m around</span>
-          </label>
-        )}
-        {area && 'ring' in area && (
+        {(UI.picking || UI.draftBlocks.length > 0) && (
           <div className="area-help muted small">
-            {area.ring.length < 3
-              ? `${narrow() ? 'Tap' : 'Click'} its corners on the map: ${area.ring.length} so far, at least 3`
-              : `${area.ring.length} corners, ${areaText(area, draft.latitude)}. The pin sits in the middle.`}
-            {area.ring.length > 0 && (
-              <button className="link small" onClick={() => ui({ draftArea: { ring: area.ring.slice(0, -1) } })}>
-                Undo
+            {UI.draftBlocks.length
+              ? `${plural(UI.draftBlocks.length, 'block')}${UI.draftBlocks.length < 12 ? `; ${narrow() ? 'tap' : 'click'} more, or one again to drop it` : ', the most there can be'}`
+              : `${narrow() ? 'Tap' : 'Click'} the blocks on the map, between the streets`}
+            {UI.picking ? (
+              <button className="link small" onClick={() => ui({ picking: false })}>
+                Done
+              </button>
+            ) : (
+              <button className="link small" onClick={() => ui({ picking: true })}>
+                Change
               </button>
             )}
           </div>
@@ -2783,7 +2972,7 @@ function ComposeView() {
 
       <input
         className="input title-input"
-        placeholder={flair === 'lore' ? 'What happened here?' : "What's happening?"}
+        placeholder="What's happening?"
         value={title}
         maxLength={120}
         autoFocus={!narrow()}
@@ -2792,26 +2981,17 @@ function ComposeView() {
       <textarea
         className="input"
         rows={5}
-        placeholder={flair === 'lore' ? 'Tell it the way you remember it: who was there, what it was like…' : 'Details: where exactly, who should come, what to bring…'}
+        placeholder="Details: where exactly, who should come, what to bring…"
         value={body}
         maxLength={2000}
         onChange={(e) => setBody(e.target.value)}
       />
-      {flair === 'lore' ? (
-        <label className="field when-field">
-          <span>
-            The year it happened <em className="muted">· so it shows when the map goes back in time</em>
-          </span>
-          <input className="input" inputMode="numeric" maxLength={4} placeholder="1986" value={year} onChange={(e) => setYear(e.target.value)} />
-        </label>
-      ) : (
-        <label className="field when-field">
-          <span>
-            When <em className="muted">· optional, for things that happen at a time</em>
-          </span>
-          <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
-        </label>
-      )}
+      <label className="field when-field">
+        <span>
+          When <em className="muted">· optional, for things that happen at a time</em>
+        </span>
+        <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+      </label>
 
       <label className="drop">
         <input type="file" accept="image/*,video/*" multiple onChange={(e) => attach(e.target.files)} />
@@ -2828,6 +3008,596 @@ function ComposeView() {
         </div>
       )}
     </Panel>
+  )
+}
+
+//
+// Threads: answers under what they answer, Reddit-style.
+//
+
+type Threaded = { id: string; parent_id: string | null; deleted_at: string | null }
+
+// Comments as a tree: the ones answering nothing (or something no longer here),
+// and what's under each. Each level in the order given.
+function threadOf<T extends Threaded>(items: T[], order: (a: T, b: T) => number) {
+  const ids = new Set(items.map((i) => i.id))
+  const top: T[] = []
+  const below = new Map<string, T[]>()
+  for (const item of items) {
+    if (item.parent_id && ids.has(item.parent_id)) {
+      const list = below.get(item.parent_id)
+      if (list) list.push(item)
+      else below.set(item.parent_id, [item])
+    } else top.push(item)
+  }
+  top.sort(order)
+  for (const list of below.values()) list.sort(order)
+  return { top, below }
+}
+
+function countBelow(id: string, below: Map<string, Threaded[]>): number {
+  return (below.get(id) ?? []).reduce((n, kid) => n + 1 + countBelow(kid.id, below), 0)
+}
+
+// One comment and everything under it. The line down the left folds the thread
+// away; Reply opens a box right under the comment.
+function Thread<T extends Threaded>({ item, below, main, answer, people }: {
+  item: T
+  below: Map<string, T[]>
+  main: (item: T, answer: () => void) => ReactNode
+  answer: (item: T, text: string) => Promise<boolean>
+  people?: string[]
+}) {
+  const [folded, setFolded] = useState(false)
+  const [answering, setAnswering] = useState(false)
+  const kids = below.get(item.id) ?? []
+  return (
+    <div className={item.deleted_at ? 'comment deleted' : 'comment'}>
+      <div className="comment-main">
+        {main(item, () => !needAccount() && setAnswering(!answering))}
+        {answering && (
+          <Composer
+            placeholder="Your answer…"
+            autoFocus
+            people={people}
+            onSend={async (text) => {
+              const ok = await answer(item, text)
+              if (ok) setAnswering(false)
+              else failed("Couldn't send")
+              return ok
+            }}
+          />
+        )}
+      </div>
+      {kids.length > 0 &&
+        (folded ? (
+          <button className="folded" onClick={() => setFolded(false)}>
+            <Icon name="plus" size={12} /> {plural(countBelow(item.id, below), 'more reply', 'more replies')}
+          </button>
+        ) : (
+          <div className="comment-kids">
+            <button className="thread-line" onClick={() => setFolded(true)} aria-label="Fold this thread" title="Fold this thread" />
+            {kids.map((kid) => (
+              <Thread key={kid.id} item={kid} below={below} main={main} answer={answer} people={people} />
+            ))}
+          </div>
+        ))}
+    </div>
+  )
+}
+
+//
+// City blocks: what people call them, what they say about them, what's gone on
+// there, and whose turf they are.
+//
+
+function CrewBadge({ crew, size = 'small' }: { crew: Crew; size?: 'small' | 'big' }) {
+  return (
+    <span className={`crew-badge ${size}`} style={{ '--crew': crews[crew].color } as React.CSSProperties}>
+      {crews[crew].tag}
+    </span>
+  )
+}
+
+// The four crews, to join one. How many blocks each holds and who's in it.
+function CrewPick({ onJoined }: { onJoined?: () => void }) {
+  const mine = myCrew()
+  const held = turf().held
+  const members = new Map<Crew, number>()
+  for (const p of S.profiles.values()) if (p.crew) members.set(p.crew, (members.get(p.crew) ?? 0) + 1)
+  return (
+    <div className="crew-pick">
+      {(Object.keys(crews) as Crew[]).map((crew) => (
+        <button
+          key={crew}
+          className={crew === mine ? 'crew-card on' : 'crew-card'}
+          style={{ '--crew': crews[crew].color } as React.CSSProperties}
+          onClick={async () => {
+            if (needAccount() || crew === mine) return
+            if (await joinCrew(crew)) {
+              play('sting')
+              toast(`You're one of the ${crews[crew].name} now`)
+              onJoined?.()
+            } else failed("Couldn't join")
+          }}
+        >
+          <CrewBadge crew={crew} size="big" />
+          <strong>{crews[crew].name}</strong>
+          <em>{crews[crew].motto}</em>
+          <small>
+            {plural(held.get(crew) ?? 0, 'block')} · {plural(members.get(crew) ?? 0, 'member')}
+          </small>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// A line on a block: its votes, what it says, who said it; answering it, when
+// it can be answered (names can't).
+function WordRow({ word, answer, at }: { word: Word; answer?: () => void; at?: number }) {
+  const { score, mine } = talk(at)
+  const points = score.get(word.id) ?? 0
+  const my = mine.get(word.id)
+  const vote1 = async (value: 1 | -1) => {
+    if (needAccount()) return
+    if (!(await vote(word.id, value))) failed("Couldn't vote")
+  }
+  if (word.deleted_at) return <div className="word"><div className="comment-text muted">[deleted]</div></div>
+  return (
+    <div className={points <= -3 ? 'word buried' : 'word'}>
+      <div className="votes">
+        <button className={my === 1 ? 'on' : ''} onClick={() => vote1(1)} aria-label="Up" title="Up">
+          <Icon name="up" size={14} />
+        </button>
+        <b>{points}</b>
+        <button className={my === -1 ? 'on down' : ''} onClick={() => vote1(-1)} aria-label="Down" title="Down">
+          <Icon name="down" size={14} />
+        </button>
+      </div>
+      <div className="word-main">
+        <div className={word.is_name ? 'word-body name comment-text' : 'word-body comment-text'}>
+          <Linked text={word.body} />
+        </div>
+        <div className="muted small">
+          {word.author_id ? (
+            <button className="link small" onClick={() => go(`user/${word.author_id}`)}>
+              {nameOf(word.author_id)}
+            </button>
+          ) : (
+            'someone'
+          )}
+          {' · '}
+          {ago(word.created_at)}
+          {answer && at === undefined && (
+            <>
+              {' · '}
+              <button className="link small answer" onClick={answer}>
+                Reply
+              </button>
+            </>
+          )}
+          {word.author_id === S.userId && at === undefined && (
+            <>
+              {' · '}
+              <button className="link small" onClick={() => unsay(word.id).then((ok) => !ok && failed("Couldn't take it back"))}>
+                Take back
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BlockView() {
+  const [line, setLine] = useState('')
+  const [naming, setNaming] = useState('')
+  const [order, setOrder] = useState<'top' | 'new'>('top')
+  const [choosing, setChoosing] = useState(false) // tagging, but not in a crew yet
+  const block = openBlock()
+  if (!block) return <Missing what="block" />
+  const kept = block.id
+  const at = UI.then ?? undefined // looking back: the block as it was then, to read, not to change
+  const { score } = talk(at)
+  const { holder, strength, hot } = turf(at)
+  const crew = kept ? holder.get(kept) : undefined
+  const away = fromMe(block)
+  const words = kept ? S.words.filter((w) => w.block_id === kept && !(w.author_id && S.blocked.has(w.author_id)) && (at === undefined || time(w.created_at) <= at)) : []
+  const byScore = (a: Word, b: Word) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) || time(b.created_at) - time(a.created_at)
+  const names = words.filter((w) => w.is_name).sort(byScore)
+  const lines = threadOf(words.filter((w) => !w.is_name), byScore)
+  if (order === 'new') lines.top.sort((a, b) => time(b.created_at) - time(a.created_at))
+  const pins = pinsOn(block).filter((p) => at === undefined || time(p.created_at) <= at)
+  const standing = kept ? [...(strength.get(kept) ?? new Map<Crew, number>())].sort((a, b) => b[1] - a[1]) : []
+  const top = standing[0]?.[1] ?? 0
+  const attackers = [...((kept && hot.get(kept)) || [])]
+
+  async function speak(isName: boolean) {
+    const text = (isName ? naming : line).trim()
+    if (!text || !kept || needAccount()) return
+    if (await say(kept, text, isName)) {
+      if (isName) setNaming('')
+      else setLine('')
+    } else failed(isName ? "Couldn't put the name up" : "Couldn't say it")
+  }
+
+  async function tag() {
+    if (!kept) return needAccount()
+    if (!myCrew() && S.userId) return setChoosing(true)
+    await startTag(kept)
+  }
+
+  return (
+    <Panel title={blockTitle(block)} icon={<Icon name="flag" />} className="block-view">
+      <div className="block-head">
+        <div className="muted small">
+          {sizeText(block.ring)}
+          {away !== null && ` · ${awayText(away)}`}
+        </div>
+        {at !== undefined && (
+          <div className="banner then-note">
+            <Icon name="clock" size={16} /> As it was {thenText(at, UI.thenSpan).toLowerCase()}.
+            <button className="link" onClick={() => toggleThen()}>
+              Back to now
+            </button>
+          </div>
+        )}
+        {!kept && (
+          <div className="banner">
+            <Icon name="flag" size={16} /> Join to name this block, write on it and fight for it.
+            <button className="link" onClick={() => needAccount()}>
+              Join
+            </button>
+          </div>
+        )}
+      </div>
+
+      {kept && (
+        <section className={crew ? 'turf-card held' : 'turf-card'} style={crew ? ({ '--crew': crews[crew].color } as React.CSSProperties) : undefined}>
+          <div className="turf-line">
+            {crew ? <CrewBadge crew={crew} /> : <Icon name="flag" size={18} />}
+            <div>
+              <strong>{crew ? `${crews[crew].name} turf` : "Nobody's turf"}</strong>
+              <div className="muted small">{crew ? crews[crew].motto : 'The first crew to tag it holds it.'}</div>
+            </div>
+            {at === undefined && (
+              <button className="btn primary spray-btn" onClick={tag}>
+                <Icon name="spray" size={16} /> {crew && crew === myCrew() ? 'Touch up' : 'Tag it'}
+              </button>
+            )}
+          </div>
+          {attackers.length > 0 && (
+            <div className="war">
+              <Icon name="alert" size={14} /> Under attack by the {attackers.map((c) => crews[c].name).join(' and the ')}
+            </div>
+          )}
+          {standing.length > 0 && (
+            <div className="standing">
+              {standing.map(([c, s]) => (
+                <div key={c} className="bar" style={{ '--crew': crews[c].color } as React.CSSProperties}>
+                  <span>{crews[c].name}</span>
+                  <i style={{ width: `${Math.max(4, (s / top) * 100)}%` }} />
+                  <b>{s < 10 ? s.toFixed(1) : Math.round(s)}</b>
+                </div>
+              ))}
+            </div>
+          )}
+          {choosing && (
+            <>
+              <div className="section">Pick your crew first</div>
+              <CrewPick
+                onJoined={() => {
+                  setChoosing(false)
+                  startTag(kept)
+                }}
+              />
+            </>
+          )}
+        </section>
+      )}
+
+      {kept && (
+        <>
+          <div className="section">What people call it</div>
+          {names.map((w) => (
+            <WordRow key={w.id} word={w} at={at} />
+          ))}
+          {S.userId && at === undefined && (
+            <form className="say" onSubmit={(e) => { e.preventDefault(); speak(true) }}>
+              <input className="input" value={naming} maxLength={32} placeholder={names.length ? 'Call it something else' : 'Give it a name'} onChange={(e) => setNaming(e.target.value)} />
+              <button className="btn" disabled={!naming.trim()}>
+                Suggest
+              </button>
+            </form>
+          )}
+          {!names.length && !S.userId && <p className="muted small">No name yet.</p>}
+
+          <div className="section with-tabs">
+            <span>The word on the street</span>
+            <span className="mini-tabs">
+              <button className={order === 'top' ? 'on' : ''} onClick={() => setOrder('top')}>
+                Top
+              </button>
+              <button className={order === 'new' ? 'on' : ''} onClick={() => setOrder('new')}>
+                New
+              </button>
+            </span>
+          </div>
+          {lines.top.map((w) => (
+            <Thread key={w.id} item={w} below={lines.below} main={(w, answer) => <WordRow word={w} answer={answer} at={at} />} answer={(w, text) => say(kept, text, false, w.id)} />
+          ))}
+          {!lines.top.length && <p className="muted small">{at === undefined ? "Nothing said here yet. What's the story with this block?" : 'Nothing said here by then.'}</p>}
+          {S.userId && at === undefined && (
+            <form className="say" onSubmit={(e) => { e.preventDefault(); speak(false) }}>
+              <input className="input" value={line} maxLength={200} placeholder="Say something about this block" onChange={(e) => setLine(e.target.value)} />
+              <button className="btn primary" disabled={!line.trim()}>
+                Say
+              </button>
+            </form>
+          )}
+        </>
+      )}
+
+      <div className="section">What's gone on here</div>
+      {pins.length ? (
+        pins.slice(0, 20).map((p) => (
+          <button key={p.id} className="row mini-pin" onClick={() => openPin(p)}>
+            <Blip flair={p.flair} size={24} />
+            <span className="clip">{p.title}</span>
+            <span className="muted small nowrap">{p.resolved_at ? 'resolved' : ago(p.created_at)}</span>
+          </button>
+        ))
+      ) : (
+        <p className="muted small">No pins here yet.</p>
+      )}
+      <div className="btn-row">
+        <button
+          className="btn"
+          onClick={() => {
+            if (needAccount()) return
+            UI.draft = { latitude: block.latitude, longitude: block.longitude }
+            go('new')
+            ui({ draftBlocks: kept ? [kept] : [] })
+          }}
+        >
+          <Icon name="plus" size={14} /> Pin something here
+        </button>
+        {away !== null && away > 50 && (
+          <button className="btn" onClick={() => ui({ walk: `spot/${block.latitude},${block.longitude}/${blockTitle(block)}` })}>
+            <Icon name="arrow" size={14} /> Get there
+          </button>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
+// The blocks a pin covers, by name where they have one.
+function Covers({ post }: { post: Post }) {
+  const ids = (post.blocks ?? []).filter((id) => S.blocks.has(id))
+  if (!ids.length) return null
+  const named = ids.filter((id) => blockName(id))
+  return (
+    <div className="when-line covers">
+      <Icon name="flag" size={16} />
+      <span>
+        Takes over{' '}
+        {named.slice(0, 2).map((id, i) => (
+          <span key={id}>
+            {i > 0 && ' and '}
+            <button className="link" onClick={() => go(`block/${id}`)}>
+              {blockName(id)}
+            </button>
+          </span>
+        ))}
+        {named.length === 0 ? (
+          <button className="link" onClick={() => go(`block/${ids[0]}`)}>
+            {plural(ids.length, 'block')}
+          </button>
+        ) : ids.length > Math.min(2, named.length) ? (
+          ` and ${plural(ids.length - Math.min(2, named.length), 'more block')}`
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+// Turf: how the crews stand, the fights on right now, and your own crew.
+function TurfView() {
+  const { holder, hot, held } = turf()
+  const total = Math.max(1, ...[...held.values()])
+  const mine = myCrew()
+  const fights = [...hot.keys()].map((id) => S.blocks.get(id)).filter((b) => !!b)
+  const myTags = S.tags.filter((t) => t.user_id === S.userId).length
+  return (
+    <Panel title="Turf" icon={<Icon name="flag" />} className="tall turf-view">
+      <p className="muted">
+        Four crews, one city. Stand in a block and tag it: the crew with the most tags holds it. Tags fade by half every three days, so ground has to be
+        kept.
+      </p>
+      <div className="section">Standings</div>
+      <div className="standing big">
+        {(Object.keys(crews) as Crew[])
+          .sort((a, b) => (held.get(b) ?? 0) - (held.get(a) ?? 0))
+          .map((c) => (
+            <div key={c} className="bar" style={{ '--crew': crews[c].color } as React.CSSProperties}>
+              <span>
+                <CrewBadge crew={c} /> {crews[c].name}
+              </span>
+              <i style={{ width: `${Math.max(3, ((held.get(c) ?? 0) / total) * 100)}%` }} />
+              <b>{held.get(c) ?? 0}</b>
+            </div>
+          ))}
+      </div>
+      {fights.length > 0 && (
+        <>
+          <div className="section">Fights on right now</div>
+          {fights.map((b) => (
+            <button key={b.id} className="row mini-pin" onClick={() => { go(`block/${b.id}`); reveal(b.latitude, b.longitude, 16.5) }}>
+              <Icon name="alert" size={18} />
+              <span className="clip">{blockTitle(b)}</span>
+              {holder.get(b.id) && <CrewBadge crew={holder.get(b.id)!} />}
+            </button>
+          ))}
+        </>
+      )}
+      <div className="section">{mine ? `You're one of the ${crews[mine].name}` : 'Pick your crew'}</div>
+      {S.userId ? <CrewPick /> : (
+        <button className="btn primary" onClick={() => needAccount()}>
+          Join to pick a crew
+        </button>
+      )}
+      {mine && <p className="muted small">{myTags ? `${plural(myTags, 'tag')} of yours on the map this month.` : 'Tap a block near you and tag it.'} You can change crews once a day.</p>}
+    </Panel>
+  )
+}
+
+// The spraying: other crews' tags come up on the wall and fade; cover as many
+// as you can in twelve seconds. How it went is what the tag is worth.
+const ROUND = 12000
+type Mark = { id: number; x: number; y: number; crew: Crew; born: number; ttl: number; hit: number; turn: number }
+
+function SprayGame({ blockId }: { blockId: string }) {
+  const crew = myCrew()
+  const block = S.blocks.get(blockId)
+  const [phase, setPhase] = useState<'ready' | 'play' | 'sending' | 'done'>('ready')
+  const [marks, setMarks] = useState<Mark[]>([])
+  const [puffs, setPuffs] = useState<{ id: number; x: number; y: number }[]>([])
+  const [now, setNow] = useState(0)
+  const [result, setResult] = useState<{ points: number; error: string } | null>(null)
+  const started = useRef(0)
+  const nextId = useRef(0)
+  const loop = useRef(0)
+  const live = useRef<Mark[]>([]) // the marks, for the timer, which outlives renders
+  useEffect(() => () => window.clearInterval(loop.current), [])
+
+  const hits = marks.filter((m) => m.hit).length
+  const put = (list: Mark[]) => {
+    live.current = list
+    setMarks(list)
+  }
+
+  function begin(at: number) {
+    const rivals = (Object.keys(crews) as Crew[]).filter((c) => c !== crew)
+    const holder = turf().holder.get(blockId)
+    let spawnAt = 0
+    started.current = at // the click's time, on the same clock as performance.now()
+    put([])
+    setPhase('play')
+    loop.current = window.setInterval(() => {
+      const t = performance.now() - started.current
+      setNow(t)
+      if (t >= ROUND) {
+        window.clearInterval(loop.current)
+        finish()
+        return
+      }
+      if (t < spawnAt) return
+      // Faster, and quicker to fade, as the round goes on; mostly the holders' tags.
+      const k = t / ROUND
+      spawnAt = t + 700 - 330 * k
+      const who = holder && holder !== crew && Math.random() < 0.7 ? holder : rivals[Math.floor(Math.random() * rivals.length)]
+      const mark: Mark = { id: nextId.current++, x: 8 + Math.random() * 76, y: 10 + Math.random() * 70, crew: who, born: t, ttl: 1500 - 500 * k, hit: 0, turn: Math.random() * 30 - 15 }
+      put([...live.current.filter((m) => m.hit || t - m.born < m.ttl), mark])
+    }, 50)
+  }
+
+  async function finish() {
+    setPhase('sending')
+    const covered = live.current.filter((m) => m.hit).length
+    const points = Math.max(1, Math.min(10, Math.round((covered * 10) / 22)))
+    const here = S.here
+    const tag = here ? await tagBlock(blockId, here.latitude, here.longitude, points) : null
+    setResult({ points, error: tag ? '' : takeError() || "Couldn't find you" })
+    setPhase('done')
+  }
+
+  if (!crew || !block) return null
+  const c = crews[crew]
+  const close = () => ui({ spray: null })
+  const after = turf()
+  const nowHolder = after.holder.get(blockId)
+  const theirs = nowHolder && nowHolder !== crew ? after.strength.get(blockId)?.get(nowHolder) ?? 0 : 0
+  const ours = after.strength.get(blockId)?.get(crew) ?? 0
+
+  return (
+    <div className="spray-screen" style={{ '--crew': c.color } as React.CSSProperties} role="dialog" aria-label="Tagging">
+      <div className="spray-top">
+        <CrewBadge crew={crew} />
+        <strong className="clip">{blockTitle(block)}</strong>
+        {phase === 'play' && <span className="spray-clock">{Math.max(0, Math.ceil((ROUND - now) / 1000))}</span>}
+        {phase === 'play' && <span className="spray-score">{hits}</span>}
+        <button className="icon-btn" onClick={close} aria-label="Stop">
+          <Icon name="close" />
+        </button>
+      </div>
+      <div
+        className="wall"
+        onPointerDown={(e) => {
+          if (phase !== 'play') return
+          const r = e.currentTarget.getBoundingClientRect()
+          const puff = { id: nextId.current++, x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 }
+          setPuffs((list) => [...list.slice(-8), puff])
+          play('spray')
+        }}
+      >
+        {puffs.map((p) => (
+          <i key={p.id} className="puff" style={{ left: `${p.x}%`, top: `${p.y}%` }} />
+        ))}
+        {marks.map((m) => {
+          if (!m.hit && now - m.born > m.ttl) return null
+          const fade = m.hit ? 1 : Math.max(0.15, 1 - (now - m.born) / m.ttl)
+          return (
+            <button
+              key={m.id}
+              className={m.hit ? 'mark hit' : 'mark'}
+              style={{ left: `${m.x}%`, top: `${m.y}%`, '--mark': m.hit ? c.color : crews[m.crew].color, '--turn': `${m.turn}deg`, opacity: fade } as React.CSSProperties}
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                if (m.hit || phase !== 'play') return
+                play('spray')
+                navigator.vibrate?.(8)
+                put(live.current.map((x) => (x.id === m.id ? { ...x, hit: performance.now() - started.current } : x)))
+              }}
+            >
+              {m.hit ? c.tag : crews[m.crew].tag}
+            </button>
+          )
+        })}
+        {phase === 'ready' && (
+          <div className="spray-card">
+            <strong>Tag it for the {c.name}</strong>
+            <p>The other crews' tags come up on the wall. Cover as many as you can before they fade: {ROUND / 1000} seconds.</p>
+            <button className="btn primary big" onClick={(e) => begin(e.timeStamp)}>
+              <Icon name="spray" size={18} /> Go
+            </button>
+          </div>
+        )}
+        {phase === 'sending' && <div className="spray-card"><strong>{hits} covered</strong></div>}
+        {phase === 'done' && result && (
+          <div className="spray-card">
+            {result.error ? (
+              <>
+                <strong>No tag this time</strong>
+                <p>{result.error}</p>
+              </>
+            ) : (
+              <>
+                <strong className="spray-points">+{result.points}</strong>
+                <p>
+                  for the {c.name}. {nowHolder === crew ? `${blockTitle(block)} is ${c.name} turf.` : nowHolder ? `The ${crews[nowHolder].name} still hold it: ${Math.round(theirs)} to your ${Math.round(ours)}.` : ''}
+                </p>
+              </>
+            )}
+            <button className="btn primary big" onClick={close}>
+              Done
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -3125,7 +3895,8 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
   const commands: Command[] = [
     { key: 'new', icon: <Icon name="plus" />, label: 'New pin', hint: 'N', run: startCompose },
     { key: 'locate', icon: <Icon name="locate" />, label: 'Where am I', hint: 'L', run: locate },
-    { key: 'then', icon: <Icon name="clock" />, label: UI.then === null ? 'Back in time: the lore of the place' : 'Back to now', hint: 'Y', run: toggleThen },
+    { key: 'then', icon: <Icon name="clock" />, label: UI.then === null ? 'Back in time: the map as it was' : 'Back to now', hint: 'Y', run: toggleThen },
+    { key: 'turf', icon: <Icon name="flag" />, label: 'Turf: the crews and their blocks', run: () => go('turf') },
     ...(walkable() || UI.walk
       ? [{ key: 'walk', icon: <Icon name="arrow" />, label: walkable() && walkable() !== UI.walk ? 'Get there on foot' : 'Stop walking', hint: 'G', run: walkKey }]
       : []),
@@ -3154,6 +3925,18 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
     .slice(0, q ? 8 : 5)
     .map((p) => ({ key: p.id, icon: <Blip flair={p.flair} size={22} />, label: p.title, hint: p.resolved_at ? 'resolved' : ago(p.created_at), run: () => openPin(p) }))
 
+  // Blocks by what people call them.
+  const names = talk().names
+  const blocks = q
+    ? ranked([...names.keys()], (id) => score(words, [names.get(id)]))
+        .slice(0, 5)
+        .map((id) => {
+          const b = S.blocks.get(id)!
+          const holder = turf().holder.get(id)
+          return { key: `block-${id}`, icon: <Icon name="flag" />, label: names.get(id)!, hint: holder ? `${crews[holder].name} turf` : 'block', run: () => { go(`block/${id}`); reveal(b.latitude, b.longitude, 16.5, true) } }
+        })
+    : []
+
   const people = q
     ? ranked([...S.profiles.values()], (p) => score(words, [p.display_name], [p.neighbourhood]))
         .slice(0, 6)
@@ -3176,6 +3959,7 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
   return [
     { group: 'Get there', items: walking ? ways : [] },
     { group: q ? 'Pins' : 'Recent pins', items: pins },
+    { group: 'Blocks', items: blocks },
     { group: 'People', items: people },
     { group: 'On the map', items: walking ? [] : places },
     { group: 'Get there', items: walking ? [] : ways },
@@ -3293,6 +4077,19 @@ function Legend() {
           <span>The way there (G)</span>
         </div>
       </div>
+      <div className="section">Turf</div>
+      <div className="legend-grid">
+        {(Object.keys(crews) as Crew[]).map((c) => (
+          <div key={c}>
+            <span className="legend-turf" style={{ background: crews[c].color }} />
+            <span>{crews[c].name}</span>
+          </div>
+        ))}
+        <div>
+          <span className="legend-turf hot" />
+          <span>Being fought over</span>
+        </div>
+      </div>
       <div className="section">Places</div>
       <div className="legend-grid">
         {LEGEND.map(([icon, label]) => (
@@ -3366,13 +4163,15 @@ function onKey(e: KeyboardEvent) {
     return
   }
   if (e.key === 'Escape') {
-    if (UI.palette) ui({ palette: false })
+    if (UI.spray) ui({ spray: null })
+    else if (UI.palette) ui({ palette: false })
     else if (UI.auth) ui({ auth: null })
     else if (UI.legend) ui({ legend: false })
     else if (UI.route.kind) go('')
+    else if (UI.then !== null) toggleThen()
     return
   }
-  if (typing || e.metaKey || e.ctrlKey || e.altKey || UI.palette || UI.auth) return
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || UI.palette || UI.auth || UI.spray) return
 
   const k = e.key.toLowerCase()
   if (k === '/') {
@@ -3405,23 +4204,56 @@ function onKey(e: KeyboardEvent) {
   e.preventDefault()
 }
 
-// Back in time: a slider through the years the lore covers. The map shows what
-// people remember from up to that year, and yellows the further back it goes.
+// Back in time: the stretch of time, the moment on it (a step at a time, or
+// played forward), and what the map holds then.
 function ThenBar() {
-  const span = loreSpan()
-  const then = UI.then!
-  const count = visiblePosts().length
+  const { span, step } = spanOf(UI.thenSpan)
+  const { now, at } = thenNow()
+  const pins = visiblePosts().length
+  const held = [...turf(at).holder.keys()].filter((id) => time(S.blocks.get(id)?.created_at ?? '') <= at).length
   return (
-    <div className="then-bar">
-      <Icon name="clock" size={18} />
-      <input type="range" min={span.from} max={span.to} value={then} onChange={(e) => ui({ then: Number(e.target.value) })} aria-label="Year" />
-      <span className="then-year">
-        <strong>{then}</strong>
-        <small>{plural(count, 'story', 'stories')}</small>
-      </span>
-      <button className="icon-btn" onClick={() => ui({ then: null })} title="Back to now" aria-label="Back to now">
-        <Icon name="close" />
-      </button>
+    <div className="then-bar" role="group" aria-label="Back in time">
+      <div className="then-top">
+        <div className="spans">
+          {SPANS.map((s) => (
+            <button key={s.id} className={s.id === UI.thenSpan ? 'on' : ''} onClick={() => setSpan(s.id)}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <button className="icon-btn" onClick={toggleThen} title="Back to now (Esc)" aria-label="Back to now">
+          <Icon name="close" />
+        </button>
+      </div>
+      <div className="then-track">
+        <button className="icon-btn step-back" onClick={() => setThen(at - step)} aria-label="Back a step" title="Back a step">
+          <Icon name="prev" size={16} />
+        </button>
+        <input
+          type="range"
+          min={now - span}
+          max={now}
+          step={step}
+          value={now - Math.round((now - at) / step) * step}
+          onChange={(e) => {
+            stopPlaying()
+            setThen(Number(e.target.value))
+          }}
+          aria-label="When"
+        />
+        <button className="icon-btn step-forward" onClick={() => setThen(at + step)} aria-label="Forward a step" title="Forward a step">
+          <Icon name="next" size={16} />
+        </button>
+        <button className={UI.playing ? 'icon-btn play on' : 'icon-btn play'} onClick={playThen} aria-label={UI.playing ? 'Pause' : 'Play'} title={UI.playing ? 'Pause' : 'Play it forward'}>
+          <Icon name={UI.playing ? 'pause' : 'play'} size={16} />
+        </button>
+      </div>
+      <div className="then-when">
+        <strong>{thenText(at, UI.thenSpan)}</strong>
+        <small>
+          {plural(pins, 'pin')} · {plural(held, 'block')} held
+        </small>
+      </div>
     </div>
   )
 }
@@ -3499,6 +4331,12 @@ export default function App() {
         if (p.state === 'granted') watchHere()
       })
       .catch(() => {})
+    // Ground changing hands: a moment for whoever took it, news for the crew that lost it.
+    setTurnHandler((blockId, now, was, byMe) => {
+      const name = blockName(blockId) ?? 'the block'
+      if (byMe) celebrate('Turf taken', `${name} is ${crews[now].name} turf`)
+      else if (was && was === myCrew()) toast(`The ${crews[now].name} took ${name} from the ${crews[was].name}`, `block/${blockId}`)
+    })
     setIncomingHandler((title, body, route) => {
       if (document.visibilityState === 'visible') {
         play('tick')
@@ -3521,30 +4359,33 @@ export default function App() {
     let saveTimer = 0
     let lastCenter = center(m)
 
+    // A tap on the map between streets opens that block, a moment later, so a
+    // double tap (or click) that zooms doesn't open it too.
+    let blockTimer = 0
+    let lastEmptyTap = 0
     m.onClick = (marker, lng, lat) => {
+      window.clearTimeout(blockTimer)
       if (UI.route.kind === 'new') {
-        // Drawing an area of blocks, a tap is another corner (on the nearest street
-        // corner), and the pin sits in the middle of them; otherwise a tap moves the pin.
-        const area = UI.draftArea
-        if (area && 'ring' in area) {
-          if (area.ring.length >= 32) return
-          const corner = snapToStreet(m, lng, lat) // corners hold on to the streets
-          const ring: [number, number][] = [...area.ring, [corner.lng, corner.lat]]
-          ui({ draftArea: { ring }, draft: ring.length >= 3 ? ringMiddle(ring) : UI.draft })
-        } else ui({ draft: { latitude: lat, longitude: lng } })
+        if (UI.picking) pickBlock(lng, lat)
+        else ui({ draft: { latitude: lat, longitude: lng } })
         return
       }
       if (!marker) {
-        // Tapping empty map puts the map first: the legend goes, and on a phone the
-        // sheets. With the map clear, a tap inside a pin's area opens the pin.
+        // Tapping empty map puts the map first: the legend goes, and on a phone
+        // the sheets. With the map clear, a tap opens the block.
         if (UI.legend) ui({ legend: false })
         if (narrow() && (UI.route.kind || UI.feed)) {
           ui({ feed: false })
           go('')
           return
         }
-        const region = regionAt(m, lng, lat)
-        if (region && !(UI.route.kind === 'pin' && UI.route.id === region.id)) go(`pin/${region.id}`)
+        const now = performance.now()
+        const second = now - lastEmptyTap < 350
+        lastEmptyTap = second ? 0 : now
+        if (second || m.zoom < 14.5) return
+        blockTimer = window.setTimeout(() => {
+          if (m.lastTap !== 0) openBlockAt(lng, lat) // (a touch double tap zeroes it)
+        }, 320)
         return
       }
       if (marker.kind === 'pin') {
@@ -3566,15 +4407,16 @@ export default function App() {
       }, 300)
     }
     m.onRoute = changed
+    m.onUserMove = () => {
+      window.clearTimeout(blockTimer)
+      if (UI.follow) ui({ follow: false })
+    }
     // Press and hold the map (right-click with a mouse) to pin something right there.
     m.onLongPress = (lng, lat) => {
       if (needAccount()) return
       navigator.vibrate?.(12)
       UI.draft = { latitude: lat, longitude: lng }
       go('new')
-    }
-    m.onUserMove = () => {
-      if (UI.follow) ui({ follow: false })
     }
     m.onHover = (marker) => ui({ hover: marker && marker.kind !== 'me' ? marker.id : null })
     m.onFrame = () => {
@@ -3617,15 +4459,17 @@ export default function App() {
       paintChrome(shown())
     }
     setMarkers(map, buildMarkers(posts))
-    setRegions(map, buildRegions(posts), draftRegion())
-    const age = UI.then === null ? 0 : Math.min(1, (new Date().getFullYear() - UI.then) / 80)
-    map.canvas.style.filter = UI.then === null ? '' : `sepia(${(0.3 + 0.6 * age).toFixed(2)}) saturate(${(1 - 0.35 * age).toFixed(2)})`
-    // Walking into a pin's area: its name comes up, the way a game names a district.
-    const inside = S.here ? regionAt(map, S.here.longitude, S.here.latitude) : null
+    setRegions(map, buildRegions(posts))
+    // Looking back yellows the map, more the further back it goes.
+    const age = UI.then === null ? 0 : Math.min(1, (Date.now() - UI.then) / (30 * 86400000))
+    map.canvas.style.filter = UI.then === null ? '' : `sepia(${(0.3 + 0.5 * age).toFixed(2)}) saturate(${(1 - 0.3 * age).toFixed(2)})`
+    // Walking into a block with a name or a crew: it comes up, the way a game names a district.
+    const inside = S.here ? blockOf(S.here.latitude, S.here.longitude) : null
     if ((inside?.id ?? '') !== lastRegion) {
       lastRegion = inside?.id ?? ''
-      const post = inside && S.posts.find((p) => p.id === inside.id)
-      if (post) district(post.title, `${(flairs[post.flair] ?? flairs.general).label} · ${nameOf(post.author_id, post.author_name)}`)
+      const crew = inside && turf().holder.get(inside.id)
+      const name = inside && blockName(inside.id)
+      if (inside && (name || crew)) district(name ?? blockTitle(inside), crew ? `${crews[crew].name} turf` : "Nobody's turf")
     }
     const target = walkTarget()
     const here = S.here
@@ -3664,6 +4508,8 @@ export default function App() {
   else if (route.kind === 'friends') detail = <FriendsView />
   else if (route.kind === 'settings') detail = <SettingsView />
   else if (route.kind === 'new') detail = <ComposeView />
+  else if (route.kind === 'block') detail = <BlockView key={route.id} />
+  else if (route.kind === 'turf') detail = <TurfView />
 
   const me = S.userId
   const sheetUp = !!detail || UI.feed
@@ -3723,8 +4569,11 @@ export default function App() {
         <button className={UI.follow ? 'icon-btn tool follow' : S.here ? 'icon-btn tool on' : 'icon-btn tool'} onClick={locate} aria-label="Where am I" title="Where am I (L)">
           <Icon name="locate" />
         </button>
-        <button className={UI.then !== null ? 'icon-btn tool on' : 'icon-btn tool'} onClick={toggleThen} aria-label="Back in time" title="Back in time: the lore of the place (Y)">
+        <button className={UI.then !== null ? 'icon-btn tool on' : 'icon-btn tool'} onClick={toggleThen} aria-label="Back in time" title="Back in time: the map as it was (Y)">
           <Icon name="clock" />
+        </button>
+        <button className={route.kind === 'turf' ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => go(route.kind === 'turf' ? '' : 'turf')} aria-label="Turf" title="Turf: the crews and their blocks">
+          <Icon name="flag" />
         </button>
         <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend })} aria-label="Legend" title="What the blips mean">
           <Icon name="info" />
@@ -3740,7 +4589,7 @@ export default function App() {
       )}
       {route.kind === 'new' && (
         <div className="hint-bar">
-          {narrow() ? 'Tap' : 'Click'} {UI.draftArea && 'ring' in UI.draftArea ? 'the corners of the area' : 'the map to place your pin'}
+          {narrow() ? 'Tap' : 'Click'} {UI.picking ? 'the blocks it takes over' : 'the map to place your pin'}
         </div>
       )}
 
@@ -3801,6 +4650,7 @@ export default function App() {
             {UI.toast}
           </div>
         ))}
+      {UI.spray && <SprayGame key={`spray-${UI.spray}`} blockId={UI.spray} />}
       {UI.palette && <Palette />}
       {UI.auth && <AuthView key={UI.auth} />}
     </div>

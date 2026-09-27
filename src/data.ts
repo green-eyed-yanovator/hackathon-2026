@@ -15,7 +15,13 @@
 import { createClient, type Session } from '@supabase/supabase-js'
 import { useSyncExternalStore } from 'react'
 
-export const supabaseUrl: string = import.meta.env.VITE_SUPABASE_URL
+// Supabase is where .env.local says. When that's this computer (127.0.0.1) but
+// the page was opened from another device (a phone over Tailscale), the dev
+// server passes Supabase through on the page's own address: see vite.config.ts.
+const configured: string = import.meta.env.VITE_SUPABASE_URL
+const onThisComputer = (host: string) => ['localhost', '127.0.0.1', '[::1]'].includes(host)
+export const supabaseUrl: string =
+  configured && onThisComputer(new URL(configured).hostname) && !onThisComputer(window.location.hostname) ? window.location.origin : configured
 export const supabaseKey: string = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
 // Without these two the app can't reach its database. Say so on the page, rather
@@ -46,7 +52,7 @@ const ownMedia = (m: Media) => {
   return url ? { ...m, url } : null
 }
 
-export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost' | 'lore'
+export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
 
 export type Post = {
   id: string
@@ -62,21 +68,18 @@ export type Post = {
   place_id: string | null // posts within ~30 m share a place and one marker
   flair: Flair
   starts_at: string | null // when it happens, for events and meetups
-  area: Area | null // the stretch of city it's about, if more than a spot
-  year: number | null // for lore: the year it happened
+  blocks: string[] | null // the city blocks it covers, if more than a spot
 }
-
-// A pin's area, the way a game marks out a district: a circle of so many metres
-// round the pin, or a ring of corners (longitude, latitude) drawn round a few blocks.
-export type Area = { r: number } | { ring: [number, number][] }
 
 export type Reply = {
   id: string
   post_id: string
+  parent_id: string | null // the reply it answers, if it answers one
   content: string
   created_at: string
   author_id: string | null
   author_name: string | null
+  deleted_at: string | null // taken back while others had answered it: kept, empty, for the thread under it
 }
 
 export type Profile = {
@@ -86,6 +89,22 @@ export type Profile = {
   bio: string | null
   avatar_url: string | null
   created_at: string
+  crew: Crew | null
+}
+
+// City blocks: the ground the streets close round, kept once someone does
+// something with one. What's said on them, the votes, and the crews' tags.
+export type CityBlock = { id: string; ring: [number, number][]; latitude: number; longitude: number; created_at: string }
+export type Word = { id: string; block_id: string; parent_id: string | null; author_id: string | null; body: string; is_name: boolean; created_at: string; deleted_at: string | null }
+export type Vote = { word_id: string; user_id: string; value: 1 | -1; created_at: string }
+export type Tag = { id: string; block_id: string; user_id: string | null; crew: Crew; points: number; created_at: string }
+
+export type Crew = 'magpies' | 'galahs' | 'possums' | 'owls'
+export const crews: Record<Crew, { name: string; tag: string; color: string; motto: string }> = {
+  magpies: { name: 'Magpies', tag: 'MAG', color: '#27b4d8', motto: 'Swoop first, ask later.' },
+  galahs: { name: 'Galahs', tag: 'GAL', color: '#f0559c', motto: 'Loud, pink and everywhere.' },
+  possums: { name: 'Possums', tag: 'POS', color: '#3dbb5c', motto: 'Up all night, on every roof.' },
+  owls: { name: 'Owls', tag: 'OWL', color: '#9b63f2', motto: 'We saw that.' },
 }
 
 export type Media = { id: string; post_id: string; media_type: 'image' | 'video'; url: string; created_at: string }
@@ -94,7 +113,7 @@ export type Like = { user_id: string; reply_id: string; created_at: string }
 export type Saved = { post_id: string; created_at: string }
 export type Revision = { id: string; title: string; description: string; replaced_at: string }
 
-export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention'
+export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention' | 'turf' | 'comment_reply' | 'word_reply'
 
 export type Notification = {
   id: string
@@ -102,8 +121,9 @@ export type Notification = {
   actor_id: string | null
   actor_name: string | null
   post_id: string | null
-  post_title: string | null
-  preview: string | null
+  post_title: string | null // for turf, the block's name
+  preview: string | null // for turf, the crew hitting it
+  block_id: string | null
   created_at: string
   read_at: string | null
 }
@@ -114,14 +134,13 @@ export type Location = { user_id: string; latitude: number; longitude: number; a
 export type Here = { latitude: number; longitude: number; accuracy: number; heading: number | null }
 export type Presence = { user_id: string; device: string; here: boolean; seen_at: string }
 
-export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert' | 'book'; color: string }> = {
+export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert'; color: string }> = {
   general: { label: 'General', icon: 'chat', color: '#4f7cff' },
   food: { label: 'Food', icon: 'burger', color: '#f07b2d' },
   music: { label: 'Music', icon: 'note', color: '#a259ff' },
   sports: { label: 'Sports', icon: 'ball', color: '#16a974' },
   event: { label: 'Event', icon: 'star', color: '#e0a100' },
   lost: { label: 'Lost & found', icon: 'alert', color: '#ef4444' },
-  lore: { label: 'Lore', icon: 'book', color: '#9a6b3f' }, // what a place remembers
 }
 
 export const S = {
@@ -138,6 +157,10 @@ export const S = {
   interests: [] as Interest[],
   likes: [] as Like[],
   profiles: new Map<string, Profile>(),
+  blocks: new Map<string, CityBlock>(),
+  words: [] as Word[], // oldest first
+  votes: [] as Vote[],
+  tags: [] as Tag[], // the last month's, oldest first
 
   saved: [] as Saved[],
   notifications: [] as Notification[], // oldest first
@@ -202,6 +225,7 @@ export function stats() {
     if (p.author_id && p.author_id === S.userId) st.joined.add(p.id)
   }
   for (const r of S.replies) {
+    if (r.deleted_at) continue
     st.replies.set(r.post_id, (st.replies.get(r.post_id) ?? 0) + 1)
     st.active.set(r.post_id, Math.max(st.active.get(r.post_id) ?? 0, time(r.created_at)))
     if (r.author_id && r.author_id === S.userId) st.joined.add(r.post_id)
@@ -308,6 +332,7 @@ function upsert<T>(list: T[], row: T, same: (a: T, b: T) => boolean, atStart = f
 const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
 const sameInterest = (a: Interest, b: Interest) => a.user_id === b.user_id && a.post_id === b.post_id
 const sameLike = (a: Like, b: Like) => a.user_id === b.user_id && a.reply_id === b.reply_id
+const sameVote = (a: Vote, b: Vote) => a.user_id === b.user_id && a.word_id === b.word_id
 
 let retrying = false
 
@@ -320,17 +345,21 @@ function markBehind(part: 'public' | 'private', error: { code?: string } | null)
 } // a reload is already waiting
 
 async function loadPublic() {
-  const [posts, replies, media, interests, profiles, likes] = await Promise.all([
+  const [posts, replies, media, interests, profiles, likes, blocks, words, votes, tags] = await Promise.all([
     supabase.from('posts').select('*').order('created_at', { ascending: false }),
     supabase.from('replies').select('*').order('created_at', { ascending: true }),
     supabase.from('post_media').select('*').order('created_at', { ascending: true }),
     supabase.from('post_interest').select('user_id, post_id, created_at'),
     supabase.from('profiles').select('*'),
     supabase.from('reply_likes').select('user_id, reply_id, created_at'),
+    supabase.from('city_blocks').select('id, ring, latitude, longitude, created_at'),
+    supabase.from('block_words').select('*').order('created_at', { ascending: true }),
+    supabase.from('word_votes').select('*'),
+    supabase.from('tags').select('*').gt('created_at', new Date(Date.now() - 30 * 86400000).toISOString()).order('created_at', { ascending: true }),
   ])
 
   // All or nothing: a half-loaded map (pins without their replies) is worse than the one we had.
-  const failed = [posts, replies, media, interests, profiles, likes].find((r) => r.error)
+  const failed = [posts, replies, media, interests, profiles, likes, blocks, words, votes, tags].find((r) => r.error)
   if (failed) {
     fail('Loading pins', failed.error)
     S.offline = true
@@ -353,6 +382,10 @@ async function loadPublic() {
   S.interests = interests.data ?? []
   S.likes = likes.data ?? []
   S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, ownPhotoOnly(p)]))
+  S.blocks = new Map((blocks.data ?? []).map((b: CityBlock) => [b.id, b]))
+  S.words = words.data ?? []
+  S.votes = votes.data ?? []
+  S.tags = tags.data ?? []
   S.ready = true
   changed()
   remindSoon()
@@ -382,6 +415,10 @@ function subscribePublic() {
       forgetPost((old as Post).id)
     })
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'replies' }, ({ new: row }) => {
+      upsert(S.replies, row as Reply, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'replies' }, ({ new: row }) => {
       upsert(S.replies, row as Reply, byId)
       changed()
     })
@@ -415,6 +452,37 @@ function subscribePublic() {
       if (payload.eventType === 'DELETE') S.profiles.delete((payload.old as Profile).id)
       else S.profiles.set((payload.new as Profile).id, ownPhotoOnly(payload.new as Profile))
       changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'city_blocks' }, ({ new: row }) => {
+      const { id, ring, latitude, longitude, created_at } = row as CityBlock
+      S.blocks.set(id, { id, ring, latitude, longitude, created_at })
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'block_words' }, ({ new: row }) => {
+      upsert(S.words, row as Word, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'block_words' }, ({ new: row }) => {
+      upsert(S.words, row as Word, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'block_words' }, ({ old }) => {
+      S.words = S.words.filter((w) => w.id !== (old as Word).id)
+      changed()
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'word_votes' }, (payload) => {
+      if (payload.eventType === 'DELETE') S.votes = S.votes.filter((v) => !sameVote(v, payload.old as Vote))
+      else upsert(S.votes, payload.new as Vote, sameVote)
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tags' }, ({ new: row }) => {
+      const tag = row as Tag
+      const before = turf().holder.get(tag.block_id)
+      upsert(S.tags, tag, byId)
+      changed()
+      // Ground changing hands is news to anyone looking, like a game's "territory lost".
+      const after = turf().holder.get(tag.block_id)
+      if (after && after !== before) onTurn(tag.block_id, after, before ?? null, tag.user_id === S.userId)
     })
     .subscribe()
 }
@@ -495,7 +563,8 @@ function subscribePrivate(userId: string) {
       changed()
       if (n.actor_id && S.blocked.has(n.actor_id)) return // (the server stops these too, since the block)
       const text = describeNotification(n)
-      onIncoming(`${n.actor_name ?? 'Someone'} ${text}`, n.preview ?? '', n.post_id ? `pin/${n.post_id}` : n.actor_id ? `user/${n.actor_id}` : 'inbox')
+      const route = n.post_id ? `pin/${n.post_id}` : n.block_id ? `block/${n.block_id}` : n.actor_id ? `user/${n.actor_id}` : 'inbox'
+      onIncoming(`${n.actor_name ?? 'Someone'} ${text}`, n.kind === 'turf' ? '' : (n.preview ?? ''), route)
     })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, ({ new: row }) => {
       // Read on another device.
@@ -713,7 +782,7 @@ function forgetPost(postId: string) {
   changed()
 }
 
-export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; year: number | null; latitude: number; longitude: number; area: Area | null; files: File[] }
+export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; latitude: number; longitude: number; blocks: string[]; files: File[] }
 
 export async function createPost(draft: Draft) {
   // Posts within 30 m of an existing place join it and share its marker.
@@ -739,7 +808,7 @@ export async function createPost(draft: Draft) {
 
   const { data: post, error } = await supabase
     .from('posts')
-    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt, year: draft.year, area: draft.area })
+    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt, blocks: draft.blocks.length ? draft.blocks : null })
     .select()
     .single()
   if (error) {
@@ -772,7 +841,7 @@ export async function createPost(draft: Draft) {
   return post as Post
 }
 
-export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair' | 'area' | 'year'>>) {
+export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair' | 'blocks'>>) {
   const { data, error } = await supabase.from('posts').update(patch).eq('id', id).select().single()
   if (error) return fail("Couldn't save the change", error)
   upsert(S.posts, data as Post, byId, true)
@@ -792,8 +861,8 @@ export async function loadRevisions(postId: string) {
   return (data ?? []) as Revision[]
 }
 
-export async function reply(postId: string, content: string) {
-  const { data, error } = await supabase.from('replies').insert({ post_id: postId, content }).select().single()
+export async function reply(postId: string, content: string, parentId: string | null = null) {
+  const { data, error } = await supabase.from('replies').insert({ post_id: postId, content, parent_id: parentId }).select().single()
   if (error) return fail("Couldn't send the reply", error)
   upsert(S.replies, data as Reply, byId)
   changed()
@@ -845,9 +914,25 @@ async function flipLike(replyId: string) {
 export async function deleteReply(id: string) {
   const { error } = await supabase.from('replies').delete().eq('id', id)
   if (error) return fail("Couldn't delete the reply", error)
-  S.replies = S.replies.filter((r) => r.id !== id)
+  S.replies = takeBack(S.replies, id, (r) => ({ ...r, content: '', author_id: null, author_name: null, deleted_at: new Date().toISOString() }))
   changed()
   return true
+}
+
+// A comment taken back, in a list of comments: emptied if others answered it,
+// otherwise gone, along with any emptied comment above it that was only kept for it.
+function takeBack<T extends { id: string; parent_id: string | null; deleted_at: string | null }>(list: T[], id: string, empty: (row: T) => T) {
+  const row = list.find((r) => r.id === id)
+  if (!row) return list
+  if (list.some((r) => r.parent_id === id)) return list.map((r) => (r.id === id ? empty(r) : r))
+  let rest = list.filter((r) => r.id !== id)
+  let parent = rest.find((r) => r.id === row.parent_id)
+  while (parent?.deleted_at && !rest.some((r) => r.parent_id === parent!.id)) {
+    const up = parent.parent_id
+    rest = rest.filter((r) => r.id !== parent!.id)
+    parent = rest.find((r) => r.id === up)
+  }
+  return rest
 }
 
 async function flipInterest(postId: string) {
@@ -1051,6 +1136,12 @@ export function describeNotification(n: Notification) {
     case 'friend_accept': return 'accepted your friend request'
     case 'friend_post': return `pinned ${title}`
     case 'mention': return `mentioned you in ${title}`
+    case 'comment_reply': return `answered your comment on ${title}`
+    case 'word_reply': return `answered you on ${n.post_title ? `“${n.post_title}”` : 'a block'}`
+    case 'turf': {
+      const crew = crews[n.preview as Crew]
+      return `${crew ? `of the ${crew.name} ` : ''}is hitting ${n.post_title ? `“${n.post_title}”` : 'a block you tagged'}`
+    }
   }
 }
 
@@ -1382,4 +1473,198 @@ export async function setSharing(on: boolean, forMs: number | null = null) {
   await withdrawLocation()
   changed()
   return true
+}
+
+//
+// City blocks: what people say about them, and the crews' turf.
+//
+
+// Is a spot inside a ring of corners (lng, lat)? Crossings of a line going east from it.
+export function inRing(ring: [number, number][], lng: number, lat: number) {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [ax, ay] = ring[j]
+    const [bx, by] = ring[i]
+    if (ay > lat !== by > lat && lng < ((bx - ax) * (lat - ay)) / (by - ay) + ax) inside = !inside
+  }
+  return inside
+}
+
+// The kept block a spot is in, if any; the smallest, should two overlap.
+export function blockOf(lat: number, lng: number) {
+  let best: CityBlock | null = null
+  let bestSpan = Infinity
+  for (const block of S.blocks.values()) {
+    const span = Math.max(...block.ring.map((c) => c[0])) - Math.min(...block.ring.map((c) => c[0]))
+    if (span < bestSpan && inRing(block.ring, lng, lat)) {
+      best = block
+      bestSpan = span
+    }
+  }
+  return best
+}
+
+// Scores and names, worked out once per change. A line's score is its votes
+// (its writer's +1 among them); a block is called by its best-liked name.
+type Talk = { score: Map<string, number>; mine: Map<string, 1 | -1>; names: Map<string, string> }
+let talkVersion = -1
+let talkCache: Talk
+
+export function talk(at?: number) {
+  if (at === undefined && talkVersion === version) return talkCache
+  const t: Talk = { score: new Map(), mine: new Map(), names: new Map() }
+  for (const v of S.votes) {
+    if (S.blocked.has(v.user_id) || (at !== undefined && time(v.created_at) > at)) continue
+    t.score.set(v.word_id, (t.score.get(v.word_id) ?? 0) + v.value)
+    if (v.user_id === S.userId) t.mine.set(v.word_id, v.value)
+  }
+  const best = new Map<string, Word>()
+  for (const w of S.words) {
+    if (!w.is_name || (w.author_id && S.blocked.has(w.author_id)) || (at !== undefined && time(w.created_at) > at)) continue
+    const score = t.score.get(w.id) ?? 0
+    const top = best.get(w.block_id)
+    if (score >= 1 && (!top || score > (t.score.get(top.id) ?? 0))) best.set(w.block_id, w) // oldest first, so ties stay with the first
+  }
+  for (const [block, w] of best) t.names.set(block, w.body)
+  if (at !== undefined) return t
+  talkCache = t
+  talkVersion = version
+  return t
+}
+
+// Who holds what. Tags fade by half every three days, so the same sums as the
+// database's: the crew with the most holds a block, the first there on a tie.
+// A block is hot while a crew that doesn't hold it has tagged it in the last half hour.
+type Turf = { holder: Map<string, Crew>; strength: Map<string, Map<Crew, number>>; hot: Map<string, Set<Crew>>; held: Map<Crew, number> }
+let turfVersion = -1
+let turfAt = 0
+let turfCache: Turf
+const HALF_LIFE = 3 * 86400000
+const WAR = 30 * 60000
+
+export function turf(at?: number) {
+  const now = at ?? Date.now()
+  if (at === undefined && turfVersion === version && now - turfAt < 20000) return turfCache
+  const t: Turf = { holder: new Map(), strength: new Map(), hot: new Map(), held: new Map() } // hot: block → the crews hitting it
+  const first = new Map<string, number>() // block/crew: its first tag
+  for (const tag of S.tags) {
+    const age = now - time(tag.created_at)
+    if (age > 30 * 86400000 || age < 0) continue
+    let crews = t.strength.get(tag.block_id)
+    if (!crews) t.strength.set(tag.block_id, (crews = new Map()))
+    crews.set(tag.crew, (crews.get(tag.crew) ?? 0) + tag.points * 0.5 ** (age / HALF_LIFE))
+    if (!first.has(`${tag.block_id}/${tag.crew}`)) first.set(`${tag.block_id}/${tag.crew}`, time(tag.created_at))
+  }
+  for (const [block, crews] of t.strength) {
+    let top: Crew | null = null
+    for (const [crew, strength] of crews) {
+      const best = top ? crews.get(top)! : -1
+      if (strength > best || (strength === best && first.get(`${block}/${crew}`)! < first.get(`${block}/${top}`)!)) top = crew
+    }
+    if (!top) continue
+    t.holder.set(block, top)
+    t.held.set(top, (t.held.get(top) ?? 0) + 1)
+  }
+  for (const tag of S.tags) {
+    if (now - time(tag.created_at) >= WAR || now < time(tag.created_at) || tag.crew === t.holder.get(tag.block_id)) continue
+    const hitting = t.hot.get(tag.block_id)
+    if (hitting) hitting.add(tag.crew)
+    else t.hot.set(tag.block_id, new Set([tag.crew]))
+  }
+  if (at !== undefined) return t
+  turfCache = t
+  turfVersion = version
+  turfAt = now
+  return t
+}
+
+// Ground changing hands: the app makes a moment of it.
+let onTurn: (blockId: string, now: Crew, was: Crew | null, byMe: boolean) => void = () => {}
+export function setTurnHandler(handler: typeof onTurn) {
+  onTurn = handler
+}
+
+// The block for a ring found on the map: the one already kept there, or a new one.
+export async function blockFor(found: { ring: [number, number][]; lng: number; lat: number }) {
+  const { data, error } = await supabase.rpc('block_for', { ring: found.ring, latitude: found.lat, longitude: found.lng })
+  if (error) {
+    fail("Couldn't mark out the block", error)
+    return null
+  }
+  const id = data as string
+  if (!S.blocks.has(id)) {
+    S.blocks.set(id, { id, ring: found.ring, latitude: found.lat, longitude: found.lng, created_at: new Date().toISOString() })
+    changed()
+  }
+  return id
+}
+
+export async function say(blockId: string, body: string, isName = false, parentId: string | null = null) {
+  const { data, error } = await supabase.from('block_words').insert({ block_id: blockId, body: body.trim(), is_name: isName, parent_id: parentId }).select().single()
+  if (error) return fail(isName ? "Couldn't put the name up" : "Couldn't say it", error)
+  const word = data as Word
+  upsert(S.words, word, byId)
+  // The writer's own point, which the database adds too.
+  upsert(S.votes, { word_id: word.id, user_id: S.userId!, value: 1, created_at: word.created_at }, sameVote)
+  changed()
+  return true
+}
+
+export async function unsay(id: string) {
+  const { error } = await supabase.from('block_words').delete().eq('id', id)
+  if (error) return fail("Couldn't take it back", error)
+  S.words = takeBack(S.words, id, (w) => ({ ...w, body: '', author_id: null, deleted_at: new Date().toISOString() }))
+  if (!S.words.some((w) => w.id === id)) S.votes = S.votes.filter((v) => v.word_id !== id)
+  changed()
+  return true
+}
+
+// Up or down; the same way again takes the vote back.
+export const vote = (wordId: string, value: 1 | -1) => once(`vote/${wordId}`, () => castVote(wordId, value))
+
+async function castVote(wordId: string, value: 1 | -1) {
+  const userId = S.userId!
+  const was = S.votes.find((v) => v.word_id === wordId && v.user_id === userId) ?? null
+  const next = was?.value === value ? null : value
+  const put = (v: Vote | null) => {
+    S.votes = S.votes.filter((x) => !(x.word_id === wordId && x.user_id === userId))
+    if (v) S.votes.push(v)
+    changed()
+  }
+  put(next ? { word_id: wordId, user_id: userId, value: next, created_at: new Date().toISOString() } : null)
+  const { error } = !next
+    ? await supabase.from('word_votes').delete().eq('word_id', wordId).eq('user_id', userId)
+    : was
+      ? await supabase.from('word_votes').update({ value: next }).eq('word_id', wordId).eq('user_id', userId)
+      : await supabase.from('word_votes').insert({ word_id: wordId, value: next })
+  if (error) {
+    put(was)
+    return fail("Couldn't vote", error)
+  }
+  return true
+}
+
+export async function joinCrew(crew: Crew) {
+  const { error } = await supabase.rpc('join_crew', { crew })
+  if (error) return fail("Couldn't join", error)
+  const me = S.profiles.get(S.userId!)
+  if (me) S.profiles.set(me.id, { ...me, crew })
+  changed()
+  return true
+}
+
+// Tagging a block, standing in it: points from the spraying, 1 to 10.
+export async function tagBlock(blockId: string, lat: number, lng: number, points: number) {
+  const { data, error } = await supabase.rpc('tag_block', { block: blockId, latitude: lat, longitude: lng, points })
+  if (error) {
+    fail("Couldn't tag it", error)
+    return null
+  }
+  const tag = data as Tag
+  const before = turf().holder.get(blockId)
+  upsert(S.tags, tag, byId)
+  changed()
+  const after = turf().holder.get(blockId)
+  if (after && after !== before) onTurn(blockId, after, before ?? null, true)
+  return tag
 }

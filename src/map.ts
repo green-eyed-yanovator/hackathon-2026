@@ -95,6 +95,14 @@ export const icons = {
   map: '!M3 5l6-2 6 2 6-2v16l-6 2-6-2-6 2zM9 5.2v13.6l6 2V7.2z',
   minus: 'M4 11h16v2H4z',
   info: '!M12 2a10 10 0 1 1 0 20 10 10 0 1 1 0-20zM11 10h2v8h-2zM11 6h2v2h-2z',
+  up: 'M12 5l8.5 11h-17z',
+  play: 'M7 4.5v15l12.5-7.5z',
+  pause: 'M6 4.5h4.2v15H6zM13.8 4.5H18v15h-4.2z',
+  prev: 'M14.6 4.4l1.9 1.9-5.7 5.7 5.7 5.7-1.9 1.9-7.6-7.6z',
+  next: 'M9.4 4.4l7.6 7.6-7.6 7.6-1.9-1.9 5.7-5.7-5.7-5.7z',
+  down: 'M12 19L3.5 8h17z',
+  flag: 'M4 2h2.2v20H4zM7.4 3.2c3.4-1.6 5.7 1.6 9.6 0L19.5 2v10.3c-3.9 1.8-6.2-1.5-9.6 0l-2.5 1.1z',
+  spray: 'M8 9.5A1.5 1.5 0 0 1 9.5 8h5A1.5 1.5 0 0 1 16 9.5V21a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1zM10 4h4v3h-4zM15.5 2h1.6v1.6h-1.6zM18.4 3.4H20V5h-1.6zM18.4.6H20v1.6h-1.6zM21.2 2h1.6v1.6h-1.6z',
   heart: 'M12 20.5C6 16 2.5 12.5 2.5 8.6A4.6 4.6 0 0 1 7.1 4c2 0 3.6 1 4.9 2.8C13.3 5 14.9 4 16.9 4a4.6 4.6 0 0 1 4.6 4.6c0 3.9-3.5 7.4-9.5 11.9z',
 }
 
@@ -801,9 +809,9 @@ export type MapState = {
   baseDirty: boolean // something besides the camera changed (tiles, markers, style, size)
   baseCamera: string // the camera the base was taken at; any other camera redraws
   markerKey: string // what the markers were last time, so an unchanged set doesn't redraw
-  regions: Region[] // pins' areas, drawn under the names
-  draftRegion: Region | null // the area of a pin being made, still being drawn
-  regionKey: string // what the areas were last time, likewise
+  regions: Region[] // blocks marked out: turf, pins' areas, picked ones; drawn under the names
+  regionKey: string // what they were last time, likewise
+  blockAsks: { lng: number; lat: number; since: number; done: (block: Block | null) => void }[] // blocks waiting for their tiles
 
   tileUrl: string | null
   sources: Map<string, SourceEntry>
@@ -860,7 +868,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, moved: false, lastTap: 0, lastPointer: 'mouse', samples: [],
-    fade: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', regions: [], draftRegion: null, regionKey: '', tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
+    fade: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', regions: [], regionKey: '', blockAsks: [], tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {}, onLongPress: () => {},
     route: null, onRoute: () => {},
@@ -2497,11 +2505,14 @@ function viaStreet(m: MapState, r: Route) {
   return (along.get(via) ?? 0) > total * 0.25 ? via : ''
 }
 
+// The streets in a box as a graph: nodes where they meet, edges between. For
+// walking routes, and for the city blocks the streets close round.
+//
 // Everything here is in "grid" units: tile units of the source zoom, counted from
 // the corner of the first tile, so the same spot is the same number in every tile,
 // and every hash key below stays a small integer (V8 keeps those unboxed; keys the
 // size of the world are boxed doubles, several times slower to hash).
-function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | null {
+function streetGraph(tiles: SourceTile[], box: number[], keep: (props: Props) => boolean) {
   const GRID = 4096
   const scale = 2 ** SOURCE_MAX_ZOOM * GRID
   const originX = Math.min(...tiles.map((tile) => tile.x)) * GRID
@@ -2511,7 +2522,7 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
   const bx1 = box[2] * scale - originX
   const by1 = box[3] * scale - originY
 
-  // Segments of walkable lines: [ax, ay, bx, by, onGround]. Each tile's lines
+  // Segments of the lines kept: [ax, ay, bx, by, onGround]. Each tile's lines
   // run a little past its edge, so only the part inside its own square is kept.
   const segs: number[] = []
   for (const tile of tiles) {
@@ -2520,7 +2531,7 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
     const oy = tile.y * GRID - originY
     if (ox > bx1 || oy > by1 || ox + GRID < bx0 || oy + GRID < by0) continue
     for (const f of tile.layers.transportation ?? []) {
-      if (f.type !== 2 || !WALKABLE.has(String(f.props.class))) continue
+      if (f.type !== 2 || !keep(f.props)) continue
       if (ox + f.maxX * k < bx0 || oy + f.maxY * k < by0 || ox + f.minX * k > bx1 || oy + f.minY * k > by1) continue
       const ground = f.props.brunnel === 'bridge' || f.props.brunnel === 'tunnel' ? 0 : 1
       for (const ring of f.rings) {
@@ -2547,7 +2558,6 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
     }
   }
   const count = segs.length / 5
-  if (!count) return null
 
   // Where lines meet. The tiles drop vertices that sit on a straight line, junctions
   // included, so junctions are found from the segments, a grid cell at a time: where
@@ -2684,6 +2694,12 @@ function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | nul
       previous = next
     }
   }
+  return { nodeX, nodeY, edges, join, scale, originX, originY }
+}
+
+function findRoute(tiles: SourceTile[], r: Route, box: number[]): number[] | null {
+  const { nodeX, nodeY, edges, join, scale, originX, originY } = streetGraph(tiles, box, (props) => WALKABLE.has(String(props.class)))
+  if (!nodeX.length) return null
 
   // The biggest connected piece is the street network; the rest are scraps,
   // like a footpath inside a car park that the tiles cut off from everything.
@@ -2849,181 +2865,344 @@ function strokeRoute(c: CanvasRenderingContext2D, t: MapTheme, points: number[],
 }
 
 //
-// Areas: the stretch of city a pin is about, marked out the way game maps mark
-// out their districts. Drawn under the names; the app opens a pin when its area
-// is tapped, and names it when you walk in.
+// City blocks: the pieces of ground the streets close round. People pin things
+// to them, write on them, name them and fight over them, so they're marked out
+// on the map the way a game marks out its districts.
 //
 
-export type Region = {
-  id: string // the pin's
-  name: string
-  color: string
-  lng: number // the pin
+// Streets that close a block round: not footpaths, driveways or car park lanes,
+// which would cut one block into dozens. Railways do; tunnels don't.
+const BLOCK_SIDES = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'rail'])
+const bordersBlocks = (p: Props) => p.brunnel !== 'tunnel' && (BLOCK_SIDES.has(String(p.class)) || p.subclass === 'pedestrian')
+
+export type Block = {
+  ring: [number, number][] // its corners (lng, lat), going round
+  lng: number // a spot well inside it, where its name goes
   lat: number
-  area: { r: number } | { ring: [number, number][] } // metres round the pin, or corners (lng, lat)
-  selected: boolean
+  m2: number // how big it is
 }
 
-// A region in world units: a circle's centre and radius, or its ring of corners.
-function shapeOf(region: Region) {
-  const x = lngToX(region.lng)
-  const y = latToY(region.lat)
-  if ('r' in region.area) return { x, y, r: region.area.r / metersPerWorld(y), ring: null }
-  return { x, y, r: 0, ring: region.area.ring.flatMap(([lng, lat]) => [lngToX(lng), latToY(lat)]) }
+// The streets blocks are found among, kept while the same tiles are asked for,
+// so picking several blocks in a row builds it once. Nodes are in grid units
+// (see streetGraph); each one's neighbours are in order round it, anticlockwise.
+type BlockGraph = { key: string; x: number[]; y: number[]; around: number[][]; alive: Uint8Array; scale: number; originX: number; originY: number; box: number[] }
+let blockGraph: BlockGraph | null = null
+
+function buildBlockGraph(tiles: SourceTile[], box: number[], key: string): BlockGraph {
+  const g = streetGraph(tiles, box, bordersBlocks)
+  const count = g.nodeX.length
+  const around = g.edges.map((list, a) => {
+    const set = new Set<number>()
+    for (let e = 0; e < list.length; e += 2) if (list[e] !== a) set.add(list[e])
+    return [...set]
+  })
+  // Dead ends close nothing round, and nor does a street the tiles cut off at
+  // their edge: gone, until every street left is part of some loop.
+  const alive = new Uint8Array(count).fill(1)
+  const degree = around.map((list) => list.length)
+  const stack: number[] = []
+  for (let i = 0; i < count; i++) if (degree[i] <= 1) stack.push(i)
+  while (stack.length) {
+    const a = stack.pop()!
+    if (!alive[a]) continue
+    alive[a] = 0
+    for (const b of around[a]) if (alive[b] && --degree[b] <= 1) stack.push(b)
+  }
+  for (let a = 0; a < count; a++) {
+    if (!alive[a]) {
+      around[a] = []
+      continue
+    }
+    // Angles as seen on screen (the grid's y runs down).
+    const angle = (b: number) => Math.atan2(g.nodeY[a] - g.nodeY[b], g.nodeX[b] - g.nodeX[a])
+    around[a] = around[a].filter((b) => alive[b]).sort((p, q) => angle(p) - angle(q))
+  }
+  return { key, x: g.nodeX, y: g.nodeY, around, alive, scale: g.scale, originX: g.originX, originY: g.originY, box }
 }
 
-export function setRegions(m: MapState, regions: Region[], draft: Region | null) {
-  const key = JSON.stringify([regions, draft])
-  if (key === m.regionKey) return
-  m.regionKey = key
-  m.regions = regions
-  m.draftRegion = draft
-  m.baseDirty = true
-  requestFrame(m)
-}
-
-// Streets an area's corners hold on to: not footpaths, tracks or railways.
-const STREETS = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service'])
-
-// Where a corner of an area goes when tapped: the street corner nearest it, if
-// one is within a thumb's reach (where a street line bends or meets another),
-// or else the nearest point on a street, so an area drawn round a few blocks
-// follows the streets the way a game's districts do. The tap itself if no
-// street is near.
-export function snapToStreet(m: MapState, lng: number, lat: number, reach = 24) {
+// The block a spot is in. The streets are a graph drawn flat, and a block is one
+// of its faces: start on the nearest street to one side of the spot, walk along
+// with the spot on your left, turn as far left as the streets allow at every
+// corner, and you come back to the start having gone once round the block.
+// 'waiting' while the tiles round it load; null where there's no block: open
+// ground too big to be one, or a sliver between the halves of a divided road.
+export function blockAt(m: MapState, lng: number, lat: number): Block | 'waiting' | null {
   const n = 2 ** SOURCE_MAX_ZOOM
-  const x = lngToX(lng) * n // in tiles of the source zoom
-  const y = latToY(lat) * n
-  const limit = (reach * n) / worldSize(m)
-  let corner = limit
-  let cx = x
-  let cy = y
-  let edge = limit / 2 // a street's side must be closer than a corner would
-  let ex = x
-  let ey = y
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const tile = m.sources.get(`${SOURCE_MAX_ZOOM}/${Math.floor(x) + dx}/${Math.floor(y) + dy}`)?.tile
-      if (!tile) continue
-      const px = (x - tile.x) * tile.extent
-      const py = (y - tile.y) * tile.extent
-      const within = limit * tile.extent
-      for (const f of tile.layers.transportation ?? []) {
-        if (f.type !== 2 || !STREETS.has(String(f.props.class))) continue
-        if (px < f.minX - within || px > f.maxX + within || py < f.minY - within || py > f.maxY + within) continue
-        for (const ring of f.rings) {
-          for (let i = 0; i < ring.length; i += 2) {
-            const d = Math.hypot(ring[i] - px, ring[i + 1] - py) / tile.extent
-            if (d < corner) {
-              corner = d
-              cx = tile.x + ring[i] / tile.extent
-              cy = tile.y + ring[i + 1] / tile.extent
-            }
-            if (i === 0) continue
-            const ax = ring[i - 2]
-            const ay = ring[i - 1]
-            const t = nearestT(px, py, ax, ay, ring[i] - ax, ring[i + 1] - ay)
-            const sx = ax + t * (ring[i] - ax)
-            const sy = ay + t * (ring[i + 1] - ay)
-            const e = Math.hypot(sx - px, sy - py) / tile.extent
-            if (e < edge) {
-              edge = e
-              ex = tile.x + sx / tile.extent
-              ey = tile.y + sy / tile.extent
-            }
-          }
-        }
-      }
+  const wx = lngToX(lng)
+  const wy = latToY(lat)
+  const pad = 700 / metersPerWorld(wy)
+  const tx0 = Math.floor((wx - pad) * n)
+  const ty0 = Math.floor((wy - pad) * n)
+  const tx1 = Math.floor((wx + pad) * n)
+  const ty1 = Math.floor((wy + pad) * n)
+  const tiles: SourceTile[] = []
+  let waiting = false
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const entry = requestSource(m, SOURCE_MAX_ZOOM, tx, ty)
+      if (!entry || entry.state === 'loading') waiting = true
+      else if (entry.tile) tiles.push(entry.tile)
+      else return null // it didn't load: no block rather than a wrong one
     }
   }
-  const [bx, by] = corner < limit ? [cx, cy] : edge < limit / 2 ? [ex, ey] : [x, y]
-  return { lng: xToLng(bx / n), lat: yToLat(by / n) }
+  if (waiting) return 'waiting'
+  if (!tiles.length) return null
+
+  const key = `${tx0}/${ty0}/${tx1}/${ty1}`
+  if (blockGraph?.key !== key) blockGraph = buildBlockGraph(tiles, [tx0 / n, ty0 / n, (tx1 + 1) / n, (ty1 + 1) / n], key)
+  const g = blockGraph
+  const px = wx * g.scale - g.originX
+  const py = wy * g.scale - g.originY
+  const metre = g.scale / metersPerWorld(wy) // grid units in a metre
+  const edgeX0 = g.box[0] * g.scale - g.originX + 30 * metre
+  const edgeY0 = g.box[1] * g.scale - g.originY + 30 * metre
+  const edgeX1 = g.box[2] * g.scale - g.originX - 30 * metre
+  const edgeY1 = g.box[3] * g.scale - g.originY - 30 * metre
+
+  // Streets a line going right from the spot crosses, nearest first.
+  const hits: number[] = [] // x, from, to
+  for (let a = 0; a < g.x.length; a++) {
+    for (const b of g.around[a]) {
+      if (b < a || g.y[a] > py === g.y[b] > py) continue
+      const x = g.x[a] + ((py - g.y[a]) * (g.x[b] - g.x[a])) / (g.y[b] - g.y[a])
+      if (x > px) hits.push(x, a, b)
+    }
+  }
+  const order = Array.from({ length: hits.length / 3 }, (_, i) => i * 3).sort((i, j) => hits[i] - hits[j])
+
+  // The first street crossed usually bounds the block; if it's the edge of a loop
+  // inside the block instead (a crescent, a roundabout), the next one out is tried.
+  for (const i of order.slice(0, 8)) {
+    // Upwards on screen, so the spot, to the left of the street, is on your left.
+    const [u0, v0] = g.y[hits[i + 1]] > g.y[hits[i + 2]] ? [hits[i + 1], hits[i + 2]] : [hits[i + 2], hits[i + 1]]
+    const ring: number[] = []
+    let u = u0
+    let v = v0
+    let closed = false
+    for (let step = 0; step < 3000; step++) {
+      ring.push(u)
+      const list = g.around[v]
+      const w = list[(list.indexOf(u) + list.length - 1) % list.length]
+      u = v
+      v = w
+      if (u === u0 && v === v0) {
+        closed = true
+        break
+      }
+    }
+    if (!closed) continue
+
+    // Anticlockwise on screen is a block; clockwise is the outside of a loop.
+    let twice = 0
+    let inside = false
+    let open = false
+    for (let k = 0, j = ring.length - 1; k < ring.length; j = k++) {
+      const [ax, ay, bx, by] = [g.x[ring[j]], g.y[ring[j]], g.x[ring[k]], g.y[ring[k]]]
+      twice += ax * by - bx * ay
+      if (ay > py !== by > py && px < ((bx - ax) * (py - ay)) / (by - ay) + ax) inside = !inside
+      if (bx < edgeX0 || bx > edgeX1 || by < edgeY0 || by > edgeY1) open = true
+    }
+    if (twice >= 0 || !inside) continue
+    // Running off the tiles we have: it isn't closed round at all.
+    if (open) return null
+    const m2 = -twice / 2 / (metre * metre)
+    if (m2 < 150 || m2 > 600000) return null
+
+    const kept = simplify(ring.map((id) => [g.x[id], g.y[id]]), 0.8 * metre)
+    const middle = widestMiddle(kept)
+    const lngLat = (x: number, y: number): [number, number] => [
+      Math.round(xToLng((x + g.originX) / g.scale) * 1e6) / 1e6,
+      Math.round(yToLat((y + g.originY) / g.scale) * 1e6) / 1e6,
+    ]
+    const [mLng, mLat] = lngLat(middle[0], middle[1])
+    return { ring: kept.map(([x, y]) => lngLat(x, y)), lng: mLng, lat: mLat, m2: Math.round(m2) }
+  }
+  return null
 }
 
-// The smallest area holding the spot, so a block inside a park wins over the park.
-export function regionAt(m: MapState, lng: number, lat: number) {
-  const px = lngToX(lng)
-  const py = latToY(lat)
-  let best: Region | null = null
-  let bestSize = Infinity
-  for (const region of m.regions) {
-    const s = shapeOf(region)
-    let inside = false
-    let size = 0
-    if (s.ring) {
-      // Crossings of a line going right from the spot, and the shoelace for the size.
-      const g = s.ring
-      for (let i = 0, j = g.length - 2; i < g.length; j = i, i += 2) {
-        if (g[i + 1] > py !== g[j + 1] > py && px < ((g[j] - g[i]) * (py - g[i + 1])) / (g[j + 1] - g[i + 1]) + g[i]) inside = !inside
-        size += g[j] * g[i + 1] - g[i] * g[j + 1]
+// Fewer corners, none of them moved: Douglas-Peucker on a closed ring, split at
+// its first corner and the one farthest from it.
+function simplify(ring: number[][], tolerance: number) {
+  let far = 0
+  for (let i = 1; i < ring.length; i++) {
+    if (Math.hypot(ring[i][0] - ring[0][0], ring[i][1] - ring[0][1]) > Math.hypot(ring[far][0] - ring[0][0], ring[far][1] - ring[0][1])) far = i
+  }
+  if (far === 0 || ring.length <= 4) return ring
+  const keep = new Uint8Array(ring.length)
+  keep[0] = keep[far] = 1
+  const walk = (a: number, b: number) => {
+    const [ax, ay] = ring[a]
+    const [bx, by] = ring[b % ring.length]
+    let worst = -1
+    let worstD = tolerance
+    for (let i = a + 1; i < b; i++) {
+      const t = nearestT(ring[i][0], ring[i][1], ax, ay, bx - ax, by - ay)
+      const d = Math.hypot(ax + t * (bx - ax) - ring[i][0], ay + t * (by - ay) - ring[i][1])
+      if (d > worstD) {
+        worst = i
+        worstD = d
       }
-      size = Math.abs(size) / 2
-    } else {
-      inside = Math.hypot(px - s.x, py - s.y) <= s.r
-      size = Math.PI * s.r * s.r
     }
-    if (inside && size < bestSize) {
-      best = region
-      bestSize = size
+    if (worst < 0) return
+    keep[worst] = 1
+    walk(a, worst)
+    walk(worst, b)
+  }
+  walk(0, far)
+  walk(far, ring.length)
+  return ring.filter((_, i) => keep[i])
+}
+
+// A spot well inside a ring, where a name fits: the middle of the widest stretch
+// across it, trying a few heights. (The middle of the corners can be outside an L.)
+function widestMiddle(ring: number[][]) {
+  let y0 = Infinity
+  let y1 = -Infinity
+  for (const [, y] of ring) {
+    y0 = Math.min(y0, y)
+    y1 = Math.max(y1, y)
+  }
+  let best = [ring[0][0], ring[0][1]]
+  let bestWidth = -1
+  for (let f = 0.2; f < 0.85; f += 0.1) {
+    const y = y0 + (y1 - y0) * f
+    const xs: number[] = []
+    for (let k = 0, j = ring.length - 1; k < ring.length; j = k++) {
+      const [ax, ay] = ring[j]
+      const [bx, by] = ring[k]
+      if (ay > y !== by > y) xs.push(ax + ((y - ay) * (bx - ax)) / (by - ay))
+    }
+    xs.sort((a, b) => a - b)
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      if (xs[i + 1] - xs[i] > bestWidth) {
+        bestWidth = xs[i + 1] - xs[i]
+        best = [(xs[i] + xs[i + 1]) / 2, y]
+      }
     }
   }
   return best
 }
 
-// Each style marks a district its own way: a faint wash and a line in the plain
-// ones, a solid territory patch on the 2004 radar, an inked and hatched boundary on
-// the survey map, a glowing edge on the screens. The open pin's area is stronger.
-function drawRegions(m: MapState) {
+// Finding a block whose tiles aren't all here yet waits for them, a frame at a
+// time, like a walking route does; after a few seconds it gives up.
+export function findBlock(m: MapState, lng: number, lat: number) {
+  const found = blockAt(m, lng, lat)
+  if (found !== 'waiting') return Promise.resolve(found)
+  return new Promise<Block | null>((done) => {
+    m.blockAsks.push({ lng, lat, since: performance.now(), done })
+    requestFrame(m)
+  })
+}
+
+function stepBlocks(m: MapState, time: number) {
+  m.blockAsks = m.blockAsks.filter((ask) => {
+    const found = blockAt(m, ask.lng, ask.lat)
+    if (found === 'waiting' && time - ask.since < 8000) return true
+    ask.done(found === 'waiting' ? null : found)
+    return false
+  })
+}
+
+// What's marked out on the map: blocks a crew holds, in its colour; the blocks a
+// pin covers; the ones open or being picked, strongest.
+export type Region = {
+  id: string
+  rings: [number, number][][] // blocks, each a ring of corners (lng, lat)
+  color: string
+  look: 'turf' | 'plain' | 'area' | 'picked' // plain: only its name
+  name: string // what people call it, across it when it's big enough on screen
+  lng: number // where the name goes
+  lat: number
+  hot: boolean // being fought over: it flashes
+}
+
+export function setRegions(m: MapState, regions: Region[]) {
+  const key = JSON.stringify(regions)
+  if (key === m.regionKey) return
+  m.regionKey = key
+  const rank = { plain: 0, turf: 0, area: 1, picked: 2 }
+  m.regions = [...regions].sort((a, b) => rank[a.look] - rank[b.look])
+  m.baseDirty = true
+  requestFrame(m)
+}
+
+function traceRegion(m: MapState, region: Region) {
   const c = m.ctx
-  const t = m.theme
   const scale = worldSize(m)
   const ox = m.width / 2 - m.x * scale
   const oy = m.height / 2 - m.y * scale
+  c.beginPath()
+  for (const ring of region.rings) {
+    for (const [lng, lat] of ring) c.lineTo(ox + lngToX(lng) * scale, oy + latToY(lat) * scale)
+    c.closePath()
+  }
+}
 
-  for (const region of m.draftRegion ? [...m.regions, m.draftRegion] : m.regions) {
-    const s = shapeOf(region)
-    const strong = region.selected || region === m.draftRegion
-    const drawing = !!s.ring && s.ring.length < 6 // a ring of fewer than three corners is still being drawn
-    const ink = t.blip === 'stamp' ? (strong ? '#8f2b1c' : '#3f2e1e') : t.blip === 'ring' ? t.blipInk : region.color
-    const outline = () => {
-      c.beginPath()
-      if (s.ring) {
-        for (let i = 0; i < s.ring.length; i += 2) c.lineTo(ox + s.ring[i] * scale, oy + s.ring[i + 1] * scale)
-        if (!drawing) c.closePath()
-      } else c.arc(ox + s.x * scale, oy + s.y * scale, s.r * scale, 0, Math.PI * 2)
+// On screen, or near enough to matter.
+function regionOnScreen(m: MapState, region: Region) {
+  const scale = worldSize(m)
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  for (const ring of region.rings) {
+    for (const [lng, lat] of ring) {
+      const p = project(m, lngToX(lng), latToY(lat))
+      x0 = Math.min(x0, p.x)
+      y0 = Math.min(y0, p.y)
+      x1 = Math.max(x1, p.x)
+      y1 = Math.max(y1, p.y)
     }
+  }
+  const box = { x0, y0, x1, y1, span: Math.max(x1 - x0, y1 - y0) }
+  return x1 < 0 || y1 < 0 || x0 > m.width || y0 > m.height || scale < 1 ? null : box
+}
+
+// Each style marks ground its own way: a faint wash and a line in the plain ones,
+// solid territory on the 2004 radar, an inked and hatched boundary on the survey
+// map, a glowing edge on the screens.
+function drawRegions(m: MapState) {
+  const c = m.ctx
+  const t = m.theme
+  for (const region of m.regions) {
+    const box = region.look === 'plain' ? null : regionOnScreen(m, region)
+    if (!box) continue
+    const turf = region.look === 'turf'
+    const strong = region.look === 'picked'
+    const ink = t.blip === 'stamp' && !turf ? (strong ? '#8f2b1c' : '#3f2e1e') : t.blip === 'ring' && !turf ? t.blipInk : region.color
 
     c.save()
-    if (!drawing) {
-      outline()
-      if (t.blip === 'stamp') {
-        // Hatching, clipped to the area.
-        c.clip()
-        const x0 = s.ring ? ox + Math.min(...s.ring.filter((_, i) => i % 2 === 0)) * scale : ox + (s.x - s.r) * scale
-        const y0 = s.ring ? oy + Math.min(...s.ring.filter((_, i) => i % 2 === 1)) * scale : oy + (s.y - s.r) * scale
-        const x1 = s.ring ? ox + Math.max(...s.ring.filter((_, i) => i % 2 === 0)) * scale : ox + (s.x + s.r) * scale
-        const y1 = s.ring ? oy + Math.max(...s.ring.filter((_, i) => i % 2 === 1)) * scale : oy + (s.y + s.r) * scale
-        const h = y1 - y0
-        c.beginPath()
-        for (let d = 0; d < x1 - x0 + h; d += 9) {
-          c.moveTo(x0 + d, y0)
-          c.lineTo(x0 + d - h, y1)
+    traceRegion(m, region)
+    if (t.blip === 'stamp') {
+      // Hatching, clipped to the blocks: turf the other way from areas.
+      c.clip('evenodd')
+      const h = box.y1 - box.y0
+      c.beginPath()
+      for (let d = 0; d < box.x1 - box.x0 + h; d += turf ? 7 : 9) {
+        if (turf) {
+          c.moveTo(box.x0 + d - h, box.y0)
+          c.lineTo(box.x0 + d, box.y1)
+        } else {
+          c.moveTo(box.x0 + d, box.y0)
+          c.lineTo(box.x0 + d - h, box.y1)
         }
-        c.globalAlpha = strong ? 0.35 : 0.2
-        c.strokeStyle = ink
-        c.lineWidth = 1
-        c.stroke()
-      } else {
-        const alpha = { pin: 0.1, square: 0.3, round: 0.16, ring: 0.06, stamp: 0 }[t.blip]
-        c.globalAlpha = strong ? Math.min(0.5, alpha * 1.7) : alpha
-        c.fillStyle = ink
-        c.fill()
       }
-      c.restore()
-      c.save()
+      c.globalAlpha = strong ? 0.4 : turf ? 0.3 : 0.22
+      c.strokeStyle = ink
+      c.lineWidth = turf ? 2 : 1
+      c.stroke()
+    } else {
+      const alpha = turf ? { pin: 0.16, square: 0.4, round: 0.2, ring: 0.14, stamp: 0 }[t.blip] : { pin: 0.1, square: 0.25, round: 0.14, ring: 0.06, stamp: 0 }[t.blip]
+      c.globalAlpha = strong ? Math.min(0.45, alpha * 2) : alpha
+      c.fillStyle = ink
+      c.fill('evenodd')
     }
+    c.restore()
 
-    outline()
+    // Turf on the radar is just colour, like the game's; everything else is edged.
+    if (turf && t.blip === 'square') continue
+    c.save()
+    traceRegion(m, region)
     c.lineJoin = 'round'
     if (t.glow) {
       c.globalAlpha = strong ? 0.35 : 0.2
@@ -3031,53 +3210,70 @@ function drawRegions(m: MapState) {
       c.lineWidth = 8
       c.stroke()
     }
-    c.globalAlpha = strong ? 1 : 0.75
+    c.globalAlpha = strong ? 1 : turf ? 0.5 : 0.75
     c.strokeStyle = t.blip === 'square' ? '#111111' : ink
-    c.lineWidth = t.blip === 'square' ? 1.5 : strong ? 3 : 2
-    if (t.blip === 'stamp' || drawing) c.setLineDash([8, 5])
+    c.lineWidth = t.blip === 'square' ? 1.5 : strong ? 3 : turf ? 1.5 : 2
+    if (t.blip === 'stamp' || (strong && region.id === 'draft')) c.setLineDash([8, 5])
     c.stroke()
     c.restore()
-
-    // The corners of one being drawn, as handles.
-    if (region === m.draftRegion && s.ring) {
-      for (let i = 0; i < s.ring.length; i += 2) {
-        c.beginPath()
-        c.arc(ox + s.ring[i] * scale, oy + s.ring[i + 1] * scale, 5, 0, Math.PI * 2)
-        c.fillStyle = '#ffffff'
-        c.fill()
-        c.lineWidth = 2
-        c.strokeStyle = ink
-        c.stroke()
-      }
-    }
   }
 }
 
-// Areas big enough on screen carry their name across them, faint and spaced out,
-// the way a game map names its districts. Under the pin, so the pin stays clear.
-function drawRegionNames(m: MapState) {
+// Ground being fought over flashes, the way a game shows a war on its map. Drawn
+// on top of the kept picture every frame; true while any is on screen.
+function drawHotRegions(m: MapState, time: number) {
+  const c = m.ctx
+  let any = false
+  for (const region of m.regions) {
+    if (!region.hot || !regionOnScreen(m, region)) continue
+    any = true
+    c.save()
+    traceRegion(m, region)
+    c.globalAlpha = 0.12 + 0.28 * Math.abs(Math.sin(time / 380))
+    c.fillStyle = '#e8322c'
+    c.fill('evenodd')
+    c.globalAlpha = 0.9
+    c.lineWidth = 2
+    c.strokeStyle = '#e8322c'
+    c.stroke()
+    c.restore()
+  }
+  return any
+}
+
+// What people call a block, faint and spaced out across it, the way a game map
+// names its districts; only once it's big enough on screen to hold the name.
+// Names claim their room before the street names do, and step round pins.
+function drawRegionNames(m: MapState, placed: Box[]) {
   const c = m.ctx
   const t = m.theme
-  const scale = worldSize(m)
   for (const region of m.regions) {
-    const s = shapeOf(region)
-    const span = (s.ring ? Math.max(...s.ring.filter((_, i) => i % 2 === 0)) - Math.min(...s.ring.filter((_, i) => i % 2 === 0)) : 2 * s.r) * scale
-    if (span < 160 || span > 1600) continue
-    const p = project(m, s.x, s.y)
-    const size = Math.round(clamp(span / 14, 13, 22))
-    const text = region.name.length > 28 ? region.name.slice(0, 27).trimEnd() + '…' : region.name
+    if (!region.name) continue
+    const box = regionOnScreen(m, region)
+    if (!box || box.span < 110 || box.span > 2400) continue
+    const p = project(m, lngToX(region.lng), latToY(region.lat))
+    const size = Math.round(clamp(box.span / 12, 11, 20))
+    const name = region.name.length > 28 ? region.name.slice(0, 27).trimEnd() + '…' : region.name
+    const text = t.caps || t.blip !== 'pin' ? name.toUpperCase() : name
     c.save()
     c.font = `${t.italic ? 'italic ' : ''}700 ${size}px ${t.font}`
-    c.letterSpacing = `${Math.round(size * 0.18)}px`
+    c.letterSpacing = `${Math.round(size * 0.16)}px`
+    const half = c.measureText(text).width / 2 + 2
+    const at = [0, 1, -1, 1.8, -1.8].map((k) => p.y + k * (size + 10)).find((y) => !hits(placed, { x0: p.x - half, y0: y - size / 2 - 2, x1: p.x + half, y1: y + size / 2 + 2 }))
+    if (at === undefined) {
+      c.restore()
+      continue
+    }
+    placed.push({ x0: p.x - half, y0: at - size / 2 - 2, x1: p.x + half, y1: at + size / 2 + 2 })
     c.textAlign = 'center'
     c.textBaseline = 'middle'
-    c.globalAlpha = region.selected ? 0.85 : 0.6
+    c.globalAlpha = region.look === 'picked' ? 0.9 : 0.7
     c.lineJoin = 'round'
     c.lineWidth = 4
     c.strokeStyle = t.labelHalo
-    c.strokeText(t.caps || t.blip !== 'pin' ? text.toUpperCase() : text, p.x, p.y + 34)
+    c.strokeText(text, p.x, at)
     c.fillStyle = t.labelColor
-    c.fillText(t.caps || t.blip !== 'pin' ? text.toUpperCase() : text, p.x, p.y + 34)
+    c.fillText(text, p.x, at)
     c.restore()
   }
 }
@@ -3128,6 +3324,7 @@ function frame(m: MapState, time: number) {
   const camera = `${m.x}|${m.y}|${m.zoom}`
   if (camera !== m.baseCamera) m.baseDirty = true
   if (m.route?.state === 'waiting') stepRoute(m)
+  if (m.blockAsks.length) stepBlocks(m, time)
 
   if (m.baseDirty) {
     c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
@@ -3150,8 +3347,8 @@ function frame(m: MapState, time: number) {
       placed.push({ x0: p.x - 16, y0: p.y - 16 - lift, x1: p.x + 16, y1: p.y + 16 - lift + (marker.kind === 'person' ? 20 : 0) })
     }
 
+    drawRegionNames(m, placed)
     if (drawLabels(m, view, placed, dt)) unsettled = true
-    drawRegionNames(m)
 
     // Once nothing is moving, loading or fading, keep this picture.
     if (unsettled || keepGoing) keepGoing = true
@@ -3168,7 +3365,8 @@ function frame(m: MapState, time: number) {
     c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
   }
 
-  const animated = drawMarkers(m, view, time)
+  const hot = drawHotRegions(m, time)
+  const animated = drawMarkers(m, view, time) || hot
   if (drawFade(m, time)) keepGoing = true
 
   m.onFrame()

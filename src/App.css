@@ -942,16 +942,6 @@ kbd {
   color: #16a34a;
 }
 
-/* Lore's year, in sepia whatever the style. */
-.when.lore {
-  color: #9a6b3f;
-}
-
-.when-line.lore {
-  background: color-mix(in srgb, #9a6b3f 14%, transparent);
-  color: color-mix(in srgb, #9a6b3f 80%, var(--fg));
-}
-
 .when-field {
   margin: 10px 0 0;
 }
@@ -1201,7 +1191,7 @@ a.btn {
   transition: opacity 0.12s;
 }
 
-.reply:hover .link.quiet,
+.comment-main:hover .link.quiet,
 .link.quiet:focus-visible {
   opacity: 1;
 }
@@ -2283,6 +2273,19 @@ textarea::placeholder {
   flex: none;
 }
 
+.legend-turf {
+  width: 22px;
+  height: 14px;
+  flex: none;
+  border-radius: 3px;
+  opacity: 0.75;
+}
+
+.legend-turf.hot {
+  background: #e8322c;
+  animation: war 0.8s ease-in-out infinite alternate;
+}
+
 .legend-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2297,50 +2300,80 @@ textarea::placeholder {
   min-width: 0;
 }
 
-/* Back in time: the years slide along the bottom, where the pin button was. */
+/* Back in time: the timeline sits along the bottom, where the pin button was. */
 .then-bar {
   position: absolute;
   z-index: 12;
-  bottom: 24px;
+  bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: min(460px, calc(100vw - 32px));
-  padding: 8px 8px 8px 16px;
+  display: grid;
+  gap: 4px;
+  width: min(560px, calc(100vw - 32px));
+  padding: 8px 10px 10px;
   border-radius: var(--radius);
   background: var(--bg);
   backdrop-filter: blur(var(--blur)) saturate(1.3);
   -webkit-backdrop-filter: blur(var(--blur)) saturate(1.3);
   border: 1px solid var(--line);
   box-shadow: var(--shadow), var(--highlight);
-  color: #9a6b3f;
   animation: rise 0.2s;
 }
 
-.then-bar input {
-  flex: 1;
-  accent-color: #9a6b3f;
+.then-top,
+.then-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.then-year {
+.then-top .spans {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  min-width: 64px;
+  flex: 1;
+  gap: 2px;
+}
+
+.then-top .spans button {
+  padding: 4px 10px;
+  border-radius: var(--pill);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.then-top .spans button.on {
+  background: var(--pick);
+  color: var(--pick-fg);
+  box-shadow: 0 0 0 1px var(--line2);
+}
+
+.then-track input {
+  flex: 1;
+  min-width: 0;
+  accent-color: #b07a3f;
+}
+
+.then-track .play.on {
+  color: #b07a3f;
+}
+
+.then-when {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 6px;
   font-variant-numeric: tabular-nums;
 }
 
-.then-year strong {
+.then-when strong {
   font-family: var(--font-head);
-  font-size: 22px;
-  line-height: 1;
+  font-size: 17px;
 }
 
-.then-year small {
+.then-when small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .has-feed .then-bar {
@@ -2353,6 +2386,10 @@ textarea::placeholder {
 
 .has-feed.has-detail .then-bar {
   left: calc(50% - 32px);
+}
+
+.then-note {
+  margin-top: 10px;
 }
 
 .fab {
@@ -2569,27 +2606,9 @@ button.toast {
 
 /* The big-moment banner: every game style shouts in its own voice. */
 
-/* Picking a pin's area while making it. */
+/* Picking the blocks a pin takes over while making it. */
 .area-field .tabs {
   margin: 0;
-}
-
-.area-range {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-
-.area-range input {
-  flex: 1;
-  accent-color: var(--accent);
-}
-
-.area-range span {
-  min-width: 96px;
-  text-align: right;
 }
 
 .area-help {
@@ -2599,7 +2618,7 @@ button.toast {
   font-weight: 500;
 }
 
-/* Walking into a pin's area: its name in the corner, the way a game names a district. */
+/* Walking into a block: its name in the corner, the way a game names a district. */
 .district {
   position: absolute;
   z-index: 60;
@@ -3341,16 +3360,16 @@ button.toast {
     bottom: calc(150px + env(safe-area-inset-bottom));
   }
 
+  .district strong {
+    font-size: 22px;
+  }
+
   .then-bar {
     left: 16px !important; /* phones: across the bottom, over the tab bar */
     right: 16px;
     width: auto;
     transform: none;
     bottom: calc(72px + env(safe-area-inset-bottom));
-  }
-
-  .district strong {
-    font-size: 22px;
   }
 
   .objective {
@@ -3465,4 +3484,520 @@ button.toast {
 
 [data-theme='radar'] .avatar img {
   filter: grayscale(1) sepia(1) hue-rotate(80deg) saturate(3) brightness(0.9);
+}
+
+/*
+ * City blocks: names, the word on the street, turf and the spraying.
+ */
+
+.crew-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--crew);
+  color: #fff;
+  font: italic 900 11px/1.4 var(--font);
+  letter-spacing: 0.06em;
+  vertical-align: middle;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  transform: rotate(-4deg);
+}
+
+.crew-badge.big {
+  padding: 4px 10px;
+  font-size: 18px;
+  border-radius: 6px;
+}
+
+h1 .crew-badge {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.crew-pick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.crew-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line2);
+  background: var(--bg2);
+  text-align: left;
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.crew-card:hover {
+  border-color: var(--crew);
+}
+
+.crew-card:active {
+  transform: scale(0.98);
+}
+
+.crew-card.on {
+  border-color: var(--crew);
+  box-shadow: inset 0 0 0 1px var(--crew);
+  background: color-mix(in srgb, var(--crew) 14%, var(--bg2));
+}
+
+.crew-card em {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.crew-card small {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.block-head .banner {
+  margin-top: 10px;
+}
+
+.turf-card {
+  margin: 14px 0 4px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line2);
+  background: var(--bg2);
+}
+
+.turf-card.held {
+  border-color: color-mix(in srgb, var(--crew) 60%, transparent);
+  background: color-mix(in srgb, var(--crew) 10%, var(--bg2));
+}
+
+.turf-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.turf-line > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.spray-btn {
+  flex: none;
+}
+
+.war {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: #e8322c;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+  animation: war 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes war {
+  from { opacity: 1; }
+  to { opacity: 0.55; }
+}
+
+.standing {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.standing .bar {
+  display: grid;
+  grid-template-columns: 76px 1fr 34px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.standing.big .bar {
+  grid-template-columns: 120px 1fr 34px;
+  font-size: 14px;
+}
+
+.standing .bar i {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--crew);
+}
+
+.standing .bar b {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.section.with-tabs::after {
+  order: 1;
+}
+
+.mini-tabs {
+  order: 2;
+  display: flex;
+  gap: 2px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.mini-tabs button {
+  padding: 2px 8px;
+  border-radius: var(--pill);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mini-tabs button.on {
+  background: var(--bg3);
+  color: var(--fg);
+}
+
+.word {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.word.buried {
+  opacity: 0.45;
+}
+
+.votes {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: none;
+  width: 28px;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.votes button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.votes button:hover {
+  background: var(--bg2);
+  color: var(--fg);
+}
+
+.votes button.on {
+  color: var(--accent);
+}
+
+.votes button.on.down {
+  color: #6f7cff;
+}
+
+.word-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.word-body {
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.word-body.name {
+  font-family: var(--font-head);
+  font-weight: 800;
+  font-size: 17px;
+  text-transform: var(--head-case);
+}
+
+.say {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.say .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mini-pin {
+  gap: 10px;
+}
+
+.mini-pin .clip {
+  flex: 1;
+  text-align: left;
+}
+
+.block-view .btn-row {
+  margin-top: 12px;
+}
+
+/* The spraying: a wall, the other crews' tags coming and going on it. */
+.spray-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  background: #15110e;
+  color: #fff;
+  animation: rise 0.2s;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.spray-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+  font-size: 16px;
+}
+
+.spray-top strong {
+  flex: 1;
+  min-width: 0;
+}
+
+.spray-top .icon-btn {
+  color: #fff;
+}
+
+.spray-clock,
+.spray-score {
+  font: 900 22px/1 var(--font);
+  font-variant-numeric: tabular-nums;
+}
+
+.spray-score {
+  min-width: 40px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--crew);
+  text-align: center;
+}
+
+.wall {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  cursor: crosshair;
+  /* Bricks, from gradients. */
+  background:
+    linear-gradient(0deg, rgba(0, 0, 0, 0.45) 2px, transparent 2px) 0 0 / 100% 34px,
+    linear-gradient(90deg, rgba(0, 0, 0, 0.45) 2px, transparent 2px) 0 0 / 72px 68px,
+    linear-gradient(90deg, rgba(0, 0, 0, 0.45) 2px, transparent 2px) 36px 34px / 72px 68px,
+    radial-gradient(ellipse at 30% 20%, #8a4a36, #5d2e22 60%, #3c1d16);
+}
+
+.mark {
+  position: absolute;
+  transform: translate(-50%, -50%) rotate(var(--turn));
+  padding: 14px 20px;
+  border-radius: 40% 55% 45% 60%;
+  background: color-mix(in srgb, var(--mark) 25%, transparent);
+  color: var(--mark);
+  font: italic 900 34px/1 'Arial Black', Impact, var(--font);
+  letter-spacing: -0.02em;
+  -webkit-text-stroke: 2px #111;
+  text-shadow: 3px 3px 0 #111;
+  animation: mark-in 0.18s ease-out;
+  transition: opacity 0.1s;
+}
+
+.mark.hit {
+  background: color-mix(in srgb, var(--mark) 55%, transparent);
+  color: #fff;
+  -webkit-text-stroke: 2px var(--mark);
+  animation: splat 0.25s ease-out;
+  pointer-events: none;
+}
+
+@keyframes mark-in {
+  from { transform: translate(-50%, -50%) rotate(var(--turn)) scale(0.4); opacity: 0; }
+}
+
+@keyframes splat {
+  0% { transform: translate(-50%, -50%) rotate(var(--turn)) scale(1.4); }
+  100% { transform: translate(-50%, -50%) rotate(var(--turn)) scale(1); }
+}
+
+.puff {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--crew) 70%, transparent), transparent 70%);
+  pointer-events: none;
+  animation: puff 0.5s ease-out forwards;
+}
+
+@keyframes puff {
+  from { transform: scale(0.3); opacity: 1; }
+  to { transform: scale(1.6); opacity: 0; }
+}
+
+.spray-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, calc(100vw - 48px));
+  padding: 22px;
+  border-radius: 14px;
+  background: rgba(10, 10, 10, 0.86);
+  border: 2px solid var(--crew);
+  text-align: center;
+  animation: rise 0.2s;
+}
+
+.spray-card strong {
+  display: block;
+  font: italic 900 24px/1.2 'Arial Black', Impact, var(--font);
+  text-transform: uppercase;
+}
+
+.spray-card p {
+  margin: 10px 0 16px;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.4;
+}
+
+.spray-points {
+  font-size: 56px !important;
+  color: var(--crew);
+  -webkit-text-stroke: 2px #000;
+}
+
+.btn.big {
+  padding: 12px 26px;
+  font-size: 17px;
+}
+
+/*
+ * Threads: answers under what they answer, a line down the left to fold them.
+ */
+
+.comment {
+  position: relative;
+}
+
+.comment-main {
+  padding: 8px 0 4px;
+}
+
+.comment-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.comment-head .avatar {
+  flex: none;
+}
+
+.comment-text {
+  margin: 4px 0 2px;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.comment.deleted > .comment-main .comment-text {
+  font-style: italic;
+}
+
+.comment-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.comment-actions .answer {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.comment-actions .answer:hover {
+  color: var(--fg);
+}
+
+.comment-main .composer {
+  margin: 6px 0 4px;
+}
+
+.comment-kids {
+  position: relative;
+  padding-left: 16px;
+}
+
+/* Deep threads stop stepping in, so a phone's width lasts. */
+.comment .comment .comment .comment .comment .comment-kids {
+  padding-left: 0;
+}
+
+.thread-line {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 8px;
+  width: 9px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.thread-line::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--line2);
+}
+
+.thread-line:hover::before {
+  background: var(--accent);
+}
+
+.folded {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px 16px;
+  padding: 3px 10px;
+  border-radius: var(--pill);
+  background: var(--bg2);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.folded:hover {
+  color: var(--fg);
+}
+
+.comment .word {
+  border-bottom: 0;
+  padding: 0;
 }

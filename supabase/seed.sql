@@ -38,7 +38,6 @@ declare
   );
   person jsonb;
   p record;
-  memory record;
 begin
   if exists (select 1 from auth.users where email = 'maya@aroundhere.demo') then
     raise notice 'Demo neighbourhood is already here.';
@@ -186,41 +185,216 @@ begin
     (maya, tom, 'Not yet, Ben thinks he saw him by the courts.', now() - interval '2 hours', now() - interval '2 hours'),
     (tom, maya, 'I''ll ride past on the way home and have a look.', now() - interval '110 minutes', null),
     (priya, maya, 'Dumplings at 7, don''t be late!', now() - interval '50 minutes', null);
+end;
+$$;
 
-  -- Lore: what the neighbours remember of a place, and the year. Some of it is
-  -- about a stretch of the city rather than a spot.
-  create temporary table demo_lore (author uuid, title text, body text, year int, lat float8, lng float8, area jsonb, age interval) on commit drop;
-  insert into demo_lore values
-    (priya, 'Nan''s corner deli', 'My nan ran a deli on this corner. Kids came in after school for a bag of mixed lollies and she knew every one of them by name, and who their mum was.', 1964, -34.92850, 138.59760, null, '4 days'),
-    (hannah, 'Learned to ride a bike on this path', 'Dad let go of the seat somewhere near the bridge and didn''t tell me until the far end. I cried, then made him do it again.', 1979, -34.91690, 138.59900, null, '6 days'),
-    (tom, 'Watched the Grand Prix from the fence here', 'Stood on a milk crate at the fence all afternoon. You felt the cars in your chest before you saw them, and the whole park smelled of hot tyres.', 1986, -34.92900, 138.61900,
-      '{"ring": [[138.6170, -34.9272], [138.6212, -34.9272], [138.6212, -34.9308], [138.6170, -34.9308]]}', '3 days'),
-    (lucas, 'Our band''s first gig, upstairs at the pub', 'Twelve people came and eight of them were our mums. We played the same four songs twice and nobody minded.', 1994, -34.92360, 138.62550, null, '2 days'),
-    (ben, 'The bakery that did pies at 2am', 'After the clubs everyone ended up here. A pie floater at the bench, and the sky going pink over the rooftops.', 1999, -34.92320, 138.59550, null, '5 days'),
-    (maya, 'The winter the river came up to the benches', 'The path was under brown water for a week. The ducks swam over the benches like they owned them.', 2016, -34.91850, 138.59350, '{"r": 150}', '1 day');
+-- City blocks: what the neighbours call them, what they say about them, and the
+-- four crews' turf. The outlines are the app's own, traced from the map's
+-- streets. Blocks someone already made here are used as they are.
+do $$
+declare
+  maya uuid := 'd0000000-0000-4000-8000-000000000001';
+  tom uuid := 'd0000000-0000-4000-8000-000000000002';
+  priya uuid := 'd0000000-0000-4000-8000-000000000003';
+  lucas uuid := 'd0000000-0000-4000-8000-000000000004';
+  hannah uuid := 'd0000000-0000-4000-8000-000000000005';
+  ben uuid := 'd0000000-0000-4000-8000-000000000006';
+  b record;
+  w record;
+  word uuid;
+  kept uuid;
+begin
+  if not exists (select 1 from auth.users where id = maya) then
+    raise notice 'Load the demo neighbourhood first.';
+    return;
+  end if;
+  if exists (select 1 from public.block_words where author_id = maya) then
+    raise notice 'Demo blocks are already here.';
+    return;
+  end if;
 
-  for memory in select * from demo_lore loop
-    with place as (
-      insert into public.places (latitude, longitude, created_at) values (memory.lat, memory.lng, now() - memory.age) returning id
-    )
-    insert into public.posts (place_id, title, description, latitude, longitude, flair, year, area, author_id, author_name, created_at)
-    select place.id, memory.title, memory.body, memory.lat, memory.lng, 'lore', memory.year, memory.area, memory.author,
-      (select display_name from public.profiles where id = memory.author), now() - memory.age
-    from place;
+  create temporary table demo_blocks (key text, ring jsonb, lat float8, lng float8, id uuid) on commit drop;
+  insert into demo_blocks (key, ring, lat, lng) values
+    ('deli', '[[138.599224,-34.92863],[138.599208,-34.928335],[138.59924,-34.928058],[138.599401,-34.927746],[138.599685,-34.927262],[138.599718,-34.92717],[138.599573,-34.927209],[138.597117,-34.927331],[138.597159,-34.9279],[138.597186,-34.92797],[138.597239,-34.928727]]', -34.927481, 138.598342),
+    ('dumplings', '[[138.599267,-34.929145],[138.599235,-34.928709],[138.595845,-34.92889],[138.595963,-34.930323],[138.596542,-34.930293],[138.596579,-34.930257],[138.59681,-34.93024],[138.597685,-34.930205],[138.59902,-34.93013],[138.599251,-34.930103],[138.599208,-34.929329],[138.599224,-34.929299],[138.599288,-34.92925]]', -34.929193, 138.597573),
+    ('cafe', '[[138.600377,-34.927706],[138.600211,-34.927517],[138.600018,-34.927253],[138.599964,-34.927157],[138.599718,-34.92717],[138.599685,-34.927262],[138.599401,-34.927746],[138.59924,-34.928058],[138.599208,-34.928335],[138.599224,-34.92863],[138.60049,-34.928573],[138.600748,-34.92852],[138.600721,-34.928278],[138.600656,-34.928111],[138.600533,-34.927913]]', -34.928335, 138.599968),
+    ('bakery', '[[138.597631,-34.924443],[138.59754,-34.923088],[138.595426,-34.923189],[138.595496,-34.92399],[138.596542,-34.923933],[138.596579,-34.924494]]', -34.923369, 138.5965),
+    ('g31', '[[138.599718,-34.92717],[138.599739,-34.927042],[138.599637,-34.92577],[138.597658,-34.925877],[138.597769,-34.927212],[138.599578,-34.927121]]', -34.926058, 138.598667),
+    ('g30', '[[138.597769,-34.927212],[138.597658,-34.925877],[138.596,-34.925974],[138.596106,-34.927294]]', -34.927011, 138.596917),
+    ('g51', '[[138.600082,-34.931515],[138.599997,-34.930271],[138.599959,-34.930156],[138.598783,-34.930204],[138.598886,-34.931577]]', -34.93044, 138.599405),
+    ('g50', '[[138.596767,-34.931684],[138.596665,-34.930504],[138.596676,-34.930446],[138.596671,-34.930323],[138.596579,-34.930328],[138.596542,-34.930293],[138.595963,-34.930323],[138.596059,-34.931717]]', -34.931432, 138.596392),
+    ('keys', '[[138.601866,-34.922871],[138.601831,-34.922283],[138.601879,-34.922222],[138.601831,-34.921593],[138.601837,-34.921527],[138.599519,-34.921619],[138.599621,-34.922983]]', -34.922109, 138.600713),
+    ('probe', '[[138.601955,-34.924157],[138.601866,-34.922871],[138.600651,-34.922934],[138.600742,-34.924214],[138.600737,-34.924289],[138.60196,-34.924227]]', -34.923154, 138.601276),
+    ('busker', '[[138.605581,-34.922684],[138.605517,-34.921817],[138.604277,-34.921883],[138.604245,-34.921388],[138.603467,-34.921426],[138.603569,-34.922785]]', -34.921947, 138.604516),
+    ('g11', '[[138.599438,-34.922992],[138.599383,-34.922253],[138.598902,-34.922266],[138.598956,-34.923018]]', -34.922865, 138.599187),
+    ('g12', '[[138.603569,-34.922785],[138.603467,-34.921426],[138.602974,-34.921456],[138.602641,-34.921492],[138.601837,-34.921527],[138.601831,-34.921593],[138.601879,-34.922222],[138.601831,-34.922283],[138.601866,-34.922871]]', -34.922582, 138.602701),
+    ('g22', '[[138.60203,-34.925177],[138.601965,-34.924324],[138.599739,-34.924439],[138.599852,-34.925758],[138.602058,-34.925647]]', -34.924611, 138.60087),
+    ('g10', '[[138.596842,-34.923123],[138.596751,-34.921747],[138.596022,-34.921782],[138.596107,-34.923159]]', -34.922876, 138.596458),
+    ('band', '[[138.625547,-34.92388],[138.625499,-34.923189],[138.624882,-34.923225],[138.624995,-34.924768],[138.625504,-34.924729],[138.62552,-34.92468],[138.625601,-34.924645],[138.625596,-34.924329]]', -34.924295, 138.625276),
+    ('park', '[[138.616959,-34.923572],[138.616047,-34.922939],[138.615677,-34.92256],[138.615521,-34.922248],[138.615468,-34.921971],[138.615248,-34.922072],[138.61506,-34.922134],[138.61455,-34.922226],[138.612088,-34.922349],[138.611128,-34.922442],[138.610945,-34.922433],[138.611042,-34.923752],[138.611096,-34.924131],[138.611155,-34.924263],[138.61123,-34.924346],[138.6116,-34.924632],[138.611718,-34.924742],[138.611836,-34.924931],[138.611868,-34.925024],[138.611889,-34.925147],[138.613129,-34.925081],[138.61381,-34.925098],[138.617731,-34.925098],[138.618155,-34.925111],[138.618504,-34.925002],[138.6186,-34.924953],[138.618649,-34.924896],[138.618654,-34.924782],[138.618397,-34.924588],[138.617356,-34.923862]]', -34.924512, 138.614865),
+    ('g36', '[[138.613762,-34.927473],[138.613692,-34.926572],[138.61367,-34.926532],[138.613611,-34.926484],[138.613536,-34.926471],[138.612957,-34.926501],[138.612855,-34.925098],[138.611889,-34.925147],[138.611959,-34.926559],[138.612043,-34.927561]]', -34.926576, 138.612826),
+    ('g46', '[[138.614652,-34.929387],[138.614566,-34.927918],[138.613778,-34.927931],[138.61285,-34.927975],[138.612292,-34.928089],[138.612088,-34.928102],[138.612147,-34.92885],[138.612178,-34.929484],[138.612308,-34.929448],[138.612716,-34.929483]]', -34.928231, 138.613341),
+    ('g25', '[[138.611686,-34.924909],[138.611643,-34.924834],[138.611541,-34.924729],[138.611149,-34.924421],[138.611015,-34.92428],[138.610972,-34.924139],[138.61094,-34.923849],[138.610056,-34.923902],[138.610092,-34.924381],[138.609765,-34.924398],[138.609835,-34.925248],[138.61175,-34.925151],[138.611729,-34.925015]]', -34.924968, 138.610761),
+    ('bench', '[[138.607866,-34.922486],[138.607807,-34.92176],[138.607786,-34.92132],[138.607759,-34.921206],[138.606831,-34.921258],[138.606466,-34.921294],[138.60548,-34.921342],[138.605581,-34.922684],[138.607909,-34.922569]]', -34.921501, 138.606643),
+    ('g15', '[[138.61086,-34.922855],[138.610827,-34.922411],[138.608574,-34.922534],[138.608681,-34.923893],[138.610929,-34.923761],[138.610886,-34.923387]]', -34.922707, 138.609718),
+    ('power', '[[138.612215,-34.931583],[138.612168,-34.930908],[138.60697,-34.931172],[138.607078,-34.932487],[138.607711,-34.932518],[138.608585,-34.932478],[138.608536,-34.93177]]', -34.93123, 138.609583),
+    ('cleanup', '[[138.61271,-34.937377],[138.612581,-34.935939],[138.612517,-34.935781],[138.612463,-34.93506],[138.610082,-34.935183],[138.607764,-34.935284],[138.607582,-34.93535],[138.60748,-34.935407],[138.607437,-34.935447],[138.609996,-34.937012],[138.612807,-34.938705]]', -34.935789, 138.610258),
+    ('g44', '[[138.607367,-34.929756],[138.607234,-34.928346],[138.606525,-34.928384],[138.606627,-34.929796]]', -34.929506, 138.606975),
+    ('g45', '[[138.610503,-34.929593],[138.610401,-34.928181],[138.608349,-34.928287],[138.608462,-34.92969]]', -34.928483, 138.609394),
+    ('g35', '[[138.610333,-34.927346],[138.610275,-34.926642],[138.608225,-34.926739],[138.60834,-34.928168],[138.610393,-34.928063]]', -34.927863, 138.609346),
+    ('g56', '[[138.612946,-34.932263],[138.612877,-34.931348],[138.612887,-34.931295],[138.612855,-34.930869],[138.612528,-34.930886],[138.612362,-34.930952],[138.612299,-34.931034],[138.612394,-34.932245]]', -34.931147, 138.612592),
+    ('g53', '[[138.605479,-34.931634],[138.605452,-34.931247],[138.604449,-34.9313],[138.60447,-34.931669]]', -34.931585, 138.604971),
+    ('bike', '[[138.599117,-34.917195],[138.599026,-34.916627],[138.598881,-34.91547],[138.598768,-34.915549],[138.598865,-34.916451],[138.598983,-34.917207]]', -34.916512, 138.598943),
+    ('g33', '[[138.605946,-34.927579],[138.605887,-34.926853],[138.605726,-34.926902],[138.604296,-34.926973],[138.604406,-34.928361],[138.605999,-34.928287]]', -34.927607, 138.605147),
+    ('g34', '[[138.608279,-34.927465],[138.608225,-34.926739],[138.605887,-34.926853],[138.605946,-34.927579]]', -34.926907, 138.607064),
+    ('g23', '[[138.605071,-34.925494],[138.604991,-34.924293],[138.604902,-34.924182],[138.604412,-34.924206],[138.604497,-34.925521]]', -34.925253, 138.604767),
+    ('g24', '[[138.608125,-34.925337],[138.608032,-34.924016],[138.606364,-34.924104],[138.606461,-34.925424]]', -34.924298, 138.607215),
+    ('g32', '[[138.602293,-34.928459],[138.602162,-34.92708],[138.600635,-34.927157],[138.600748,-34.92852]]', -34.928232, 138.601497),
+    ('g52', '[[138.602244,-34.932404],[138.602148,-34.931414],[138.600254,-34.931511],[138.600367,-34.932852],[138.602271,-34.932755]]', -34.932421, 138.601288),
+    ('g42', '[[138.606106,-34.929824],[138.60601,-34.928406],[138.602303,-34.928582],[138.600753,-34.92863],[138.60086,-34.930046],[138.603489,-34.929914],[138.605602,-34.929853]]', -34.928734, 138.603397),
+    ('g14', '[[138.60753,-34.923049],[138.607496,-34.922591],[138.605581,-34.922684],[138.605613,-34.923141]]', -34.923031, 138.606567);
+
+  for b in select * from demo_blocks loop
+    select c.id into kept from public.city_blocks c where c.shape @> point(b.lng, b.lat) order by area(box(c.shape)) limit 1;
+    if kept is null then
+      insert into public.city_blocks (ring, latitude, longitude, shape, found_by, created_at)
+      values (b.ring, b.lat, b.lng, private.ring_polygon(b.ring), maya, now() - interval '7 days')
+      returning id into kept;
+    end if;
+    update demo_blocks set id = kept where key = b.key;
   end loop;
 
-  -- Some pins are about a stretch of the city, not a spot: a few blocks drawn
-  -- round, or a circle of so many metres.
-  update public.posts set area = v.area::jsonb
+  -- Crews.
+  update public.profiles set crew = v.crew, crew_since = now() - interval '30 days'
+  from (values (maya, 'galahs'), (priya, 'galahs'), (tom, 'magpies'), (ben, 'magpies'), (lucas, 'possums'), (hannah, 'owls')) as v (who, crew)
+  where id = v.who;
+
+  -- Tags, as (block, who, points, hours ago). The Galahs have the west of the
+  -- middle of town, the Magpies the north, the Possums the east, the Owls the
+  -- south-east; and the Galahs are going after the Magpies' Busker Row.
+  insert into public.tags (block_id, user_id, crew, points, created_at)
+  select d.id, v.who, (select crew from public.profiles where id = v.who), v.points, now() - make_interval(hours => v.hours)
   from (values
-    ('Street clean-up, Saturday 9am', '{"ring": [[138.6098, -34.9346], [138.6150, -34.9346], [138.6150, -34.9377], [138.6098, -34.9377]]}'),
-    ('Pickup soccer, Tuesday 6pm', '{"ring": [[138.6118, -34.9215], [138.6158, -34.9215], [138.6158, -34.9252], [138.6118, -34.9252]]}'),
-    ('Power out on Hutt St?', '{"r": 300}'),
-    ('Lost: grey tabby called Miso', '{"r": 400}'),
-    ('The busker on Rundle Mall is incredible', '{"r": 60}'),
-    ('Outdoor cinema in the park, Friday', '{"r": 120}'),
-    ('Farmers market this Sunday', '{"r": 90}')
-  ) as v (title, area)
+    ('deli', priya, 8, 70), ('deli', maya, 6, 30), ('dumplings', priya, 9, 50), ('dumplings', maya, 7, 20), ('dumplings', tom, 4, 10),
+    ('cafe', priya, 7, 26), ('bakery', maya, 6, 60), ('bakery', ben, 5, 90), ('g31', maya, 5, 40), ('g30', priya, 6, 80), ('g51', maya, 4, 30), ('g50', priya, 5, 100),
+    ('keys', ben, 8, 20), ('keys', tom, 6, 44), ('probe', tom, 7, 12), ('busker', tom, 7, 30), ('busker', ben, 6, 8), ('g11', ben, 5, 60),
+    ('g12', tom, 6, 36), ('g22', ben, 7, 50), ('g22', priya, 5, 70), ('g10', tom, 4, 90),
+    ('band', lucas, 9, 30), ('park', lucas, 8, 48), ('park', ben, 6, 70), ('g36', lucas, 6, 20), ('g46', lucas, 5, 60), ('g25', lucas, 7, 12), ('bench', lucas, 4, 80), ('bench', maya, 3, 90),
+    ('power', hannah, 9, 16), ('cleanup', hannah, 8, 40), ('g44', hannah, 5, 30), ('g45', hannah, 6, 55), ('g35', hannah, 4, 80), ('g56', hannah, 5, 25), ('g53', hannah, 3, 70)
+  ) as v (key, who, points, hours)
+  join demo_blocks d on d.key = v.key;
+  insert into public.tags (block_id, user_id, crew, points, created_at)
+  select id, priya, 'galahs', 6, now() - interval '12 minutes' from demo_blocks where key = 'busker';
+
+  -- What people call the blocks, and what they say about them, with the votes:
+  -- (block, who, words, a name?, hours ago, up, down). Old memories of a place
+  -- sit next to this week's rumours; the votes decide what floats up.
+  create temporary table demo_words (key text, who uuid, body text, is_name boolean, hours int, up uuid[], down uuid[]) on commit drop;
+  insert into demo_words values
+    ('deli', priya, 'Nan''s Corner', true, 90, array[maya, hannah, tom], array[]::uuid[]),
+    ('deli', ben, 'Lolly Corner', true, 60, array[lucas], array[]::uuid[]),
+    ('deli', priya, 'My nan ran a deli on this corner in the sixties. Kids came in after school for a bag of mixed lollies and she knew every one of them by name, and who their mum was.', false, 96, array[maya, hannah, tom, lucas, ben], array[]::uuid[]),
+    ('dumplings', maya, 'Dumpling Alley', true, 70, array[priya, lucas, tom, ben], array[]::uuid[]),
+    ('dumplings', lucas, 'Dumpling night is a cult now. Priya is the cult leader.', false, 30, array[maya, ben, tom], array[priya]),
+    ('dumplings', maya, 'Chilli oil is BYO but you won''t need to.', false, 20, array[lucas], array[]::uuid[]),
+    ('cafe', priya, 'Pastry Row', true, 26, array[maya], array[]::uuid[]),
+    ('cafe', priya, 'The pastries at the new place are unreal. Get there before nine.', false, 25, array[ben, hannah], array[]::uuid[]),
+    ('bakery', ben, 'Pie Floater Corner', true, 110, array[tom, maya], array[]::uuid[]),
+    ('bakery', ben, 'The bakery here did pies at 2am. After the clubs everyone ended up on the bench with a pie floater, the sky going pink over the rooftops.', false, 120, array[tom, maya, lucas, priya], array[]::uuid[]),
+    ('keys', ben, 'The Balls', true, 40, array[tom, priya], array[]::uuid[]),
+    ('keys', hannah, 'Luck Corner', true, 38, array[]::uuid[], array[tom]),
+    ('keys', ben, 'Rub the Mall''s Balls for luck. Everyone does. Nobody knows why.', false, 44, array[tom, maya, hannah], array[]::uuid[]),
+    ('probe', tom, 'Pigeon Court', true, 14, array[ben], array[]::uuid[]),
+    ('probe', tom, 'The pigeons here run a protection racket. Pay in chips.', false, 13, array[ben, priya, lucas], array[]::uuid[]),
+    ('busker', priya, 'Busker Row', true, 50, array[maya, lucas], array[]::uuid[]),
+    ('busker', priya, 'The cellist takes requests if you ask nicely. Asked for Radiohead, got Radiohead.', false, 3, array[maya, tom], array[]::uuid[]),
+    ('band', lucas, 'The Mums'' Gig', true, 48, array[hannah], array[]::uuid[]),
+    ('band', lucas, 'Our band''s first gig was upstairs at the pub here, 1994. Twelve people came and eight of them were our mums. We played the same four songs twice and nobody minded.', false, 50, array[hannah, priya, maya], array[]::uuid[]),
+    ('park', ben, 'The Lake Pitch', true, 70, array[tom], array[]::uuid[]),
+    ('park', tom, 'Watched the Grand Prix from the fence here in ''86. You felt the cars in your chest before you saw them, and the whole park smelled of hot tyres.', false, 72, array[ben, lucas, hannah, maya], array[]::uuid[]),
+    ('bench', maya, 'Council said yes to the bench! Well, they said they''d look into it.', false, 18, array[lucas, priya], array[]::uuid[]),
+    ('power', hannah, 'Blackout Block', true, 30, array[tom, ben, priya], array[]::uuid[]),
+    ('power', hannah, 'Third blackout this month. Someone''s running a mining rig in a basement, I''m sure of it.', false, 24, array[tom, ben], array[lucas]),
+    ('cleanup', tom, 'Bin Bag Park', true, 36, array[hannah], array[]::uuid[]),
+    ('cleanup', hannah, 'We pulled fourteen bags out of here last spring. One shopping trolley, two traffic cones and a very surprised possum.', false, 40, array[tom, maya, lucas], array[]::uuid[]),
+    ('bike', hannah, 'Let-Go Bridge', true, 140, array[maya, tom], array[]::uuid[]),
+    ('bike', hannah, 'Learned to ride a bike on this path in ''79. Dad let go of the seat near the bridge and didn''t tell me until the far end. I cried, then made him do it again.', false, 144, array[maya, tom, priya], array[]::uuid[]),
+    ('bike', maya, 'The winter of 2016 the river came right up over the benches. The ducks swam over them like they owned the place.', false, 30, array[hannah, ben], array[]::uuid[]);
+
+  for w in select v.*, d.id as block from demo_words v join demo_blocks d on d.key = v.key loop
+    insert into public.block_words (block_id, author_id, body, is_name, created_at)
+    values (w.block, w.who, w.body, w.is_name, now() - make_interval(hours => w.hours))
+    returning id into word;
+    insert into public.word_votes (word_id, user_id, value, created_at)
+    select word, u, 1, now() - make_interval(hours => w.hours) + interval '20 minutes' from unnest(w.up) u
+    union all
+    select word, u, -1, now() - make_interval(hours => w.hours) + interval '30 minutes' from unnest(w.down) u
+    on conflict do nothing;
+  end loop;
+  update public.word_votes v set created_at = bw.created_at from public.block_words bw where v.word_id = bw.id and v.user_id = bw.author_id;
+
+  -- Pins that take over a few blocks.
+  update public.posts set blocks = v.blocks
+  from (
+    select 'Street clean-up, Saturday 9am' as title, array_agg(id) as blocks from demo_blocks where key in ('cleanup', 'g56')
+    union all select 'Pickup soccer, Tuesday 6pm', array_agg(id) from demo_blocks where key = 'park'
+    union all select 'Outdoor cinema in the park, Friday', array_agg(id) from demo_blocks where key = 'park'
+    union all select 'Power out on Hutt St?', array_agg(id) from demo_blocks where key in ('power', 'g45', 'g35')
+    union all select 'The busker on Rundle Mall is incredible', array_agg(id) from demo_blocks where key = 'busker'
+  ) as v
   where posts.title = v.title and posts.author_id in (maya, tom, priya, lucas, hannah, ben);
+end;
+$$;
+
+-- Threads: some replies answer other replies, and some lines on blocks have
+-- answers of their own.
+do $$
+declare
+  maya uuid := 'd0000000-0000-4000-8000-000000000001';
+  tom uuid := 'd0000000-0000-4000-8000-000000000002';
+  priya uuid := 'd0000000-0000-4000-8000-000000000003';
+  lucas uuid := 'd0000000-0000-4000-8000-000000000004';
+  hannah uuid := 'd0000000-0000-4000-8000-000000000005';
+  ben uuid := 'd0000000-0000-4000-8000-000000000006';
+  demo uuid[] := array[maya, tom, priya, lucas, hannah, ben];
+begin
+  if not exists (select 1 from public.block_words where author_id = maya) then
+    raise notice 'Load the demo blocks first.';
+    return;
+  end if;
+  if exists (select 1 from public.replies where parent_id is not null and author_id = any (demo)) then
+    raise notice 'Demo threads are already here.';
+    return;
+  end if;
+
+  -- (reply, the reply it answers)
+  update public.replies r set parent_id = p.id
+  from (values
+    ('Thanks Ben, heading there now!', 'I think I saw a grey cat near the tennis courts this morning?'),
+    ('Always. See you there.', 'Is there a spot for a slightly unfit cyclist?'),
+    ('Flickers during minor chords. Otherwise fine.', 'How haunted is the lamp exactly?'),
+    ('Back on now!', 'Same on Gilles St. SA Power says an hour.'),
+    ('Two seats left!', 'Save me a seat, I''ll bring beer.')
+  ) as v (answer, answered)
+  join public.replies p on p.content = v.answered and p.author_id = any (demo)
+  where r.content = v.answer and r.author_id = any (demo) and r.post_id = p.post_id;
+
+  -- A reply further down the lamp thread.
+  insert into public.replies (post_id, parent_id, content, author_id, author_name, created_at)
+  select p.post_id, p.id, 'I will pay extra for the haunting.', tom, (select display_name from public.profiles where id = tom), p.created_at + interval '20 minutes'
+  from public.replies p where p.content = 'Flickers during minor chords. Otherwise fine.' and p.author_id = lucas;
+
+  -- (block line, who, answer, hours after it)
+  insert into public.block_words (block_id, parent_id, author_id, body, created_at)
+  select w.block_id, w.id, v.who, v.body, w.created_at + make_interval(hours => v.after)
+  from (values
+    ('Dumpling night is a cult now. Priya is the cult leader.', priya, 'I prefer "community". Bring chilli oil.', 2),
+    ('Dumpling night is a cult now. Priya is the cult leader.', ben, 'Joined last week. No regrets.', 5),
+    ('Third blackout this month. Someone''s running a mining rig in a basement, I''m sure of it.', lucas, 'It''s the tram substation. Every time.', 3),
+    ('Rub the Mall''s Balls for luck. Everyone does. Nobody knows why.', priya, 'Rubbed them before my exam. Passed. Science.', 4),
+    ('My nan ran a deli on this corner in the sixties. Kids came in after school for a bag of mixed lollies and she knew every one of them by name, and who their mum was.', hannah, 'My mum was one of those kids! She still talks about the milk bottles.', 6)
+  ) as v (line, who, body, after)
+  join public.block_words w on w.body = v.line and w.author_id = any (demo);
+  update public.word_votes v set created_at = w.created_at from public.block_words w where v.word_id = w.id and v.user_id = w.author_id and w.parent_id is not null;
 end;
 $$;
