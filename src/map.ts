@@ -14,6 +14,8 @@ const SOURCE_MAX_ZOOM = 14
 const MIN_ZOOM = 3
 const MAX_ZOOM = 20
 const TILEJSON_URL = 'https://tiles.openfreemap.org/planet'
+// Offline, the tiles come from the backend's own copy (see server/offline.mjs).
+const LOCAL_TILES = import.meta.env.VITE_TILES_URL as string | undefined
 const FALLBACK_TILES = 'https://tiles.openfreemap.org/planet/20260913_164504_pt/{z}/{x}/{y}.pbf'
 
 export function lngToX(lng: number) {
@@ -880,11 +882,16 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     route: null, onRoute: () => {},
   }
 
-  fetch(TILEJSON_URL)
-    .then((response) => response.json())
-    .then((json) => { m.tileUrl = json.tiles?.[0] ?? FALLBACK_TILES })
-    .catch(() => { m.tileUrl = FALLBACK_TILES })
-    .finally(() => requestFrame(m))
+  if (LOCAL_TILES) {
+    m.tileUrl = LOCAL_TILES.startsWith('/') ? window.location.origin + LOCAL_TILES : LOCAL_TILES
+    requestFrame(m)
+  } else {
+    fetch(TILEJSON_URL)
+      .then((response) => response.json())
+      .then((json) => { m.tileUrl = json.tiles?.[0] ?? FALLBACK_TILES })
+      .catch(() => { m.tileUrl = FALLBACK_TILES })
+      .finally(() => requestFrame(m))
+  }
 
   const resize = () => {
     const rect = canvas.getBoundingClientRect()

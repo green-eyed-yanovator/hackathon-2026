@@ -86,31 +86,32 @@ What you can do:
 
 ## Running it
 
-You need Node (20.19 or 22.12 and up, for Vite), and either Docker running
-(Docker Desktop, OrbStack or Colima) or a free Supabase account. From a fresh
-clone:
+You need Node (20.19 or 22.12 and up, for Vite). Docker is optional. From a
+fresh clone:
 
 ```sh
 npm install
-npm run setup    # local Supabase with the demo neighbourhood, and .env.local
+npm run setup    # a backend of your own, with the demo neighbourhood, and .env.local
 npm run dev      # http://127.0.0.1:5173
 ```
 
-`npm run setup` starts local Supabase (Postgres, auth, realtime, storage; the
-CLI comes through npx if it isn't installed), which builds the database from
-the migrations and loads the demo the first time, and writes `.env.local`.
-Run it again after pulling: it applies any new migrations and never wipes
-anything. The first run downloads the Supabase images, a few minutes.
+With Docker running, `npm run setup` starts local Supabase (the CLI comes
+through npx if it isn't installed), which builds the database from the
+migrations and loads the demo the first time. Run it again after pulling: it
+applies new migrations and never wipes anything.
 
-No Docker? `npm run setup` sets you up a free Supabase project of your own
-instead, in your own Supabase account: it logs you in (a browser window, and
-a free account if you don't have one), makes the project, builds its database
-with the demo neighbourhood and turns off email confirmation. It takes a few
-minutes the first time; after a pull it just applies new migrations. The
-project and its database password are kept in `.env.local`. `npm run setup --
---cloud` does the same even with Docker.
+Without Docker, it sets up the offline backend instead, which needs neither
+Docker nor the internet: the same database (real Postgres, compiled to
+WebAssembly with PGlite, running our migrations and seed as they are) inside
+the dev server, on the app's own address, with the parts of Supabase the app
+uses in `server/offline.mjs`. Everything is kept in `supabase/.local`; sign-in
+codes and password resets land in a mailbox page at http://127.0.0.1:5173/_mail;
+and while there's internet, setup keeps the demo area's map, so the map works
+offline too (elsewhere it fills in, and is kept, as you use it online).
+`npm run setup -- --offline` uses it even with Docker. To start its database
+over, delete `supabase/.local/db`.
 
-To start over from nothing: `npx supabase db reset` (wipes local data). To load
+With Docker, to start over from nothing: `npx supabase db reset` (wipes local data). To load
 the demo into a database you want to keep:
 
 ```sh
