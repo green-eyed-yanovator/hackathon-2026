@@ -52,7 +52,7 @@ const ownMedia = (m: Media) => {
   return url ? { ...m, url } : null
 }
 
-export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost'
+export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost' | 'sighting' | 'story' | 'snap'
 
 export type Post = {
   id: string
@@ -69,6 +69,9 @@ export type Post = {
   flair: Flair
   starts_at: string | null // when it happens, for events and meetups
   blocks: string[] | null // the city blocks it covers, if more than a spot
+  expires_at: string | null // a snap: gone after this, unless it's a legend
+  legend_at: string | null // voted into the neighbourhood's lore: here for good
+  boosted_until: string | null // someone spent sparks to make it stand out
 }
 
 export type Reply = {
@@ -89,31 +92,33 @@ export type Profile = {
   bio: string | null
   avatar_url: string | null
   created_at: string
-  crew: Crew | null
+  streak: number // days in a row they've opened the app
+  streak_day: string | null
+  sparks: number // to spend on stickers and boosts
+  sparks_earned: number // ever
 }
 
 // City blocks: the ground the streets close round, kept once someone does
-// something with one. What's said on them, the votes, and the crews' tags.
+// something with one. What's said on them, and the votes.
 export type CityBlock = { id: string; ring: [number, number][]; latitude: number; longitude: number; created_at: string }
 export type Word = { id: string; block_id: string; parent_id: string | null; author_id: string | null; body: string; is_name: boolean; created_at: string; deleted_at: string | null }
 export type Vote = { word_id: string; user_id: string; value: 1 | -1; created_at: string }
-export type Tag = { id: string; block_id: string; user_id: string | null; crew: Crew; points: number; created_at: string }
+export type PostVote = { post_id: string; user_id: string; value: 1 | -1; created_at: string }
+export type Sticker = { id: string; user_id: string; emoji: string; latitude: number; longitude: number; created_at: string; expires_at: string }
 
-export type Crew = 'magpies' | 'galahs' | 'possums' | 'owls'
-export const crews: Record<Crew, { name: string; tag: string; color: string; motto: string }> = {
-  magpies: { name: 'Magpies', tag: 'MAG', color: '#27b4d8', motto: 'Swoop first, ask later.' },
-  galahs: { name: 'Galahs', tag: 'GAL', color: '#f0559c', motto: 'Loud, pink and everywhere.' },
-  possums: { name: 'Possums', tag: 'POS', color: '#3dbb5c', motto: 'Up all night, on every roof.' },
-  owls: { name: 'Owls', tag: 'OWL', color: '#9b63f2', motto: 'We saw that.' },
-}
+// Enough more up than down and a pin is a legend: it stays on the map for good.
+export const LEGEND_VOTES = 3
+export const STICKERS = ['👣', '👻', '🛸', '🐻', '🦝', '👀', '💀', '🔥', '🎉', '🍕', '🎸', '🌈']
+export const STICKER_SPARKS = 3
+export const BOOST_SPARKS = 10
 
-export type Media = { id: string; post_id: string; media_type: 'image' | 'video'; url: string; created_at: string }
+export type Media = { id: string; post_id: string; reply_id: string | null; author_id: string | null; media_type: 'image' | 'video'; url: string; created_at: string }
 export type Interest = { user_id: string; post_id: string; created_at: string }
 export type Like = { user_id: string; reply_id: string; created_at: string }
 export type Saved = { post_id: string; created_at: string }
 export type Revision = { id: string; title: string; description: string; replaced_at: string }
 
-export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention' | 'turf' | 'comment_reply' | 'word_reply'
+export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention' | 'comment_reply' | 'word_reply' | 'legend'
 
 export type Notification = {
   id: string
@@ -121,8 +126,8 @@ export type Notification = {
   actor_id: string | null
   actor_name: string | null
   post_id: string | null
-  post_title: string | null // for turf, the block's name
-  preview: string | null // for turf, the crew hitting it
+  post_title: string | null // for an answer on a block, the block's name
+  preview: string | null
   block_id: string | null
   created_at: string
   read_at: string | null
@@ -134,13 +139,16 @@ export type Location = { user_id: string; latitude: number; longitude: number; a
 export type Here = { latitude: number; longitude: number; accuracy: number; heading: number | null }
 export type Presence = { user_id: string; device: string; here: boolean; seen_at: string }
 
-export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert'; color: string }> = {
+export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert' | 'eye' | 'book' | 'camera'; color: string }> = {
   general: { label: 'General', icon: 'chat', color: '#4f7cff' },
   food: { label: 'Food', icon: 'burger', color: '#f07b2d' },
   music: { label: 'Music', icon: 'note', color: '#a259ff' },
   sports: { label: 'Sports', icon: 'ball', color: '#16a974' },
   event: { label: 'Event', icon: 'star', color: '#e0a100' },
   lost: { label: 'Lost & found', icon: 'alert', color: '#ef4444' },
+  sighting: { label: 'Sighting', icon: 'eye', color: '#0f9488' }, // a bear on the bike path, something big in the parklands at 3am
+  story: { label: 'Story', icon: 'book', color: '#8b5a2b' }, // told at length, the way the good ones on Reddit are
+  snap: { label: 'Snap', icon: 'camera', color: '#e8458b' }, // a photo that's gone in a day
 }
 
 export const S = {
@@ -160,7 +168,8 @@ export const S = {
   blocks: new Map<string, CityBlock>(),
   words: [] as Word[], // oldest first
   votes: [] as Vote[],
-  tags: [] as Tag[], // the last month's, oldest first
+  postVotes: [] as PostVote[],
+  stickers: [] as Sticker[], // up for a day
 
   saved: [] as Saved[],
   notifications: [] as Notification[], // oldest first
@@ -206,6 +215,8 @@ type Stats = {
   photo: Map<string, Media> // each pin's first photo
   likes: Map<string, number> // hearts per reply
   liked: Set<string> // replies I've hearted
+  score: Map<string, number> // up minus down, per pin
+  myVote: Map<string, 1 | -1> // my vote on each pin I've voted on
 }
 
 let statsVersion = -1
@@ -213,7 +224,12 @@ let statsCache: Stats
 
 export function stats() {
   if (statsVersion === version) return statsCache
-  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set(), photo: new Map(), likes: new Map(), liked: new Set() }
+  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set(), photo: new Map(), likes: new Map(), liked: new Set(), score: new Map(), myVote: new Map() }
+  for (const v of S.postVotes) {
+    if (S.blocked.has(v.user_id)) continue
+    st.score.set(v.post_id, (st.score.get(v.post_id) ?? 0) + v.value)
+    if (v.user_id === S.userId) st.myVote.set(v.post_id, v.value)
+  }
   for (const like of S.likes) {
     if (S.blocked.has(like.user_id)) continue
     st.likes.set(like.reply_id, (st.likes.get(like.reply_id) ?? 0) + 1)
@@ -333,6 +349,7 @@ const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
 const sameInterest = (a: Interest, b: Interest) => a.user_id === b.user_id && a.post_id === b.post_id
 const sameLike = (a: Like, b: Like) => a.user_id === b.user_id && a.reply_id === b.reply_id
 const sameVote = (a: Vote, b: Vote) => a.user_id === b.user_id && a.word_id === b.word_id
+const samePostVote = (a: PostVote, b: PostVote) => a.user_id === b.user_id && a.post_id === b.post_id
 
 let retrying = false
 
@@ -345,7 +362,7 @@ function markBehind(part: 'public' | 'private', error: { code?: string } | null)
 } // a reload is already waiting
 
 async function loadPublic() {
-  const [posts, replies, media, interests, profiles, likes, blocks, words, votes, tags] = await Promise.all([
+  const [posts, replies, media, interests, profiles, likes, blocks, words, votes, postVotes, stickers] = await Promise.all([
     supabase.from('posts').select('*').order('created_at', { ascending: false }),
     supabase.from('replies').select('*').order('created_at', { ascending: true }),
     supabase.from('post_media').select('*').order('created_at', { ascending: true }),
@@ -355,11 +372,12 @@ async function loadPublic() {
     supabase.from('city_blocks').select('id, ring, latitude, longitude, created_at'),
     supabase.from('block_words').select('*').order('created_at', { ascending: true }),
     supabase.from('word_votes').select('*'),
-    supabase.from('tags').select('*').gt('created_at', new Date(Date.now() - 30 * 86400000).toISOString()).order('created_at', { ascending: true }),
+    supabase.from('post_votes').select('*'),
+    supabase.from('stickers').select('*'),
   ])
 
   // All or nothing: a half-loaded map (pins without their replies) is worse than the one we had.
-  const failed = [posts, replies, media, interests, profiles, likes, blocks, words, votes, tags].find((r) => r.error)
+  const failed = [posts, replies, media, interests, profiles, likes, blocks, words, votes, postVotes, stickers].find((r) => r.error)
   if (failed) {
     fail('Loading pins', failed.error)
     S.offline = true
@@ -385,7 +403,8 @@ async function loadPublic() {
   S.blocks = new Map((blocks.data ?? []).map((b: CityBlock) => [b.id, b]))
   S.words = words.data ?? []
   S.votes = votes.data ?? []
-  S.tags = tags.data ?? []
+  S.postVotes = postVotes.data ?? []
+  S.stickers = stickers.data ?? []
   S.ready = true
   changed()
   remindSoon()
@@ -475,14 +494,22 @@ function subscribePublic() {
       else upsert(S.votes, payload.new as Vote, sameVote)
       changed()
     })
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tags' }, ({ new: row }) => {
-      const tag = row as Tag
-      const before = turf().holder.get(tag.block_id)
-      upsert(S.tags, tag, byId)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'post_votes' }, (payload) => {
+      if (payload.eventType === 'DELETE') S.postVotes = S.postVotes.filter((v) => !samePostVote(v, payload.old as PostVote))
+      else upsert(S.postVotes, payload.new as PostVote, samePostVote)
       changed()
-      // Ground changing hands is news to anyone looking, like a game's "territory lost".
-      const after = turf().holder.get(tag.block_id)
-      if (after && after !== before) onTurn(tag.block_id, after, before ?? null, tag.user_id === S.userId)
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stickers' }, ({ new: row }) => {
+      upsert(S.stickers, row as Sticker, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'stickers' }, ({ old }) => {
+      S.stickers = S.stickers.filter((x) => x.id !== (old as Sticker).id)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'post_media' }, ({ old }) => {
+      S.media = S.media.filter((x) => x.id !== (old as Media).id)
+      changed()
     })
     .subscribe()
 }
@@ -542,6 +569,7 @@ async function loadPrivate(userId: string, attempt = 0) {
   changed()
   remindSoon()
   noticeNearby()
+  checkInDay()
   // Sharing from last time on this device picks up again. A row without it may
   // be another device of yours sharing right now, so it's left alone, unless
   // it's this device's own hour that ran out while the app was closed.
@@ -564,7 +592,7 @@ function subscribePrivate(userId: string) {
       if (n.actor_id && S.blocked.has(n.actor_id)) return // (the server stops these too, since the block)
       const text = describeNotification(n)
       const route = n.post_id ? `pin/${n.post_id}` : n.block_id ? `block/${n.block_id}` : n.actor_id ? `user/${n.actor_id}` : 'inbox'
-      onIncoming(`${n.actor_name ?? 'Someone'} ${text}`, n.kind === 'turf' ? '' : (n.preview ?? ''), route)
+      onIncoming(`${n.actor_name ?? (n.kind === 'legend' ? 'The neighbours' : 'Someone')} ${text}`, n.preview ?? '', route)
     })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, ({ new: row }) => {
       // Read on another device.
@@ -819,26 +847,51 @@ export async function createPost(draft: Draft) {
   upsert(S.posts, post as Post, byId, true)
   changed()
 
-  // Photos and videos go into storage, one folder per post.
-  for (const file of draft.files) {
+  await addMedia(post.id, draft.files)
+  return post as Post
+}
+
+// Photos and videos on a pin: its author's, or anyone's from the meetup, maybe
+// with a reply. They go into storage in the pin's folder, anyone else's in a
+// folder of their own inside it. True if every one made it.
+export async function addMedia(postId: string, files: File[], replyId: string | null = null) {
+  const mine = (S.posts.find((p) => p.id === postId)?.author_id ?? null) === S.userId
+  let all = true
+  for (const file of files) {
     const extension = file.name.split('.').pop() ?? 'bin'
-    const path = `${post.id}/${uuid()}.${extension}`
+    const path = mine ? `${postId}/${uuid()}.${extension}` : `${postId}/${S.userId}/${uuid()}.${extension}`
     const upload = await supabase.storage.from('post-media').upload(path, file)
     if (upload.error) {
-      fail(`Couldn't upload ${file.name}`, upload.error)
+      all = fail(`Couldn't upload ${file.name}`, upload.error)
       continue
     }
     const { data: row, error: rowError } = await supabase
       .from('post_media')
-      .insert({ post_id: post.id, media_type: file.type.startsWith('video/') ? 'video' : 'image', url: supabase.storage.from('post-media').getPublicUrl(path).data.publicUrl })
+      .insert({ post_id: postId, reply_id: replyId, media_type: file.type.startsWith('video/') ? 'video' : 'image', url: supabase.storage.from('post-media').getPublicUrl(path).data.publicUrl })
       .select()
       .single()
-    if (rowError) fail("Couldn't attach media", rowError)
-    else upsert(S.media, row as Media, byId)
+    if (rowError) all = fail("Couldn't attach it", rowError)
+    else {
+      const media = ownMedia(row as Media)
+      if (media) upsert(S.media, media, byId)
+    }
     changed()
   }
+  return all
+}
 
-  return post as Post
+export async function removeMedia(id: string) {
+  const { error } = await supabase.from('post_media').delete().eq('id', id)
+  if (error) return fail("Couldn't take it down", error)
+  S.media = S.media.filter((m) => m.id !== id)
+  changed()
+  return true
+}
+
+// A snap: a photo or a video from right where you are, gone in a day unless the
+// neighbours vote it into the lore.
+export function createSnap(file: File, caption: string, latitude: number, longitude: number) {
+  return createPost({ title: caption.trim() || 'Snap', description: '', flair: 'snap', startsAt: null, latitude, longitude, blocks: [], files: [file] })
 }
 
 export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair' | 'blocks'>>) {
@@ -861,11 +914,12 @@ export async function loadRevisions(postId: string) {
   return (data ?? []) as Revision[]
 }
 
-export async function reply(postId: string, content: string, parentId: string | null = null) {
+export async function reply(postId: string, content: string, parentId: string | null = null, files: File[] = []) {
   const { data, error } = await supabase.from('replies').insert({ post_id: postId, content, parent_id: parentId }).select().single()
   if (error) return fail("Couldn't send the reply", error)
   upsert(S.replies, data as Reply, byId)
   changed()
+  if (files.length) await addMedia(postId, files, (data as Reply).id)
   return true
 }
 
@@ -1138,10 +1192,7 @@ export function describeNotification(n: Notification) {
     case 'mention': return `mentioned you in ${title}`
     case 'comment_reply': return `answered your comment on ${title}`
     case 'word_reply': return `answered you on ${n.post_title ? `“${n.post_title}”` : 'a block'}`
-    case 'turf': {
-      const crew = crews[n.preview as Crew]
-      return `${crew ? `of the ${crew.name} ` : ''}is hitting ${n.post_title ? `“${n.post_title}”` : 'a block you tagged'}`
-    }
+    case 'legend': return `voted your pin ${title} a Legend: it stays on the map for good`
   }
 }
 
@@ -1476,7 +1527,7 @@ export async function setSharing(on: boolean, forMs: number | null = null) {
 }
 
 //
-// City blocks: what people say about them, and the crews' turf.
+// City blocks: what people say about them.
 //
 
 // Is a spot inside a ring of corners (lng, lat)? Crossings of a line going east from it.
@@ -1530,58 +1581,6 @@ export function talk(at?: number) {
   talkCache = t
   talkVersion = version
   return t
-}
-
-// Who holds what. Tags fade by half every three days, so the same sums as the
-// database's: the crew with the most holds a block, the first there on a tie.
-// A block is hot while a crew that doesn't hold it has tagged it in the last half hour.
-type Turf = { holder: Map<string, Crew>; strength: Map<string, Map<Crew, number>>; hot: Map<string, Set<Crew>>; held: Map<Crew, number> }
-let turfVersion = -1
-let turfAt = 0
-let turfCache: Turf
-const HALF_LIFE = 3 * 86400000
-const WAR = 30 * 60000
-
-export function turf(at?: number) {
-  const now = at ?? Date.now()
-  if (at === undefined && turfVersion === version && now - turfAt < 20000) return turfCache
-  const t: Turf = { holder: new Map(), strength: new Map(), hot: new Map(), held: new Map() } // hot: block → the crews hitting it
-  const first = new Map<string, number>() // block/crew: its first tag
-  for (const tag of S.tags) {
-    const age = now - time(tag.created_at)
-    if (age > 30 * 86400000 || age < 0) continue
-    let crews = t.strength.get(tag.block_id)
-    if (!crews) t.strength.set(tag.block_id, (crews = new Map()))
-    crews.set(tag.crew, (crews.get(tag.crew) ?? 0) + tag.points * 0.5 ** (age / HALF_LIFE))
-    if (!first.has(`${tag.block_id}/${tag.crew}`)) first.set(`${tag.block_id}/${tag.crew}`, time(tag.created_at))
-  }
-  for (const [block, crews] of t.strength) {
-    let top: Crew | null = null
-    for (const [crew, strength] of crews) {
-      const best = top ? crews.get(top)! : -1
-      if (strength > best || (strength === best && first.get(`${block}/${crew}`)! < first.get(`${block}/${top}`)!)) top = crew
-    }
-    if (!top) continue
-    t.holder.set(block, top)
-    t.held.set(top, (t.held.get(top) ?? 0) + 1)
-  }
-  for (const tag of S.tags) {
-    if (now - time(tag.created_at) >= WAR || now < time(tag.created_at) || tag.crew === t.holder.get(tag.block_id)) continue
-    const hitting = t.hot.get(tag.block_id)
-    if (hitting) hitting.add(tag.crew)
-    else t.hot.set(tag.block_id, new Set([tag.crew]))
-  }
-  if (at !== undefined) return t
-  turfCache = t
-  turfVersion = version
-  turfAt = now
-  return t
-}
-
-// Ground changing hands: the app makes a moment of it.
-let onTurn: (blockId: string, now: Crew, was: Crew | null, byMe: boolean) => void = () => {}
-export function setTurnHandler(handler: typeof onTurn) {
-  onTurn = handler
 }
 
 // The block for a ring found on the map: the one already kept there, or a new one.
@@ -1644,27 +1643,88 @@ async function castVote(wordId: string, value: 1 | -1) {
   return true
 }
 
-export async function joinCrew(crew: Crew) {
-  const { error } = await supabase.rpc('join_crew', { crew })
-  if (error) return fail("Couldn't join", error)
+//
+// Pins: votes, and legends.
+//
+
+// Up or down, Reddit-style; the same way again takes the vote back.
+export const votePost = (postId: string, value: 1 | -1) => once(`postvote/${postId}`, () => castPostVote(postId, value))
+
+async function castPostVote(postId: string, value: 1 | -1) {
+  const userId = S.userId!
+  const was = S.postVotes.find((v) => v.post_id === postId && v.user_id === userId) ?? null
+  const next = was?.value === value ? null : value
+  const put = (v: PostVote | null) => {
+    S.postVotes = S.postVotes.filter((x) => !(x.post_id === postId && x.user_id === userId))
+    if (v) S.postVotes.push(v)
+    changed()
+  }
+  put(next ? { post_id: postId, user_id: userId, value: next, created_at: new Date().toISOString() } : null)
+  const { error } = !next
+    ? await supabase.from('post_votes').delete().eq('post_id', postId).eq('user_id', userId)
+    : was
+      ? await supabase.from('post_votes').update({ value: next }).eq('post_id', postId).eq('user_id', userId)
+      : await supabase.from('post_votes').insert({ post_id: postId, value: next })
+  if (error) {
+    put(was)
+    return fail("Couldn't vote", error)
+  }
+  return true
+}
+
+//
+// Sparks: a daily streak, and what they buy.
+//
+
+// Opening the app on a new day keeps the streak going (and earns a spark).
+// Once per day per device is plenty; the database knows if it's already counted.
+let onStreak: (streak: number, prize: number) => void = () => {}
+export function setStreakHandler(handler: typeof onStreak) {
+  onStreak = handler
+}
+
+const localDay = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+async function checkInDay() {
+  const userId = S.userId
+  const before = userId ? S.profiles.get(userId) : null
+  if (!userId || before?.streak_day === localDay()) return
+  const { data, error } = await supabase.rpc('check_in_day', { today: localDay() })
+  if (error || S.userId !== userId) return
+  const { prize, profile } = data as { prize: number; profile: Profile }
+  const me = ownPhotoOnly(profile)
+  S.profiles.set(me.id, me)
+  changed()
+  if (prize > 0) onStreak(me.streak, prize)
+}
+
+export async function dropSticker(emoji: string, latitude: number, longitude: number) {
+  const { data, error } = await supabase.rpc('drop_sticker', { emoji, latitude, longitude })
+  if (error) return fail("Couldn't drop it", error)
+  upsert(S.stickers, data as Sticker, byId)
   const me = S.profiles.get(S.userId!)
-  if (me) S.profiles.set(me.id, { ...me, crew })
+  if (me) S.profiles.set(me.id, { ...me, sparks: me.sparks - STICKER_SPARKS })
   changed()
   return true
 }
 
-// Tagging a block, standing in it: points from the spraying, 1 to 10.
-export async function tagBlock(blockId: string, lat: number, lng: number, points: number) {
-  const { data, error } = await supabase.rpc('tag_block', { block: blockId, latitude: lat, longitude: lng, points })
-  if (error) {
-    fail("Couldn't tag it", error)
-    return null
-  }
-  const tag = data as Tag
-  const before = turf().holder.get(blockId)
-  upsert(S.tags, tag, byId)
+export async function peelSticker(id: string) {
+  const { error } = await supabase.from('stickers').delete().eq('id', id)
+  if (error) return fail("Couldn't peel it off", error)
+  S.stickers = S.stickers.filter((x) => x.id !== id)
   changed()
-  const after = turf().holder.get(blockId)
-  if (after && after !== before) onTurn(blockId, after, before ?? null, true)
-  return tag
+  return true
+}
+
+export async function boostPost(postId: string) {
+  const { data, error } = await supabase.rpc('boost_post', { post: postId })
+  if (error) return fail("Couldn't boost it", error)
+  upsert(S.posts, data as Post, byId, true)
+  const me = S.profiles.get(S.userId!)
+  if (me) S.profiles.set(me.id, { ...me, sparks: me.sparks - BOOST_SPARKS })
+  changed()
+  return true
 }

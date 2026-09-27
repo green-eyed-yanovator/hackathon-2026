@@ -20,15 +20,18 @@ import {
   watchHere, setSharing, enableCompass, checkOut,
   // Accounts.
   changeEmail, deleteAccount,
-  // City blocks and turf.
-  crews, turf, talk, blockOf, inRing, blockFor, say, unsay, vote, joinCrew, tagBlock, setTurnHandler,
-  type Flair, type Post, type Reply, type Revision, type Notification, type Crew, type Word,
+  // City blocks.
+  talk, blockOf, inRing, blockFor, say, unsay, vote,
+  // Lore, snaps and sparks.
+  votePost, createSnap, addMedia, removeMedia, dropSticker, peelSticker, boostPost, setStreakHandler,
+  LEGEND_VOTES, STICKERS, STICKER_SPARKS, BOOST_SPARKS,
+  type Flair, type Post, type Reply, type Revision, type Notification, type Word,
 } from './data'
 import {
   createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, requestFrame,
   project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, findBlock,
   icons, mapThemes, LEGEND, poiColor,
-  MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE,
+  MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE, MARK_LEGEND, MARK_BOOSTED, setPlacesShown,
   type IconName, type MapState, type Marker, type Region, type Block,
 } from './map'
 import './App.css'
@@ -90,6 +93,27 @@ function initialView() {
   return { lat: -34.9235, lng: 138.6007, zoom: 15.2 }
 }
 
+type Filters = {
+  kinds: Flair[] // only these kinds of pin; none picked is every kind
+  friendsOnly: boolean // pins by friends (and me)
+  soon: boolean // on now, or in the next day
+  legends: boolean // only the legends
+  people: boolean // friends' dots
+  places: boolean // shops, cafes and the rest of the map's own places
+  names: boolean // what people call the blocks
+  stickers: boolean
+}
+
+const EVERYTHING: Filters = { kinds: [], friendsOnly: false, soon: false, legends: false, people: true, places: true, names: true, stickers: true }
+
+function initialFilters(): Filters {
+  try {
+    return { ...EVERYTHING, ...JSON.parse(stored('aroundhere.filters') ?? '{}') }
+  } catch {
+    return EVERYTHING
+  }
+}
+
 const UI = {
   route: readRoute(),
   theme: initialTheme(),
@@ -99,14 +123,16 @@ const UI = {
   palette: false,
   hover: null as string | null, // marker id under the mouse, for the hover card
   tab: 'around' as Tab,
-  flair: null as Flair | null,
+  filters: initialFilters(),
+  tray: false, // the sticker tray is open
+  placing: null as string | null, // a sticker picked, waiting for a tap on the map
+  snap: null as { file: File; url: string } | null, // a photo or video about to go up as a snap
   feed: !narrow(),
   view: initialView(),
   draft: null as { latitude: number; longitude: number } | null,
   draftBlocks: [] as string[], // the blocks the pin being made covers
   picking: false, // making a pin, taps pick the blocks it covers instead of moving it
   loose: null as Block | null, // a block found on the map by someone signed out: shown, not kept
-  spray: null as string | null, // the block being tagged: the spraying game is up
   district: null as { name: string; sub: string } | null, // a block just walked into, named in the corner
   then: null as number | null, // looking back: the moment the map shows, instead of now
   thenSpan: 'week' as SpanId, // how far back the timeline reaches
@@ -266,7 +292,7 @@ function hiss(at: number, length: number, volume: number, out: AudioNode) {
 
 const hz = (semitonesFromA4: number) => 440 * 2 ** (semitonesFromA4 / 12)
 
-function play(kind: 'sting' | 'tick' | 'spray') {
+function play(kind: 'sting' | 'tick' | 'spray') { // spray: a sticker going down
   if (!UI.sounds) return
   try {
     audio ??= new AudioContext()
@@ -504,21 +530,68 @@ function dayLabel(iso: string) {
 }
 
 //
+// What the map and the feed show (the Filters above): kinds of pin, whose,
+// when, and what else is on the map. Kept on this device.
+//
+
+function setFilters(patch: Partial<Filters>) {
+  UI.filters = { ...UI.filters, ...patch }
+  store('aroundhere.filters', JSON.stringify(UI.filters))
+  changed()
+}
+
+// Quick ways to look at the map: they set which pins show, and leave the rest alone.
+const PRESETS: { label: string; pins: Pick<Filters, 'kinds' | 'friendsOnly' | 'soon' | 'legends'> }[] = [
+  { label: 'Everything', pins: { kinds: [], friendsOnly: false, soon: false, legends: false } },
+  { label: 'On now', pins: { kinds: [], friendsOnly: false, soon: true, legends: false } },
+  { label: 'Weird stuff', pins: { kinds: ['sighting', 'story'], friendsOnly: false, soon: false, legends: false } },
+  { label: 'Legends', pins: { kinds: [], friendsOnly: false, soon: false, legends: true } },
+  { label: 'Snaps', pins: { kinds: ['snap'], friendsOnly: false, soon: false, legends: false } },
+  { label: 'Friends', pins: { kinds: [], friendsOnly: true, soon: false, legends: false } },
+]
+
+const samePins = (a: Pick<Filters, 'kinds' | 'friendsOnly' | 'soon' | 'legends'>, b: Filters) =>
+  a.friendsOnly === b.friendsOnly && a.soon === b.soon && a.legends === b.legends && a.kinds.length === b.kinds.length && a.kinds.every((k) => b.kinds.includes(k))
+
+// What's narrowed down, in words, for the chip over the map: "Music, Food · friends' pins".
+function filterWords(f = UI.filters) {
+  const words: string[] = []
+  if (f.kinds.length) words.push(f.kinds.map((k) => flairs[k].label).join(', '))
+  if (f.friendsOnly) words.push("friends' pins")
+  if (f.soon) words.push('on now')
+  if (f.legends) words.push('legends')
+  return words.join(' · ')
+}
+
+const isBoosted = (p: Post) => !!p.boosted_until && time(p.boosted_until) > Date.now()
+const msLeft = (iso: string | null) => (iso ? time(iso) - Date.now() : null)
+const liveStickers = () => S.stickers.filter((x) => time(x.expires_at) > Date.now() && !S.blocked.has(x.user_id))
+
+const onNowOrSoon = (p: Post) => !!p.starts_at && time(p.starts_at) > Date.now() - 3 * 3600000 && time(p.starts_at) < Date.now() + 24 * 3600000
+
+//
 // Derived data.
 //
 
 // The feed and the map always show the same pins.
-function visiblePosts() {
+function visiblePosts(anyKind = false) {
   const friends = new Set(friendIds())
   const { joined, active } = stats()
   // Pins nobody has touched in a month quietly leave the map; Past still has them.
   // An event still to come counts as recent however long ago it was pinned.
-  const recent = (p: Post) => Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
+  // Legends never go quiet.
+  const recent = (p: Post) => !!p.legend_at || Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
 
   const then = UI.then
+  const f = UI.filters
   return S.posts.filter((p) => {
     if (p.author_id && S.blocked.has(p.author_id)) return false
-    if (UI.flair && p.flair !== UI.flair) return false
+    // A snap is gone after its day, unless it's a legend.
+    if (p.expires_at && !p.legend_at && time(p.expires_at) <= (then ?? Date.now())) return false
+    if (f.kinds.length && !anyKind && !f.kinds.includes(p.flair)) return false
+    if (f.friendsOnly && !(p.author_id && (friends.has(p.author_id) || p.author_id === S.userId))) return false
+    if (f.legends && !p.legend_at) return false
+    if (f.soon && !onNowOrSoon(p)) return false
     // Back then: pinned by then, not resolved yet, and not a month old.
     if (then !== null) return time(p.created_at) <= then && !(p.resolved_at && time(p.resolved_at) <= then) && then - time(p.created_at) < 30 * 86400000
     switch (UI.tab) {
@@ -548,6 +621,8 @@ function sortedFeed(posts: Post[]) {
   if (UI.tab === 'around') withMeta.sort((a, b) => a.away - b.away)
   else if (UI.tab === 'soon') withMeta.sort((a, b) => time(a.post.starts_at!) - time(b.post.starts_at!))
   else withMeta.sort((a, b) => b.active - a.active)
+  // Someone spent sparks on these: they go first.
+  withMeta.sort((a, b) => Number(isBoosted(b.post)) - Number(isBoosted(a.post)))
   return withMeta
 }
 
@@ -558,23 +633,16 @@ function openBlock(): { id: string | null; ring: [number, number][]; latitude: n
   return S.blocks.get(UI.route.id) ?? null
 }
 
-// What the map marks out: blocks a crew holds, in its colour, flashing while
-// they're fought over; what people call the blocks they've named; the blocks
-// pins cover; and, strongest, the open block and the ones being picked.
+// What the map marks out: what people call the blocks they've named, the
+// blocks pins cover, and, strongest, the open block and the ones being picked.
 function buildRegions(posts: Post[]): Region[] {
   const regions: Region[] = []
   const at = UI.then ?? undefined
-  const { holder, hot } = turf(at)
   const { names } = talk(at)
   for (const block of S.blocks.values()) {
-    if (at !== undefined && time(block.created_at) > at) continue
-    const crew = holder.get(block.id)
-    const name = names.get(block.id) ?? ''
-    if (!crew && !name) continue
-    regions.push({
-      id: block.id, rings: [block.ring], color: crew ? crews[crew].color : '', look: crew ? 'turf' : 'plain',
-      name, lng: block.longitude, lat: block.latitude, hot: hot.has(block.id),
-    })
+    if (!UI.filters.names || (at !== undefined && time(block.created_at) > at)) continue
+    const name = names.get(block.id)
+    if (name) regions.push({ id: block.id, rings: [block.ring], color: '', look: 'plain', name, lng: block.longitude, lat: block.latitude, hot: false })
   }
   for (const p of posts) {
     const rings = (p.blocks ?? []).map((id) => S.blocks.get(id)?.ring).filter((ring) => !!ring)
@@ -607,24 +675,6 @@ function sizeText(ring: [number, number][]) {
   return `about ${((pitches * 7140) / 1e6).toFixed(1)} km²`
 }
 
-// How far a spot is from a block, in metres: 0 inside it.
-function metersToBlock(ring: [number, number][], lat: number, lng: number) {
-  if (inRing(ring, lng, lat)) return 0
-  const my = 111320
-  const mx = my * Math.cos((lat * Math.PI) / 180)
-  let best = Infinity
-  ring.forEach(([ax, ay], i) => {
-    const [bx, by] = ring[(i + 1) % ring.length]
-    const dx = (bx - ax) * mx
-    const dy = (by - ay) * my
-    const px = (lng - ax) * mx
-    const py = (lat - ay) * my
-    const t = dx || dy ? Math.max(0, Math.min(1, (px * dx + py * dy) / (dx * dx + dy * dy))) : 0
-    best = Math.min(best, Math.hypot(px - t * dx, py - t * dy))
-  })
-  return best
-}
-
 const blockName = (id: string | null) => (id && talk().names.get(id)) || null
 
 // What to call a block when it has no name yet: the street it's on.
@@ -643,7 +693,6 @@ function pinsOn(block: { id: string | null; ring: [number, number][] }) {
     .sort((a, b) => time(b.created_at) - time(a.created_at))
 }
 
-const myCrew = () => (S.userId ? (S.profiles.get(S.userId)?.crew ?? null) : null)
 
 // Tapping the map between streets opens that block: one already kept, or one
 // found from the streets right now and kept from then on (for someone signed in).
@@ -682,27 +731,6 @@ async function pickBlock(lng: number, lat: number) {
   })
   const first = S.blocks.get(blocks[0])
   ui({ draftBlocks: blocks, draft: !inside && first ? { latitude: first.latitude, longitude: first.longitude } : draft })
-}
-
-// Tagging is done in person: signed in, in a crew, and standing in the block
-// or across the street from it. Then the spraying.
-async function startTag(blockId: string) {
-  if (needAccount()) return false
-  if (!myCrew()) return false // the sheet asks which crew first
-  const block = S.blocks.get(blockId)
-  if (!block) return false
-  const here = S.here ?? (await watchHere())
-  if (!here) {
-    toast("Turn on your location: you tag a block by being there")
-    return true
-  }
-  const away = metersToBlock(block.ring, here.latitude, here.longitude)
-  if (away > 50) {
-    toast(`You're ${meters(away)} away. Tagging is done in person`)
-    return true
-  }
-  ui({ spray: blockId })
-  return true
 }
 
 // Looking back: the map, the feed and the blocks as they were at a moment. The
@@ -826,15 +854,20 @@ function buildMarkers(posts: Post[]): Marker[] {
     if (list.some((p) => unread.has(p.id))) flags |= MARK_NEW
     if (list.every((p) => p.resolved_at)) flags |= MARK_RESOLVED
     if (list.some((p) => p.starts_at && !p.resolved_at && Math.abs(time(p.starts_at) - Date.now()) < 3 * 3600000)) flags |= MARK_LIVE
+    if (list.some((p) => p.legend_at)) flags |= MARK_LEGEND
+    if (list.some(isBoosted)) flags |= MARK_BOOSTED
     if ((route.kind === 'pin' && list.some((p) => p.id === route.id)) || (route.kind === 'place' && route.id === key)) flags |= MARK_SELECTED
     markers.push({
       id: key, kind: 'pin', x: lngToX(newest.longitude), y: latToY(newest.latitude), icon: f.icon, color: f.color,
-      count: list.length, flags, text: '', name: newest.title, accuracy: 0, heading: null, image: null,
+      count: list.length, flags, text: '', name: newest.title, accuracy: 0, heading: null,
+      // A snap shows its photo, and how much of its day is left.
+      image: newest.flair === 'snap' ? (stats().photo.get(newest.id)?.url ?? null) : null,
+      life: newest.expires_at ? Math.max(0, (time(newest.expires_at) - Date.now()) / 86400000) : 1,
     })
   }
 
   // Friends are where they are now, so looking back leaves them out.
-  for (const userId of UI.then === null ? S.locations.keys() : []) {
+  for (const userId of UI.then === null && UI.filters.people ? S.locations.keys() : []) {
     const loc = locationOf(userId)
     if (userId === S.userId || !loc) continue
     const name = nameOf(userId)
@@ -844,21 +877,29 @@ function buildMarkers(posts: Post[]): Marker[] {
       color: `hsl(${hue(userId)} 55% 45%)`, count: unreadFrom,
       flags: (Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0) | (isOnline(userId) ? MARK_ONLINE : 0),
       text: initials(name), name: name.split(' ')[0],
-      accuracy: loc.accuracy ?? 0, heading: loc.heading, image: S.profiles.get(userId)?.avatar_url ?? null,
+      accuracy: loc.accuracy ?? 0, heading: loc.heading, image: S.profiles.get(userId)?.avatar_url ?? null, life: 1,
+    })
+  }
+
+  // Stickers, as they are now.
+  for (const sticker of UI.then === null && UI.filters.stickers ? liveStickers() : []) {
+    markers.push({
+      id: `sticker:${sticker.id}`, kind: 'sticker', x: lngToX(sticker.longitude), y: latToY(sticker.latitude), icon: 'star', color: '',
+      count: 0, flags: 0, text: sticker.emoji, name: nameOf(sticker.user_id), accuracy: 0, heading: null, image: null, life: 1,
     })
   }
 
   if (S.here) {
     markers.push({
       id: 'me', kind: 'me', x: lngToX(S.here.longitude), y: latToY(S.here.latitude), icon: 'user', color: '', count: 0,
-      flags: 0, text: '', name: 'You', accuracy: S.here.accuracy, heading: S.here.heading, image: null,
+      flags: 0, text: '', name: 'You', accuracy: S.here.accuracy, heading: S.here.heading, image: null, life: 1,
     })
   }
 
   if (UI.route.kind === 'new' && UI.draft) {
     markers.push({
       id: 'draft', kind: 'draft', x: lngToX(UI.draft.longitude), y: latToY(UI.draft.latitude), icon: 'pin', color: '',
-      count: 0, flags: 0, text: '', name: '', accuracy: 0, heading: null, image: null,
+      count: 0, flags: 0, text: '', name: '', accuracy: 0, heading: null, image: null, life: 1,
     })
   }
 
@@ -1280,14 +1321,16 @@ function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
 // A textarea that grows with its text, sends on Enter, and keeps Shift+Enter for new lines.
 type ComposerProps = {
   placeholder: string
-  onSend: (text: string) => Promise<boolean> // true once it's sent, which clears the box
+  onSend: (text: string, files: File[]) => Promise<boolean> // true once it's sent, which clears the box
+  attach?: boolean // photos and videos can go with it
   onType?: () => void
   autoFocus?: boolean
   people?: string[] // who "@" suggests, first ones first
 }
 
-function Composer({ placeholder, onSend, onType, autoFocus = false, people }: ComposerProps) {
+function Composer({ placeholder, onSend, onType, autoFocus = false, people, attach = false }: ComposerProps) {
   const [text, setText] = useState('')
+  const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
   const [caret, setCaret] = useState(0)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -1319,12 +1362,14 @@ function Composer({ placeholder, onSend, onType, autoFocus = false, people }: Co
 
   async function send() {
     const body = text.trim()
-    if (!body || busy) return
+    if ((!body && !files.length) || busy) return
     setBusy(true)
-    const ok = await onSend(body)
+    const ok = await onSend(body, files)
     setBusy(false)
-    if (ok) setText('')
-    else failed("Couldn't send")
+    if (ok) {
+      setText('')
+      setFiles([])
+    } else failed("Couldn't send")
     ref.current?.focus()
   }
 
@@ -1361,7 +1406,14 @@ function Composer({ placeholder, onSend, onType, autoFocus = false, people }: Co
           }
         }}
       />
-      <button className="icon-btn send" onClick={send} disabled={!text.trim() || busy} aria-label="Send">
+      {attach && (
+        <label className={files.length ? 'icon-btn attach on' : 'icon-btn attach'} title="Add photos or video" aria-label="Add photos or video">
+          <input type="file" accept="image/*,video/*" multiple hidden onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])].slice(0, 6))} />
+          <Icon name="image" />
+          {files.length > 0 && <b className="badge">{files.length}</b>}
+        </label>
+      )}
+      <button className="icon-btn send" onClick={send} disabled={(!text.trim() && !files.length) || busy} aria-label="Send">
         <Icon name="send" />
       </button>
     </div>
@@ -1424,7 +1476,10 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
       <Blip flair={post.flair} />
       <div className="row-main">
         <div className="row-top">
-          <strong className="clip">{post.title}</strong>
+          <strong className="clip">
+            {post.legend_at && <span className="legend-star" title="Legend">★</span>}
+            {post.title}
+          </strong>
           <span className="muted small nowrap">{ago(active)}</span>
         </div>
         {post.description && <div className="clip muted">{post.description}</div>}
@@ -1441,6 +1496,12 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
             </span>
           )}
           <span className="nowrap">{meters(away)}</span>
+          {(st.score.get(post.id) ?? 0) !== 0 && (
+            <span>
+              <Icon name="up" size={12} /> {st.score.get(post.id)}
+            </span>
+          )}
+          {isBoosted(post) && <span className="when now">boosted</span>}
           {soon && (
             <span className={soon === 'now' ? 'when now' : 'when'}>
               <Icon name="calendar" size={12} /> {soon}
@@ -1518,10 +1579,10 @@ function Feed() {
           {(Object.keys(flairs) as Flair[]).map((f) => (
             <button
               key={f}
-              className={UI.flair === f ? 'flair-chip on' : 'flair-chip'}
+              className={UI.filters.kinds.includes(f) ? 'flair-chip on' : 'flair-chip'}
               style={{ '--c': flairs[f].color } as React.CSSProperties}
               title={flairs[f].label}
-              onClick={() => ui({ flair: UI.flair === f ? null : f })}
+              onClick={() => setFilters({ kinds: UI.filters.kinds.includes(f) ? UI.filters.kinds.filter((k) => k !== f) : [...UI.filters.kinds, f] })}
             >
               <Icon name={flairs[f].icon} size={14} />
               <span>{flairs[f].label}</span>
@@ -1602,7 +1663,7 @@ function Feed() {
 function FlairPick({ value, onPick }: { value: Flair; onPick: (flair: Flair) => void }) {
   return (
     <div className="flair-pick" role="radiogroup" aria-label="Kind of pin">
-      {(Object.keys(flairs) as Flair[]).map((f) => (
+      {(Object.keys(flairs) as Flair[]).filter((f) => f !== 'snap' || value === 'snap').map((f) => (
         <button key={f} role="radio" aria-checked={value === f} className={value === f ? 'on' : ''} style={{ '--c': flairs[f].color } as React.CSSProperties} onClick={() => onPick(f)}>
           <Blip flair={f} size={26} />
           <span>{flairs[f].label}</span>
@@ -1639,7 +1700,8 @@ function PostView({ post }: { post: Post }) {
     (id): id is string => !!id && id !== me && !S.blocked.has(id),
   )
   const { likes, liked } = stats()
-  const media = S.media.filter((m) => m.post_id === post.id)
+  const media = S.media.filter((m) => m.post_id === post.id && !(m.author_id && S.blocked.has(m.author_id)))
+  const [adding, setAdding] = useState(false) // photos on their way up
   const interested = S.interests.filter((i) => i.post_id === post.id).map((i) => i.user_id)
   const iAmIn = !!me && interested.includes(me)
   const saved = S.saved.some((s) => s.post_id === post.id)
@@ -1701,8 +1763,9 @@ function PostView({ post }: { post: Post }) {
           <Composer
             people={people}
             placeholder={`Reply to ${post.author_id ? firstName(post.author_id) : 'this pin'}…`}
-            onSend={async (text) => {
-              const ok = await reply(post.id, text)
+            attach
+            onSend={async (text, files) => {
+              const ok = await reply(post.id, text, null, files)
               if (ok) setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
               return ok
             }}
@@ -1743,7 +1806,7 @@ function PostView({ post }: { post: Post }) {
         <div className="stack">
           <FlairPick value={flair} onPick={setFlair} />
           <input className="input title-input" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} autoFocus />
-          <textarea className="input" rows={5} value={body} maxLength={2000} onChange={(e) => setBody(e.target.value)} />
+          <textarea className="input" rows={5} value={body} maxLength={post.flair === 'story' ? 10000 : 2000} onChange={(e) => setBody(e.target.value)} />
           <label className="field when-field">
             <span>
               When <em className="muted">· optional</em>
@@ -1761,7 +1824,11 @@ function PostView({ post }: { post: Post }) {
         </div>
       ) : (
         <>
-          <h1 className="post-title">{post.title}</h1>
+          <div className="post-top">
+            <VoteBox post={post} />
+            <h1 className="post-title">{post.title}</h1>
+          </div>
+          <LoreLine post={post} />
           {post.blocks && post.blocks.length > 0 && <Covers post={post} />}
           {post.starts_at && (
             <div className={soon === 'now' ? 'when-line now' : 'when-line'}>
@@ -1807,16 +1874,49 @@ function PostView({ post }: { post: Post }) {
 
       {media.length > 0 && (
         <div className="gallery">
-          {media.map((m) =>
-            m.media_type === 'video' ? (
-              <video key={m.id} src={m.url} controls preload="metadata" />
-            ) : (
-              <button key={m.id} onClick={() => setLightbox(m.url)}>
-                <img src={m.url} alt="" loading="lazy" />
-              </button>
-            ),
-          )}
+          {media.map((m) => (
+            <figure key={m.id}>
+              {m.media_type === 'video' ? (
+                <video src={m.url} controls preload="metadata" />
+              ) : (
+                <button onClick={() => setLightbox(m.url)}>
+                  <img src={m.url} alt="" loading="lazy" />
+                </button>
+              )}
+              {m.author_id && m.author_id !== post.author_id && (
+                <figcaption>
+                  <Avatar id={m.author_id} size={18} /> {firstName(m.author_id)}
+                </figcaption>
+              )}
+              {m.author_id === me && m.author_id !== post.author_id && (
+                <button className="icon-btn take-down" title="Take it down" aria-label="Take it down" onClick={() => removeMedia(m.id).then((ok) => ok || failed("Couldn't take it down"))}>
+                  <Icon name="close" size={14} />
+                </button>
+              )}
+            </figure>
+          ))}
         </div>
+      )}
+      {me && !editing && post.flair !== 'snap' && (
+        <label className="add-photos">
+          <input
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            hidden
+            onChange={async (e) => {
+              const files = Array.from(e.target.files ?? []).slice(0, 6)
+              e.target.value = ''
+              if (!files.length) return
+              setAdding(true)
+              const ok = await addMedia(post.id, files)
+              setAdding(false)
+              if (!ok) failed("Couldn't add them")
+            }}
+          />
+          <Icon name="image" size={16} />
+          {adding ? 'Adding…' : post.flair === 'event' ? 'Add your photos from it' : mine ? 'Add photos or video' : 'Add your photos'}
+        </label>
       )}
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)}>
@@ -1852,6 +1952,20 @@ function PostView({ post }: { post: Post }) {
             <button className={UI.walk === `pin/${post.id}` ? 'btn on' : 'btn'} aria-pressed={UI.walk === `pin/${post.id}`} onClick={() => walkTo(`pin/${post.id}`)} title="The way there on foot">
               <Icon name="arrow" size={16} /> Get there
             </button>
+            {me && (
+              <button
+                className={isBoosted(post) ? 'btn on gold' : 'btn'}
+                title={`Make it stand out on the map and top the feed for 12 hours: ${BOOST_SPARKS} sparks`}
+                onClick={async () => {
+                  const have = S.profiles.get(me)?.sparks ?? 0
+                  if (have < BOOST_SPARKS) return toast(`A boost is ${BOOST_SPARKS} sparks; you have ${have}. Come back tomorrow for more.`)
+                  if (await boostPost(post.id)) celebrate('Boosted', `${post.title} stands out for 12 hours`)
+                  else failed("Couldn't boost it")
+                }}
+              >
+                <Icon name="up" size={16} /> Boost <small>✨{BOOST_SPARKS}</small>
+              </button>
+            )}
           </div>
 
           {sending && (
@@ -1950,7 +2064,7 @@ function PostView({ post }: { post: Post }) {
               item={r}
               below={tree.below}
               people={people}
-              answer={(r, text) => reply(post.id, text, r.id)}
+              answer={(r, text, files) => reply(post.id, text, r.id, files)}
               main={(r, answer) =>
                 r.deleted_at ? (
                   <div className="comment-text muted">[deleted]</div>
@@ -1978,9 +2092,26 @@ function PostView({ post }: { post: Post }) {
                         </button>
                       )}
                     </div>
-                    <div className="comment-text reply-text">
-                      <Mentions text={r.content} />
-                    </div>
+                    {r.content && (
+                      <div className="comment-text reply-text">
+                        <Mentions text={r.content} />
+                      </div>
+                    )}
+                    {media.some((m) => m.reply_id === r.id) && (
+                      <div className="reply-media">
+                        {media
+                          .filter((m) => m.reply_id === r.id)
+                          .map((m) =>
+                            m.media_type === 'video' ? (
+                              <video key={m.id} src={m.url} controls preload="metadata" />
+                            ) : (
+                              <button key={m.id} onClick={() => setLightbox(m.url)}>
+                                <img src={m.url} alt="" loading="lazy" />
+                              </button>
+                            ),
+                          )}
+                      </div>
+                    )}
                     <div className="comment-actions">
                       <button
                         className={liked.has(r.id) ? 'like on' : 'like'}
@@ -2004,6 +2135,56 @@ function PostView({ post }: { post: Post }) {
       )}
       <div ref={endRef} />
     </Panel>
+  )
+}
+
+// Up and down, Reddit-style. Enough up and it's a legend.
+function VoteBox({ post }: { post: Post }) {
+  const { score, myVote } = stats()
+  const mine = myVote.get(post.id)
+  const cast = async (value: 1 | -1) => {
+    if (needAccount()) return
+    const was = post.legend_at
+    if (!(await votePost(post.id, value))) failed("Couldn't vote")
+    else if (!was && value === 1) play('tick')
+  }
+  return (
+    <div className="votes big">
+      <button className={mine === 1 ? 'on' : ''} onClick={() => cast(1)} aria-label="Up" title="Up">
+        <Icon name="up" size={16} />
+      </button>
+      <b>{score.get(post.id) ?? 0}</b>
+      <button className={mine === -1 ? 'on down' : ''} onClick={() => cast(-1)} aria-label="Down" title="Down">
+        <Icon name="down" size={16} />
+      </button>
+    </div>
+  )
+}
+
+// A legend says so; a snap says how long it has; lore-ish pins say how close they are.
+function LoreLine({ post }: { post: Post }) {
+  const score = stats().score.get(post.id) ?? 0
+  if (post.legend_at) {
+    return (
+      <div className="when-line legend">
+        <Icon name="star" size={16} />
+        <strong>Legend</strong>
+        <span className="muted">· voted into the lore {ago(post.legend_at)}; it stays on the map for good</span>
+      </div>
+    )
+  }
+  const lore = post.flair === 'sighting' || post.flair === 'story' || post.flair === 'snap'
+  const left = msLeft(post.expires_at)
+  if (!lore && left === null) return null
+  const need = Math.max(1, LEGEND_VOTES - score)
+  return (
+    <div className="when-line lore">
+      <Icon name={left !== null ? 'clock' : 'star'} size={16} />
+      <span>
+        {left !== null && <strong>Gone in {left > 3600000 ? `${Math.ceil(left / 3600000)}h` : `${Math.max(1, Math.ceil(left / 60000))}m`}</strong>}
+        {left !== null ? ` unless it's voted a Legend: ${plural(need, 'more up-vote')}` : `${plural(need, 'more up-vote')} and it's a Legend, on the map for good`}
+      </span>
+    </div>
   )
 }
 
@@ -2149,9 +2330,8 @@ function ProfileView({ id }: { id: string }) {
           <Avatar id={id} size={64} dot />
         )}
         <div>
-          <h1>
-            {profile.display_name} {profile.crew && <CrewBadge crew={profile.crew} />}
-          </h1>
+          <h1>{profile.display_name}</h1>
+          <SparkBadge id={id} />
           <div className="muted small">
             {profile.neighbourhood && <>{profile.neighbourhood} · </>}
             Joined {new Date(profile.created_at).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
@@ -2486,7 +2666,7 @@ function InboxView() {
             const pending = n.kind === 'friend_request' && n.actor_id && friendshipWith(n.actor_id) && !friendshipWith(n.actor_id)!.accepted_at
             const actors = [...new Set(group.map((g) => g.actor_id))]
             const names = actors.map((id) => (id ? nameOf(id, group.find((g) => g.actor_id === id)?.actor_name ?? null) : 'Someone'))
-            const who = names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${plural(names.length - 2, 'other')}`
+            const who = n.kind === 'legend' ? 'The neighbours' : names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${plural(names.length - 2, 'other')}`
             return (
               <div key={n.id}>
                 {showDay && <div className="section">{day}</div>}
@@ -2672,7 +2852,9 @@ const MUTABLE: [string, string][] = [
   ['friend_accept', 'Friend requests accepted'],
   ['friend_post', 'Friends pinning something new'],
   ['mention', 'Someone mentioning you'],
-  ['turf', 'Another crew hitting blocks you tagged'],
+  ['comment_reply', 'Answers to your comments'],
+  ['word_reply', 'Answers to what you said on a block'],
+  ['legend', 'Your pins becoming Legends'],
   ['nearby_pin', 'New pins close to you'],
   ['friend_nearby', 'A friend a street away'],
   ['starting_soon', "Things you're in on, an hour before"],
@@ -2972,7 +3154,7 @@ function ComposeView() {
 
       <input
         className="input title-input"
-        placeholder="What's happening?"
+        placeholder={flair === 'sighting' ? 'What did you see?' : flair === 'story' ? 'The story, in a line' : "What's happening?"}
         value={title}
         maxLength={120}
         autoFocus={!narrow()}
@@ -2981,9 +3163,15 @@ function ComposeView() {
       <textarea
         className="input"
         rows={5}
-        placeholder="Details: where exactly, who should come, what to bring…"
+        placeholder={
+          flair === 'sighting'
+            ? 'Where it was, what it did, how big. A photo makes believers.'
+            : flair === 'story'
+              ? 'Tell it the way you would at the pub: what happened, who was there, what you still can’t explain…'
+              : 'Details: where exactly, who should come, what to bring…'
+        }
         value={body}
-        maxLength={2000}
+        maxLength={flair === 'story' ? 10000 : 2000}
         onChange={(e) => setBody(e.target.value)}
       />
       <label className="field when-field">
@@ -3045,7 +3233,7 @@ function Thread<T extends Threaded>({ item, below, main, answer, people }: {
   item: T
   below: Map<string, T[]>
   main: (item: T, answer: () => void) => ReactNode
-  answer: (item: T, text: string) => Promise<boolean>
+  answer: (item: T, text: string, files: File[]) => Promise<boolean>
   people?: string[]
 }) {
   const [folded, setFolded] = useState(false)
@@ -3060,8 +3248,9 @@ function Thread<T extends Threaded>({ item, below, main, answer, people }: {
             placeholder="Your answer…"
             autoFocus
             people={people}
-            onSend={async (text) => {
-              const ok = await answer(item, text)
+            attach={'post_id' in item}
+            onSend={async (text, files) => {
+              const ok = await answer(item, text, files)
               if (ok) setAnswering(false)
               else failed("Couldn't send")
               return ok
@@ -3090,48 +3279,6 @@ function Thread<T extends Threaded>({ item, below, main, answer, people }: {
 // City blocks: what people call them, what they say about them, what's gone on
 // there, and whose turf they are.
 //
-
-function CrewBadge({ crew, size = 'small' }: { crew: Crew; size?: 'small' | 'big' }) {
-  return (
-    <span className={`crew-badge ${size}`} style={{ '--crew': crews[crew].color } as React.CSSProperties}>
-      {crews[crew].tag}
-    </span>
-  )
-}
-
-// The four crews, to join one. How many blocks each holds and who's in it.
-function CrewPick({ onJoined }: { onJoined?: () => void }) {
-  const mine = myCrew()
-  const held = turf().held
-  const members = new Map<Crew, number>()
-  for (const p of S.profiles.values()) if (p.crew) members.set(p.crew, (members.get(p.crew) ?? 0) + 1)
-  return (
-    <div className="crew-pick">
-      {(Object.keys(crews) as Crew[]).map((crew) => (
-        <button
-          key={crew}
-          className={crew === mine ? 'crew-card on' : 'crew-card'}
-          style={{ '--crew': crews[crew].color } as React.CSSProperties}
-          onClick={async () => {
-            if (needAccount() || crew === mine) return
-            if (await joinCrew(crew)) {
-              play('sting')
-              toast(`You're one of the ${crews[crew].name} now`)
-              onJoined?.()
-            } else failed("Couldn't join")
-          }}
-        >
-          <CrewBadge crew={crew} size="big" />
-          <strong>{crews[crew].name}</strong>
-          <em>{crews[crew].motto}</em>
-          <small>
-            {plural(held.get(crew) ?? 0, 'block')} · {plural(members.get(crew) ?? 0, 'member')}
-          </small>
-        </button>
-      ))}
-    </div>
-  )
-}
 
 // A line on a block: its votes, what it says, who said it; answering it, when
 // it can be answered (names can't).
@@ -3195,14 +3342,11 @@ function BlockView() {
   const [line, setLine] = useState('')
   const [naming, setNaming] = useState('')
   const [order, setOrder] = useState<'top' | 'new'>('top')
-  const [choosing, setChoosing] = useState(false) // tagging, but not in a crew yet
   const block = openBlock()
   if (!block) return <Missing what="block" />
   const kept = block.id
   const at = UI.then ?? undefined // looking back: the block as it was then, to read, not to change
   const { score } = talk(at)
-  const { holder, strength, hot } = turf(at)
-  const crew = kept ? holder.get(kept) : undefined
   const away = fromMe(block)
   const words = kept ? S.words.filter((w) => w.block_id === kept && !(w.author_id && S.blocked.has(w.author_id)) && (at === undefined || time(w.created_at) <= at)) : []
   const byScore = (a: Word, b: Word) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) || time(b.created_at) - time(a.created_at)
@@ -3210,9 +3354,7 @@ function BlockView() {
   const lines = threadOf(words.filter((w) => !w.is_name), byScore)
   if (order === 'new') lines.top.sort((a, b) => time(b.created_at) - time(a.created_at))
   const pins = pinsOn(block).filter((p) => at === undefined || time(p.created_at) <= at)
-  const standing = kept ? [...(strength.get(kept) ?? new Map<Crew, number>())].sort((a, b) => b[1] - a[1]) : []
-  const top = standing[0]?.[1] ?? 0
-  const attackers = [...((kept && hot.get(kept)) || [])]
+  const legends = pins.filter((p) => p.legend_at && (at === undefined || time(p.legend_at) <= at))
 
   async function speak(isName: boolean) {
     const text = (isName ? naming : line).trim()
@@ -3221,12 +3363,6 @@ function BlockView() {
       if (isName) setNaming('')
       else setLine('')
     } else failed(isName ? "Couldn't put the name up" : "Couldn't say it")
-  }
-
-  async function tag() {
-    if (!kept) return needAccount()
-    if (!myCrew() && S.userId) return setChoosing(true)
-    await startTag(kept)
   }
 
   return (
@@ -3246,7 +3382,7 @@ function BlockView() {
         )}
         {!kept && (
           <div className="banner">
-            <Icon name="flag" size={16} /> Join to name this block, write on it and fight for it.
+            <Icon name="flag" size={16} /> Join to name this block and write on it.
             <button className="link" onClick={() => needAccount()}>
               Join
             </button>
@@ -3254,48 +3390,17 @@ function BlockView() {
         )}
       </div>
 
-      {kept && (
-        <section className={crew ? 'turf-card held' : 'turf-card'} style={crew ? ({ '--crew': crews[crew].color } as React.CSSProperties) : undefined}>
-          <div className="turf-line">
-            {crew ? <CrewBadge crew={crew} /> : <Icon name="flag" size={18} />}
-            <div>
-              <strong>{crew ? `${crews[crew].name} turf` : "Nobody's turf"}</strong>
-              <div className="muted small">{crew ? crews[crew].motto : 'The first crew to tag it holds it.'}</div>
-            </div>
-            {at === undefined && (
-              <button className="btn primary spray-btn" onClick={tag}>
-                <Icon name="spray" size={16} /> {crew && crew === myCrew() ? 'Touch up' : 'Tag it'}
-              </button>
-            )}
-          </div>
-          {attackers.length > 0 && (
-            <div className="war">
-              <Icon name="alert" size={14} /> Under attack by the {attackers.map((c) => crews[c].name).join(' and the ')}
-            </div>
-          )}
-          {standing.length > 0 && (
-            <div className="standing">
-              {standing.map(([c, s]) => (
-                <div key={c} className="bar" style={{ '--crew': crews[c].color } as React.CSSProperties}>
-                  <span>{crews[c].name}</span>
-                  <i style={{ width: `${Math.max(4, (s / top) * 100)}%` }} />
-                  <b>{s < 10 ? s.toFixed(1) : Math.round(s)}</b>
-                </div>
-              ))}
-            </div>
-          )}
-          {choosing && (
-            <>
-              <div className="section">Pick your crew first</div>
-              <CrewPick
-                onJoined={() => {
-                  setChoosing(false)
-                  startTag(kept)
-                }}
-              />
-            </>
-          )}
-        </section>
+      {legends.length > 0 && (
+        <>
+          <div className="section">Legends of this block</div>
+          {legends.map((p) => (
+            <button key={p.id} className="row mini-pin legend-row" onClick={() => openPin(p)}>
+              <Blip flair={p.flair} size={24} />
+              <span className="clip">{p.title}</span>
+              <Icon name="star" size={14} />
+            </button>
+          ))}
+        </>
       )}
 
       {kept && (
@@ -3400,203 +3505,6 @@ function Covers({ post }: { post: Post }) {
           ` and ${plural(ids.length - Math.min(2, named.length), 'more block')}`
         ) : null}
       </span>
-    </div>
-  )
-}
-
-// Turf: how the crews stand, the fights on right now, and your own crew.
-function TurfView() {
-  const { holder, hot, held } = turf()
-  const total = Math.max(1, ...[...held.values()])
-  const mine = myCrew()
-  const fights = [...hot.keys()].map((id) => S.blocks.get(id)).filter((b) => !!b)
-  const myTags = S.tags.filter((t) => t.user_id === S.userId).length
-  return (
-    <Panel title="Turf" icon={<Icon name="flag" />} className="tall turf-view">
-      <p className="muted">
-        Four crews, one city. Stand in a block and tag it: the crew with the most tags holds it. Tags fade by half every three days, so ground has to be
-        kept.
-      </p>
-      <div className="section">Standings</div>
-      <div className="standing big">
-        {(Object.keys(crews) as Crew[])
-          .sort((a, b) => (held.get(b) ?? 0) - (held.get(a) ?? 0))
-          .map((c) => (
-            <div key={c} className="bar" style={{ '--crew': crews[c].color } as React.CSSProperties}>
-              <span>
-                <CrewBadge crew={c} /> {crews[c].name}
-              </span>
-              <i style={{ width: `${Math.max(3, ((held.get(c) ?? 0) / total) * 100)}%` }} />
-              <b>{held.get(c) ?? 0}</b>
-            </div>
-          ))}
-      </div>
-      {fights.length > 0 && (
-        <>
-          <div className="section">Fights on right now</div>
-          {fights.map((b) => (
-            <button key={b.id} className="row mini-pin" onClick={() => { go(`block/${b.id}`); reveal(b.latitude, b.longitude, 16.5) }}>
-              <Icon name="alert" size={18} />
-              <span className="clip">{blockTitle(b)}</span>
-              {holder.get(b.id) && <CrewBadge crew={holder.get(b.id)!} />}
-            </button>
-          ))}
-        </>
-      )}
-      <div className="section">{mine ? `You're one of the ${crews[mine].name}` : 'Pick your crew'}</div>
-      {S.userId ? <CrewPick /> : (
-        <button className="btn primary" onClick={() => needAccount()}>
-          Join to pick a crew
-        </button>
-      )}
-      {mine && <p className="muted small">{myTags ? `${plural(myTags, 'tag')} of yours on the map this month.` : 'Tap a block near you and tag it.'} You can change crews once a day.</p>}
-    </Panel>
-  )
-}
-
-// The spraying: other crews' tags come up on the wall and fade; cover as many
-// as you can in twelve seconds. How it went is what the tag is worth.
-const ROUND = 12000
-type Mark = { id: number; x: number; y: number; crew: Crew; born: number; ttl: number; hit: number; turn: number }
-
-function SprayGame({ blockId }: { blockId: string }) {
-  const crew = myCrew()
-  const block = S.blocks.get(blockId)
-  const [phase, setPhase] = useState<'ready' | 'play' | 'sending' | 'done'>('ready')
-  const [marks, setMarks] = useState<Mark[]>([])
-  const [puffs, setPuffs] = useState<{ id: number; x: number; y: number }[]>([])
-  const [now, setNow] = useState(0)
-  const [result, setResult] = useState<{ points: number; error: string } | null>(null)
-  const started = useRef(0)
-  const nextId = useRef(0)
-  const loop = useRef(0)
-  const live = useRef<Mark[]>([]) // the marks, for the timer, which outlives renders
-  useEffect(() => () => window.clearInterval(loop.current), [])
-
-  const hits = marks.filter((m) => m.hit).length
-  const put = (list: Mark[]) => {
-    live.current = list
-    setMarks(list)
-  }
-
-  function begin(at: number) {
-    const rivals = (Object.keys(crews) as Crew[]).filter((c) => c !== crew)
-    const holder = turf().holder.get(blockId)
-    let spawnAt = 0
-    started.current = at // the click's time, on the same clock as performance.now()
-    put([])
-    setPhase('play')
-    loop.current = window.setInterval(() => {
-      const t = performance.now() - started.current
-      setNow(t)
-      if (t >= ROUND) {
-        window.clearInterval(loop.current)
-        finish()
-        return
-      }
-      if (t < spawnAt) return
-      // Faster, and quicker to fade, as the round goes on; mostly the holders' tags.
-      const k = t / ROUND
-      spawnAt = t + 700 - 330 * k
-      const who = holder && holder !== crew && Math.random() < 0.7 ? holder : rivals[Math.floor(Math.random() * rivals.length)]
-      const mark: Mark = { id: nextId.current++, x: 8 + Math.random() * 76, y: 10 + Math.random() * 70, crew: who, born: t, ttl: 1500 - 500 * k, hit: 0, turn: Math.random() * 30 - 15 }
-      put([...live.current.filter((m) => m.hit || t - m.born < m.ttl), mark])
-    }, 50)
-  }
-
-  async function finish() {
-    setPhase('sending')
-    const covered = live.current.filter((m) => m.hit).length
-    const points = Math.max(1, Math.min(10, Math.round((covered * 10) / 22)))
-    const here = S.here
-    const tag = here ? await tagBlock(blockId, here.latitude, here.longitude, points) : null
-    setResult({ points, error: tag ? '' : takeError() || "Couldn't find you" })
-    setPhase('done')
-  }
-
-  if (!crew || !block) return null
-  const c = crews[crew]
-  const close = () => ui({ spray: null })
-  const after = turf()
-  const nowHolder = after.holder.get(blockId)
-  const theirs = nowHolder && nowHolder !== crew ? after.strength.get(blockId)?.get(nowHolder) ?? 0 : 0
-  const ours = after.strength.get(blockId)?.get(crew) ?? 0
-
-  return (
-    <div className="spray-screen" style={{ '--crew': c.color } as React.CSSProperties} role="dialog" aria-label="Tagging">
-      <div className="spray-top">
-        <CrewBadge crew={crew} />
-        <strong className="clip">{blockTitle(block)}</strong>
-        {phase === 'play' && <span className="spray-clock">{Math.max(0, Math.ceil((ROUND - now) / 1000))}</span>}
-        {phase === 'play' && <span className="spray-score">{hits}</span>}
-        <button className="icon-btn" onClick={close} aria-label="Stop">
-          <Icon name="close" />
-        </button>
-      </div>
-      <div
-        className="wall"
-        onPointerDown={(e) => {
-          if (phase !== 'play') return
-          const r = e.currentTarget.getBoundingClientRect()
-          const puff = { id: nextId.current++, x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 }
-          setPuffs((list) => [...list.slice(-8), puff])
-          play('spray')
-        }}
-      >
-        {puffs.map((p) => (
-          <i key={p.id} className="puff" style={{ left: `${p.x}%`, top: `${p.y}%` }} />
-        ))}
-        {marks.map((m) => {
-          if (!m.hit && now - m.born > m.ttl) return null
-          const fade = m.hit ? 1 : Math.max(0.15, 1 - (now - m.born) / m.ttl)
-          return (
-            <button
-              key={m.id}
-              className={m.hit ? 'mark hit' : 'mark'}
-              style={{ left: `${m.x}%`, top: `${m.y}%`, '--mark': m.hit ? c.color : crews[m.crew].color, '--turn': `${m.turn}deg`, opacity: fade } as React.CSSProperties}
-              onPointerDown={(e) => {
-                e.stopPropagation()
-                if (m.hit || phase !== 'play') return
-                play('spray')
-                navigator.vibrate?.(8)
-                put(live.current.map((x) => (x.id === m.id ? { ...x, hit: performance.now() - started.current } : x)))
-              }}
-            >
-              {m.hit ? c.tag : crews[m.crew].tag}
-            </button>
-          )
-        })}
-        {phase === 'ready' && (
-          <div className="spray-card">
-            <strong>Tag it for the {c.name}</strong>
-            <p>The other crews' tags come up on the wall. Cover as many as you can before they fade: {ROUND / 1000} seconds.</p>
-            <button className="btn primary big" onClick={(e) => begin(e.timeStamp)}>
-              <Icon name="spray" size={18} /> Go
-            </button>
-          </div>
-        )}
-        {phase === 'sending' && <div className="spray-card"><strong>{hits} covered</strong></div>}
-        {phase === 'done' && result && (
-          <div className="spray-card">
-            {result.error ? (
-              <>
-                <strong>No tag this time</strong>
-                <p>{result.error}</p>
-              </>
-            ) : (
-              <>
-                <strong className="spray-points">+{result.points}</strong>
-                <p>
-                  for the {c.name}. {nowHolder === crew ? `${blockTitle(block)} is ${c.name} turf.` : nowHolder ? `The ${crews[nowHolder].name} still hold it: ${Math.round(theirs)} to your ${Math.round(ours)}.` : ''}
-                </p>
-              </>
-            )}
-            <button className="btn primary big" onClick={close}>
-              Done
-            </button>
-          </div>
-        )}
-      </div>
     </div>
   )
 }
@@ -3895,8 +3803,11 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
   const commands: Command[] = [
     { key: 'new', icon: <Icon name="plus" />, label: 'New pin', hint: 'N', run: startCompose },
     { key: 'locate', icon: <Icon name="locate" />, label: 'Where am I', hint: 'L', run: locate },
+    { key: 'snap', icon: <Icon name="camera" />, label: 'Snap a photo, up for a day', hint: 'S', run: startSnap },
+    { key: 'stickers', icon: <Icon name="sticker" />, label: 'Stickers and sparks', run: () => ui({ tray: true, legend: false }) },
+    { key: 'filters', icon: <Icon name="sliders" />, label: 'Filters: what the map shows', run: () => ui({ legend: true, tray: false }) },
+    ...PRESETS.slice(1).map((preset) => ({ key: `preset-${preset.label}`, icon: <Icon name="sliders" />, label: `Show: ${preset.label.toLowerCase()}`, run: () => setFilters(preset.pins) })),
     { key: 'then', icon: <Icon name="clock" />, label: UI.then === null ? 'Back in time: the map as it was' : 'Back to now', hint: 'Y', run: toggleThen },
-    { key: 'turf', icon: <Icon name="flag" />, label: 'Turf: the crews and their blocks', run: () => go('turf') },
     ...(walkable() || UI.walk
       ? [{ key: 'walk', icon: <Icon name="arrow" />, label: walkable() && walkable() !== UI.walk ? 'Get there on foot' : 'Stop walking', hint: 'G', run: walkKey }]
       : []),
@@ -3932,8 +3843,7 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
         .slice(0, 5)
         .map((id) => {
           const b = S.blocks.get(id)!
-          const holder = turf().holder.get(id)
-          return { key: `block-${id}`, icon: <Icon name="flag" />, label: names.get(id)!, hint: holder ? `${crews[holder].name} turf` : 'block', run: () => { go(`block/${id}`); reveal(b.latitude, b.longitude, 16.5, true) } }
+          return { key: `block-${id}`, icon: <Icon name="flag" />, label: names.get(id)!, hint: 'block', run: () => { go(`block/${id}`); reveal(b.latitude, b.longitude, 16.5, true) } }
         })
     : []
 
@@ -4054,41 +3964,65 @@ function Palette() {
 //
 
 // What everything on the map means, in the current style.
-function Legend() {
-  const theme = mapThemes[shown()] ?? mapThemes.day
+function Switch({ on, label, flip }: { on: boolean; label: string; flip: () => void }) {
   return (
-    <div className="panel legend">
-      <div className="section">Pins</div>
-      <div className="legend-grid">
-        {(Object.keys(flairs) as Flair[]).map((f) => (
-          <div key={f}>
-            <Blip flair={f} size={22} />
-            <span>{flairs[f].label}</span>
-          </div>
-        ))}
-        <div>
-          <span className="avatar" style={{ width: 22, height: 22, fontSize: 9, background: '#2f9e6b' }}>
-            FR
-          </span>
-          <span>A friend</span>
-        </div>
-        <div>
-          <span className="legend-route" style={{ borderTop: `4px ${theme.routeLine} ${theme.route}` }} />
-          <span>The way there (G)</span>
-        </div>
+    <button className={on ? 'toggle-row on' : 'toggle-row'} role="switch" aria-checked={on} onClick={flip}>
+      <i />
+      {label}
+    </button>
+  )
+}
+
+function Legend() {
+  const f = UI.filters
+  // How many of each kind there are with everything else as it is, so a kind
+  // with nothing in it says so before it's picked.
+  const all = visiblePosts(true)
+  const count = (k: Flair) => all.filter((p) => p.flair === k).length
+  const toggle = (k: Flair) => setFilters({ kinds: f.kinds.includes(k) ? f.kinds.filter((x) => x !== k) : [...f.kinds, k] })
+  return (
+    <div className="panel legend filters">
+      <div className="legend-head">
+        <strong>Show on the map</strong>
+        {filterWords() && (
+          <button className="link" onClick={() => setFilters(PRESETS[0].pins)}>
+            Show everything
+          </button>
+        )}
       </div>
-      <div className="section">Turf</div>
-      <div className="legend-grid">
-        {(Object.keys(crews) as Crew[]).map((c) => (
-          <div key={c}>
-            <span className="legend-turf" style={{ background: crews[c].color }} />
-            <span>{crews[c].name}</span>
+      <div className="presets">
+        {PRESETS.map((preset) => (
+          <button key={preset.label} className={samePins(preset.pins, f) ? 'on' : ''} onClick={() => setFilters(preset.pins)}>
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      <div className="section">Pins</div>
+      <div className="kinds">
+        {(Object.keys(flairs) as Flair[]).map((k) => (
+          <div key={k} className={f.kinds.includes(k) ? 'kind on' : f.kinds.length ? 'kind off' : 'kind'}>
+            <button className="kind-main" onClick={() => toggle(k)} aria-pressed={f.kinds.includes(k)}>
+              <Blip flair={k} size={22} />
+              <span className="label">{flairs[k].label}</span>
+              <small>{count(k)}</small>
+            </button>
+            <button className="only" onClick={() => setFilters({ kinds: [k] })} title={`Only ${flairs[k].label.toLowerCase()}`}>
+              only
+            </button>
           </div>
         ))}
-        <div>
-          <span className="legend-turf hot" />
-          <span>Being fought over</span>
-        </div>
+      </div>
+      <div className="switches">
+        <Switch on={f.friendsOnly} label="Friends' pins only" flip={() => (f.friendsOnly || !needAccount('signin')) && setFilters({ friendsOnly: !f.friendsOnly })} />
+        <Switch on={f.soon} label="On now, or in the next day" flip={() => setFilters({ soon: !f.soon })} />
+        <Switch on={f.legends} label="Legends only" flip={() => setFilters({ legends: !f.legends })} />
+      </div>
+      <div className="section">Also on the map</div>
+      <div className="switches">
+        <Switch on={f.people} label="Friends where they are" flip={() => setFilters({ people: !f.people })} />
+        <Switch on={f.stickers} label="Stickers" flip={() => setFilters({ stickers: !f.stickers })} />
+        <Switch on={f.names} label="What people call the blocks" flip={() => setFilters({ names: !f.names })} />
+        <Switch on={f.places} label="Shops, cafés and the rest" flip={() => setFilters({ places: !f.places })} />
       </div>
       <div className="section">Places</div>
       <div className="legend-grid">
@@ -4101,6 +4035,133 @@ function Legend() {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+//
+// Snaps: a photo or video from where you are, up for a day.
+//
+
+// The phone's camera (or a file, on a computer): the snap sheet takes it from there.
+function startSnap() {
+  if (needAccount()) return
+  ;(document.getElementById('snap-input') as HTMLInputElement | null)?.click()
+  watchHere() // where it goes: a fix by the time the caption's written
+}
+
+function takeSnap(file: File | undefined) {
+  if (!file) return
+  if (UI.snap) URL.revokeObjectURL(UI.snap.url)
+  ui({ snap: { file, url: URL.createObjectURL(file) } })
+}
+
+function dropSnap() {
+  if (UI.snap) URL.revokeObjectURL(UI.snap.url)
+  ui({ snap: null })
+}
+
+function SnapSheet() {
+  const [caption, setCaption] = useState('')
+  const [busy, setBusy] = useState(false)
+  const snap = UI.snap!
+  const here = S.here
+  const video = snap.file.type.startsWith('video/')
+  async function post() {
+    if (busy) return
+    setBusy(true)
+    const at = here ? { latitude: here.latitude, longitude: here.longitude } : viewCenter()
+    const made = await createSnap(snap.file, caption, at.latitude, at.longitude)
+    setBusy(false)
+    if (!made) return failed("Couldn't post the snap")
+    dropSnap()
+    reveal(at.latitude, at.longitude, Math.max(map?.zoom ?? 16, 16))
+    celebrate('Snapped', 'Up for a day, unless the neighbours vote it a Legend')
+  }
+  return (
+    <div className="snap-sheet" role="dialog" aria-label="New snap">
+      <div className="snap-card">
+        {video ? <video src={snap.url} autoPlay muted loop playsInline /> : <img src={snap.url} alt="" />}
+        <input className="input" value={caption} maxLength={120} placeholder="Say what it is (or don't)" autoFocus={!narrow()} onChange={(e) => setCaption(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && post()} />
+        <div className="muted small">{here ? 'Where you are' : 'The middle of the map'} · gone in 24 hours unless it's voted a Legend</div>
+        <div className="btn-row">
+          <button className="btn" onClick={dropSnap}>
+            Cancel
+          </button>
+          <button className="btn primary" onClick={post} disabled={busy}>
+            <Icon name="camera" size={16} /> {busy ? 'Posting…' : 'Post snap'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+//
+// Sparks: the streak, and the stickers they buy.
+//
+
+// A name for how long someone's been around, from the sparks they've ever had.
+function rankOf(earned: number) {
+  return earned >= 150 ? 'Local legend' : earned >= 50 ? 'Local' : earned >= 15 ? 'Regular' : 'Newcomer'
+}
+
+function SparkBadge({ id }: { id: string }) {
+  const p = S.profiles.get(id)
+  if (!p) return null
+  return (
+    <span className="spark-badge" title={`${rankOf(p.sparks_earned)}: ${p.streak} days in a row, ${p.sparks_earned} sparks all told`}>
+      {p.streak > 1 && <span>🔥 {p.streak}</span>}
+      <span>{rankOf(p.sparks_earned)}</span>
+    </span>
+  )
+}
+
+function StickerTray() {
+  const me = S.userId ? S.profiles.get(S.userId) : null
+  const mine = liveStickers().filter((x) => x.user_id === S.userId)
+  return (
+    <div className="panel legend tray">
+      <div className="legend-head">
+        <strong>Stickers</strong>
+        <span className="muted small">
+          ✨ {me?.sparks ?? 0} · {STICKER_SPARKS} each, up for a day
+        </span>
+      </div>
+      <div className="sticker-grid">
+        {STICKERS.map((emoji) => (
+          <button
+            key={emoji}
+            className={UI.placing === emoji ? 'on' : ''}
+            onClick={() => {
+              if (needAccount()) return
+              if ((me?.sparks ?? 0) < STICKER_SPARKS) return toast(`A sticker is ${STICKER_SPARKS} sparks. Open the app each day for more: a week in a row is 6 at once.`)
+              ui({ placing: UI.placing === emoji ? null : emoji })
+            }}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      <p className="muted small">{UI.placing ? `${narrow() ? 'Tap' : 'Click'} the map where it goes.` : 'Pick one, then put it on the map: footprints where the thing was seen, a ghost on the old gaol.'}</p>
+      {me && (
+        <p className="muted small">
+          🔥 {me.streak} {me.streak === 1 ? 'day' : 'days in a row'} · {rankOf(me.sparks_earned)}. A spark a day for opening the app, six on every seventh day, one for each up-vote your pins get and ten when one becomes a Legend.
+        </p>
+      )}
+      {mine.length > 0 && (
+        <>
+          <div className="section">Yours on the map</div>
+          <div className="sticker-grid">
+            {mine.map((x) => (
+              <button key={x.id} title="Peel it off" onClick={() => peelSticker(x.id).then((ok) => ok || failed("Couldn't peel it off"))}>
+                {x.emoji}
+                <small>✕</small>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -4163,15 +4224,16 @@ function onKey(e: KeyboardEvent) {
     return
   }
   if (e.key === 'Escape') {
-    if (UI.spray) ui({ spray: null })
+    if (UI.snap) dropSnap()
+    else if (UI.placing) ui({ placing: null })
     else if (UI.palette) ui({ palette: false })
     else if (UI.auth) ui({ auth: null })
-    else if (UI.legend) ui({ legend: false })
+    else if (UI.legend || UI.tray) ui({ legend: false, tray: false })
     else if (UI.route.kind) go('')
     else if (UI.then !== null) toggleThen()
     return
   }
-  if (typing || e.metaKey || e.ctrlKey || e.altKey || UI.palette || UI.auth || UI.spray) return
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || UI.palette || UI.auth || UI.snap) return
 
   const k = e.key.toLowerCase()
   if (k === '/') {
@@ -4182,6 +4244,7 @@ function onKey(e: KeyboardEvent) {
   else if (k === 'l') locate()
   else if (k === 'g') walkKey()
   else if (k === 'y') toggleThen()
+  else if (k === 's') startSnap()
   else if (k === 't') applyTheme(THEMES[(THEMES.findIndex((t) => t.id === UI.theme) + 1) % THEMES.length].id)
   else if (k === 'f') {
     if (!needAccount('signin')) go('friends')
@@ -4210,7 +4273,7 @@ function ThenBar() {
   const { span, step } = spanOf(UI.thenSpan)
   const { now, at } = thenNow()
   const pins = visiblePosts().length
-  const held = [...turf(at).holder.keys()].filter((id) => time(S.blocks.get(id)?.created_at ?? '') <= at).length
+  const legends = visiblePosts().filter((p) => p.legend_at && time(p.legend_at) <= at).length
   return (
     <div className="then-bar" role="group" aria-label="Back in time">
       <div className="then-top">
@@ -4251,7 +4314,7 @@ function ThenBar() {
       <div className="then-when">
         <strong>{thenText(at, UI.thenSpan)}</strong>
         <small>
-          {plural(pins, 'pin')} · {plural(held, 'block')} held
+          {plural(pins, 'pin')} · {plural(legends, 'legend')}
         </small>
       </div>
     </div>
@@ -4331,11 +4394,11 @@ export default function App() {
         if (p.state === 'granted') watchHere()
       })
       .catch(() => {})
-    // Ground changing hands: a moment for whoever took it, news for the crew that lost it.
-    setTurnHandler((blockId, now, was, byMe) => {
-      const name = blockName(blockId) ?? 'the block'
-      if (byMe) celebrate('Turf taken', `${name} is ${crews[now].name} turf`)
-      else if (was && was === myCrew()) toast(`The ${crews[now].name} took ${name} from the ${crews[was].name}`, `block/${blockId}`)
+    // Coming back on a new day: the streak, and a spark or six.
+    setStreakHandler((streak, prize) => {
+      const line = `${streak === 1 ? 'Welcome back' : `${streak} days in a row`} · +${plural(prize, 'spark')}`
+      if (streak % 7 === 0) celebrate(`${streak}-day streak`, line)
+      else toast(`🔥 ${line}`)
     })
     setIncomingHandler((title, body, route) => {
       if (document.visibilityState === 'visible') {
@@ -4370,10 +4433,21 @@ export default function App() {
         else ui({ draft: { latitude: lat, longitude: lng } })
         return
       }
+      // A sticker picked in the tray goes where the map's tapped.
+      if (UI.placing) {
+        const emoji = UI.placing
+        ui({ placing: null })
+        dropSticker(emoji, lat, lng).then((ok) => {
+          if (!ok) return failed("Couldn't drop it")
+          play('spray')
+          navigator.vibrate?.(10)
+        })
+        return
+      }
       if (!marker) {
-        // Tapping empty map puts the map first: the legend goes, and on a phone
-        // the sheets. With the map clear, a tap opens the block.
-        if (UI.legend) ui({ legend: false })
+        // Tapping empty map puts the map first: the legend and the tray go, and
+        // on a phone the sheets. With the map clear, a tap opens the block.
+        if (UI.legend || UI.tray) ui({ legend: false, tray: false })
         if (narrow() && (UI.route.kind || UI.feed)) {
           ui({ feed: false })
           go('')
@@ -4392,6 +4466,9 @@ export default function App() {
         const posts = S.posts.filter((p) => placeKey(p) === marker.id)
         go(posts.length === 1 ? `pin/${posts[0].id}` : `place/${marker.id}`)
         reveal(posts[0].latitude, posts[0].longitude)
+      } else if (marker.kind === 'sticker') {
+        const sticker = S.stickers.find((x) => `sticker:${x.id}` === marker.id)
+        if (sticker) toast(`${sticker.emoji} from ${sticker.user_id === S.userId ? 'you' : nameOf(sticker.user_id)}, ${ago(sticker.created_at)}`)
       } else if (marker.kind === 'person') {
         go(`chat/${marker.id.slice('person:'.length)}`)
       } else if (marker.kind === 'me' && S.userId) {
@@ -4460,16 +4537,17 @@ export default function App() {
     }
     setMarkers(map, buildMarkers(posts))
     setRegions(map, buildRegions(posts))
+    setPlacesShown(map, UI.filters.places)
     // Looking back yellows the map, more the further back it goes.
     const age = UI.then === null ? 0 : Math.min(1, (Date.now() - UI.then) / (30 * 86400000))
     map.canvas.style.filter = UI.then === null ? '' : `sepia(${(0.3 + 0.5 * age).toFixed(2)}) saturate(${(1 - 0.3 * age).toFixed(2)})`
-    // Walking into a block with a name or a crew: it comes up, the way a game names a district.
+    // Walking into a block with a name: it comes up, the way a game names a district.
     const inside = S.here ? blockOf(S.here.latitude, S.here.longitude) : null
     if ((inside?.id ?? '') !== lastRegion) {
       lastRegion = inside?.id ?? ''
-      const crew = inside && turf().holder.get(inside.id)
       const name = inside && blockName(inside.id)
-      if (inside && (name || crew)) district(name ?? blockTitle(inside), crew ? `${crews[crew].name} turf` : "Nobody's turf")
+      const legends = inside ? pinsOn(inside).filter((p) => p.legend_at).length : 0
+      if (inside && name) district(name, legends ? `${plural(legends, 'legend')} here` : 'Named by the neighbours')
     }
     const target = walkTarget()
     const here = S.here
@@ -4509,7 +4587,6 @@ export default function App() {
   else if (route.kind === 'settings') detail = <SettingsView />
   else if (route.kind === 'new') detail = <ComposeView />
   else if (route.kind === 'block') detail = <BlockView key={route.id} />
-  else if (route.kind === 'turf') detail = <TurfView />
 
   const me = S.userId
   const sheetUp = !!detail || UI.feed
@@ -4545,6 +4622,11 @@ export default function App() {
               <Icon name="bell" />
               {unread > 0 && <b className="badge">{unread > 99 ? '99+' : unread}</b>}
             </button>
+            {S.profiles.get(me) && (
+              <button className="spark-chip hide-narrow" onClick={() => ui({ tray: !UI.tray, legend: false })} title="Your streak and sparks">
+                🔥 {S.profiles.get(me)!.streak} <span>✨ {S.profiles.get(me)!.sparks}</span>
+              </button>
+            )}
             <button className="me-btn hide-narrow" onClick={() => go(`user/${me}`)} title="Your profile">
               <Avatar id={me} size={30} />
             </button>
@@ -4572,21 +4654,48 @@ export default function App() {
         <button className={UI.then !== null ? 'icon-btn tool on' : 'icon-btn tool'} onClick={toggleThen} aria-label="Back in time" title="Back in time: the map as it was (Y)">
           <Icon name="clock" />
         </button>
-        <button className={route.kind === 'turf' ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => go(route.kind === 'turf' ? '' : 'turf')} aria-label="Turf" title="Turf: the crews and their blocks">
-          <Icon name="flag" />
+        <button className={UI.tray ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ tray: !UI.tray, legend: false, placing: null })} aria-label="Stickers" title="Stickers and sparks">
+          <Icon name="sticker" />
         </button>
-        <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend })} aria-label="Legend" title="What the blips mean">
-          <Icon name="info" />
+        <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend, tray: false })} aria-label="Filters" title="What to show, and what the blips mean">
+          <Icon name="sliders" />
+          {filterWords() && <b className="badge dot" />}
         </button>
       </div>
       {UI.legend && <Legend />}
+      {UI.tray && <StickerTray />}
+      {filterWords() && !UI.legend && (
+        <button className="filter-chip" onClick={() => ui({ legend: true })}>
+          <Icon name="sliders" size={14} /> {filterWords()}
+          <span
+            className="clear"
+            role="button"
+            aria-label="Show everything"
+            onClick={(e) => {
+              e.stopPropagation()
+              setFilters(PRESETS[0].pins)
+            }}
+          >
+            <Icon name="close" size={12} />
+          </span>
+        </button>
+      )}
 
       {UI.then !== null && <ThenBar />}
       {route.kind !== 'new' && UI.then === null && (
-        <button className="fab hide-narrow" onClick={startCompose} title="New pin (N)">
-          <Icon name="plus" size={20} /> Pin something
-        </button>
+        <div className="fab-row">
+          <button className="fab snap-fab" onClick={startSnap} title="Snap: a photo from here, up for a day (S)" aria-label="Snap">
+            <Icon name="camera" size={20} />
+            <span className="hide-narrow">Snap</span>
+          </button>
+          <button className="fab hide-narrow" onClick={startCompose} title="New pin (N)">
+            <Icon name="plus" size={20} /> Pin something
+          </button>
+        </div>
       )}
+      <input id="snap-input" type="file" accept="image/*,video/*" capture="environment" hidden onChange={(e) => { takeSnap(e.target.files?.[0]); e.target.value = '' }} />
+      {UI.snap && <SnapSheet />}
+      {UI.placing && <div className="hint-bar">{narrow() ? 'Tap' : 'Click'} the map to put {UI.placing} there</div>}
       {route.kind === 'new' && (
         <div className="hint-bar">
           {narrow() ? 'Tap' : 'Click'} {UI.picking ? 'the blocks it takes over' : 'the map to place your pin'}
@@ -4650,7 +4759,6 @@ export default function App() {
             {UI.toast}
           </div>
         ))}
-      {UI.spray && <SprayGame key={`spray-${UI.spray}`} blockId={UI.spray} />}
       {UI.palette && <Palette />}
       {UI.auth && <AuthView key={UI.auth} />}
     </div>

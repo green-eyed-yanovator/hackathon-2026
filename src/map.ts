@@ -96,13 +96,15 @@ export const icons = {
   minus: 'M4 11h16v2H4z',
   info: '!M12 2a10 10 0 1 1 0 20 10 10 0 1 1 0-20zM11 10h2v8h-2zM11 6h2v2h-2z',
   up: 'M12 5l8.5 11h-17z',
+  eye: '!M12 5C6.5 5 2.7 9.2 1.5 12c1.2 2.8 5 7 10.5 7s9.3-4.2 10.5-7C21.3 9.2 17.5 5 12 5zm0 3a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z',
+  camera: '!M9 4h6l1.6 2.5H20a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8.5a2 2 0 0 1 2-2h3.4zm3 4.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zm0 2a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5z',
+  sticker: '!M12 2a10 10 0 1 0 10 10h-6a4 4 0 0 1-4-4V2zm2 .3V8a2 2 0 0 0 2 2h5.7A10 10 0 0 0 14 2.3zM8 9.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm-.4 5.2c1.1 1.5 2.6 2.3 4.4 2.3s3.3-.8 4.4-2.3l1.3.9c-1.4 2-3.4 3.1-5.7 3.1s-4.3-1.1-5.7-3.1z',
   play: 'M7 4.5v15l12.5-7.5z',
   pause: 'M6 4.5h4.2v15H6zM13.8 4.5H18v15h-4.2z',
   prev: 'M14.6 4.4l1.9 1.9-5.7 5.7 5.7 5.7-1.9 1.9-7.6-7.6z',
   next: 'M9.4 4.4l7.6 7.6-7.6 7.6-1.9-1.9 5.7-5.7-5.7-5.7z',
   down: 'M12 19L3.5 8h17z',
   flag: 'M4 2h2.2v20H4zM7.4 3.2c3.4-1.6 5.7 1.6 9.6 0L19.5 2v10.3c-3.9 1.8-6.2-1.5-9.6 0l-2.5 1.1z',
-  spray: 'M8 9.5A1.5 1.5 0 0 1 9.5 8h5A1.5 1.5 0 0 1 16 9.5V21a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1zM10 4h4v3h-4zM15.5 2h1.6v1.6h-1.6zM18.4 3.4H20V5h-1.6zM18.4.6H20v1.6h-1.6zM21.2 2h1.6v1.6h-1.6z',
   heart: 'M12 20.5C6 16 2.5 12.5 2.5 8.6A4.6 4.6 0 0 1 7.1 4c2 0 3.6 1 4.9 2.8C13.3 5 14.9 4 16.9 4a4.6 4.6 0 0 1 4.6 4.6c0 3.9-3.5 7.4-9.5 11.9z',
 }
 
@@ -742,10 +744,12 @@ export const MARK_SELECTED = 16
 export const MARK_STALE = 32 // a person whose last position is old
 export const MARK_ONLINE = 64 // a person with the app open right now
 export const MARK_LIVE = 128 // a pin happening now or within the next few hours
+export const MARK_LEGEND = 256 // voted into the neighbourhood's lore
+export const MARK_BOOSTED = 512 // someone spent sparks on it
 
 export type Marker = {
   id: string
-  kind: 'pin' | 'person' | 'me' | 'draft' | 'cluster'
+  kind: 'pin' | 'person' | 'me' | 'draft' | 'cluster' | 'sticker'
   x: number // world
   y: number
   icon: IconName
@@ -756,7 +760,8 @@ export type Marker = {
   name: string // shown under people
   accuracy: number // metres, for 'me'
   heading: number | null
-  image: string | null // a person's photo
+  image: string | null // a person's photo; a snap's
+  life: number // a snap's day, how much is left (1 to 0); 1 for everything else
 }
 
 type SourceEntry = { state: 'loading' | 'ready' | 'error'; tile: SourceTile | null; used: number }
@@ -782,6 +787,7 @@ export type MapState = {
   hovered: Marker | null
   highlight: string | null // a marker lit up from outside, e.g. hovering its row in a list
   draftMode: boolean
+  hidePlaces: boolean // the shops, cafes and the rest, left off
 
   // Camera motion.
   fly: { x0: number; y0: number; z0: number; x1: number; y1: number; z1: number; start: number; duration: number; bump: number } | null
@@ -865,7 +871,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
   const m: MapState = {
     canvas, ctx: canvas.getContext('2d')!, width: 0, height: 0, ratio: 1,
     x: lngToX(lng), y: latToY(lat), zoom, theme: mapThemes[themeName] ?? mapThemes.day, themeName,
-    markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false,
+    markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false, hidePlaces: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, moved: false, lastTap: 0, lastPointer: 'mouse', samples: [],
     fade: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', regions: [], regionKey: '', blockAsks: [], tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
@@ -1013,7 +1019,7 @@ function pickMarker(m: MapState, sx: number, sy: number) {
     if (marker.kind === 'draft') continue
     const p = project(m, marker.x, marker.y)
     const cy = marker.kind === 'pin' && m.theme.blip === 'pin' ? p.y - 20 : p.y
-    const r = marker.kind === 'me' ? 14 : marker.kind === 'cluster' ? 24 : 18
+    const r = marker.kind === 'me' ? 14 : marker.kind === 'cluster' ? 24 : marker.image && marker.kind === 'pin' ? 24 : 18
     if ((sx - p.x) ** 2 + (sy - cy) ** 2 <= r * r) return marker
   }
   return null
@@ -2028,6 +2034,17 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
   const resolved = (marker.flags & MARK_RESOLVED) !== 0
   const color = resolved ? '#8c8c8c' : marker.color
   let grow = selected ? 1.25 : hover ? 1.12 : 1
+  if (marker.flags & MARK_BOOSTED) {
+    grow *= 1.2
+    const glow = 0.5 + 0.5 * Math.sin(time / 400)
+    c.save()
+    c.globalAlpha = 0.25 + 0.2 * glow
+    c.fillStyle = '#f5b50a'
+    c.beginPath()
+    c.arc(sx, sy - (t.blip === 'pin' ? 22 : 0), 26 + 4 * glow, 0, Math.PI * 2)
+    c.fill()
+    c.restore()
+  }
 
   // A new pin falls in from above and settles with a little bounce.
   let drop = 0
@@ -2137,7 +2154,72 @@ function drawPin(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: n
     const pulse = 0.5 + 0.5 * Math.sin(time / 180)
     dot(c, badgeX - (marker.count > 1 ? 14 : 0), badgeY, 4.5 + pulse, '#ef3b3b')
   }
+  // A legend wears a gold star on its shoulder.
+  if (marker.flags & MARK_LEGEND) {
+    dot(c, -badgeX, badgeY, 8, '#1d1f24', 1.5)
+    drawIcon(c, 'star', -badgeX, badgeY, 11, '#f5b50a')
+  }
 
+  c.restore()
+}
+
+// A snap: its photo in a bubble, with a ring round it that runs down over its
+// day, the way the stories on a snapshot map do. A legend's ring is gold and full.
+function drawSnap(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean, img: HTMLImageElement | null) {
+  const r = (hover ? 23 : 21) * (marker.flags & MARK_SELECTED ? 1.15 : 1)
+  const legend = (marker.flags & MARK_LEGEND) !== 0
+  const cy = sy - r - 6
+  c.save()
+  c.shadowColor = 'rgba(0,0,0,0.35)'
+  c.shadowBlur = 8
+  c.beginPath()
+  c.moveTo(sx - 6, cy + r - 2)
+  c.lineTo(sx, sy)
+  c.lineTo(sx + 6, cy + r - 2)
+  c.arc(sx, cy, r, 0, Math.PI * 2)
+  c.fillStyle = '#fff'
+  c.fill()
+  c.shadowColor = 'transparent'
+  c.beginPath()
+  c.arc(sx, cy, r - 3.5, 0, Math.PI * 2)
+  c.fillStyle = marker.color
+  c.fill()
+  if (img) {
+    c.save()
+    c.clip()
+    c.filter = t.photo
+    // Cover the circle: the middle of the photo, square.
+    const side = Math.min(img.naturalWidth, img.naturalHeight)
+    c.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, sx - r + 3.5, cy - r + 3.5, 2 * r - 7, 2 * r - 7)
+    c.restore()
+  }
+  c.beginPath()
+  c.arc(sx, cy, r - 1.5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (legend ? 1 : Math.max(0.02, marker.life)))
+  c.strokeStyle = legend ? '#f5b50a' : marker.color
+  c.lineWidth = 3
+  c.stroke()
+  if (legend) {
+    dot(c, sx + r * 0.72, cy - r * 0.72, 8, '#1d1f24', 1.5)
+    drawIcon(c, 'star', sx + r * 0.72, cy - r * 0.72, 11, '#f5b50a')
+  }
+  if (marker.count > 1) dot(c, sx - r * 0.72, cy - r * 0.72, 8, '#1d1f24', 1.5, marker.count)
+  c.restore()
+}
+
+// A sticker: an emoji on the map for a day, on a little shadow.
+function drawSticker(c: CanvasRenderingContext2D, marker: Marker, sx: number, sy: number, hover: boolean) {
+  const size = hover ? 34 : 30
+  c.save()
+  c.globalAlpha = 0.25
+  c.fillStyle = '#000'
+  c.beginPath()
+  c.ellipse(sx, sy + size * 0.42, size * 0.32, size * 0.1, 0, 0, Math.PI * 2)
+  c.fill()
+  c.globalAlpha = 1
+  c.font = `${size}px ${sans}`
+  c.textAlign = 'center'
+  c.textBaseline = 'middle'
+  c.fillText(marker.text, sx, sy)
   c.restore()
 }
 
@@ -3116,6 +3198,13 @@ export type Region = {
   hot: boolean // being fought over: it flashes
 }
 
+export function setPlacesShown(m: MapState, on: boolean) {
+  if (m.hidePlaces === !on) return
+  m.hidePlaces = !on
+  m.baseDirty = true
+  requestFrame(m)
+}
+
 export function setRegions(m: MapState, regions: Region[]) {
   const key = JSON.stringify(regions)
   if (key === m.regionKey) return
@@ -3133,7 +3222,8 @@ function traceRegion(m: MapState, region: Region) {
   const oy = m.height / 2 - m.y * scale
   c.beginPath()
   for (const ring of region.rings) {
-    for (const [lng, lat] of ring) c.lineTo(ox + lngToX(lng) * scale, oy + latToY(lat) * scale)
+    // Each block is a shape of its own: a lineTo after closePath would join it to the last one.
+    ring.forEach(([lng, lat], i) => (i ? c.lineTo : c.moveTo).call(c, ox + lngToX(lng) * scale, oy + latToY(lat) * scale))
     c.closePath()
   }
 }
@@ -3373,8 +3463,9 @@ function frame(m: MapState, time: number) {
 
   if (keepGoing) requestFrame(m)
   else if (animated) {
-    // Pulses don't need 60 fps; let the battery breathe.
-    setTimeout(() => requestFrame(m), 33)
+    // Pulses are slow (a second or two each), and every frame of one redraws the
+    // whole screen: a dozen frames a second looks the same and costs a fifth.
+    setTimeout(() => requestFrame(m), 80)
   }
 }
 
@@ -3483,7 +3574,7 @@ function drawLabels(m: MapState, v: View, placed: Box[], dt: number) {
 
   // The crime-sprawl maps are covered in blips from further out; ink and plain maps keep them for close up.
   const poiEarly = t.blip === 'square' || t.blip === 'round' ? 2 : t.blip === 'ring' ? 1 : 0
-  const showPoi = v.z >= 15 - poiEarly
+  const showPoi = v.z >= 15 - poiEarly && !m.hidePlaces
   const named = new Map<string, { x: number; y: number }[]>() // where each road or river name went
   let drawn = 0
   let fading = false
@@ -3637,13 +3728,17 @@ function drawMarkers(m: MapState, v: View, time: number) {
     const p = project(m, marker.x, marker.y)
     if (p.x < -60 || p.y < -60 || p.x > m.width + 60 || p.y > m.height + 60) continue
     const hover = m.hovered?.id === marker.id || m.highlight === marker.id
-    if (marker.kind === 'pin') {
+    if (marker.kind === 'pin' && marker.image) {
+      drawSnap(c, t, marker, p.x, p.y, hover, photo(m, marker.image))
+    } else if (marker.kind === 'pin') {
       const born = m.born.get(marker.id) ?? 0
       // The frame's timestamp can be a hair older than the moment the pin was born.
       const age = born ? Math.max(0, time - born) : Infinity
       drawPin(c, t, marker, p.x, p.y, hover, time, age)
       if (age < 600) dropping = true
-      if (marker.flags & (MARK_NEW | MARK_LIVE) || t.blip === 'ring') animated = true
+      if (marker.flags & (MARK_NEW | MARK_LIVE | MARK_BOOSTED) || t.blip === 'ring') animated = true
+    } else if (marker.kind === 'sticker') {
+      drawSticker(c, marker, p.x, p.y, hover)
     } else if (marker.kind === 'cluster') {
       drawCluster(c, t, marker, p.x, p.y, hover)
     } else if (marker.kind === 'person') {
@@ -3681,6 +3776,7 @@ function drawFade(m: MapState, time: number) {
 function order(marker: Marker) {
   if (marker.flags & MARK_SELECTED) return 5
   switch (marker.kind) {
+    case 'sticker': return 0
     case 'person': return 1
     case 'pin': case 'cluster': return 2
     case 'me': return 3

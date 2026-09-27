@@ -7,18 +7,24 @@ import { defineConfig, loadEnv } from 'vite'
 export default defineConfig(({ mode }) => {
   const target = loadEnv(mode, process.cwd(), '').VITE_SUPABASE_URL || 'http://127.0.0.1:54321'
   const pass = { target, changeOrigin: true }
+  // The same for the development server and for the built app (`vite preview`,
+  // much quicker on a phone), on the same port, so one `tailscale serve` covers both.
+  const serve = {
+    host: '127.0.0.1', // where `tailscale serve` passes the tailnet's requests to
+    port: 5173,
+    strictPort: true,
+    allowedHosts: ['nicks-macbook-pro.tail1185f0.ts.net'],
+    proxy: {
+      '/auth/v1': pass,
+      '/rest/v1': pass,
+      '/storage/v1': pass,
+      '/functions/v1': pass,
+      '/realtime/v1': { ...pass, ws: true },
+    },
+  }
   return {
     plugins: [react()],
-    server: {
-      host: '127.0.0.1', // where `tailscale serve` passes the tailnet's requests to
-      allowedHosts: ['nicks-macbook-pro.tail1185f0.ts.net'],
-      proxy: {
-        '/auth/v1': pass,
-        '/rest/v1': pass,
-        '/storage/v1': pass,
-        '/functions/v1': pass,
-        '/realtime/v1': { ...pass, ws: true },
-      },
-    },
+    server: serve,
+    preview: serve,
   }
 })

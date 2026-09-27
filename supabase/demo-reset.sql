@@ -1,8 +1,8 @@
 -- Puts the demo neighbourhood back the way "Demo in two minutes" in the README
 -- expects it, after people have clicked around: friends back on the map (fresh,
 -- so not faded), Maya's friends, unread messages and waiting request, the
--- hearts on replies, the crews and their turf, with a fight on. Only the demo
--- accounts are touched.
+-- hearts on replies, the lore and the stickers. Only the demo accounts are
+-- touched.
 --
 --   docker exec -i supabase_db_hackathon-2026 psql -U postgres < supabase/demo-reset.sql
 
@@ -80,17 +80,13 @@ begin
   join public.replies r on r.content = l.body and r.author_id = any (demo)
   on conflict do nothing;
 
-  -- Turf and the word on the street as the seed left them: whatever the demo
-  -- accounts tagged, wrote or voted in the last two hours goes, the crews go
-  -- back, and the Galahs are hitting the Magpies' Busker Row again, just now.
-  delete from public.tags where user_id = any (demo) and created_at > now() - interval '2 hours';
+  -- The word on the street and the lore as the seed left them: whatever the demo
+  -- accounts wrote or voted in the last two hours goes, and the stickers go
+  -- back up for another day.
   delete from public.block_words where author_id = any (demo) and created_at > now() - interval '2 hours';
   delete from public.word_votes where user_id = any (demo) and created_at > now() - interval '2 hours';
-  update public.profiles set crew = v.crew, crew_since = now() - interval '30 days'
-  from (values (maya, 'galahs'), (priya, 'galahs'), (tom, 'magpies'), (ben, 'magpies'), (lucas, 'possums'), (hannah, 'owls')) as v (who, crew)
-  where id = v.who;
-  insert into public.tags (block_id, user_id, crew, points, created_at)
-  select id, priya, 'galahs', 6, now() - interval '12 minutes'
-  from public.city_blocks where shape @> point(138.604516, -34.921947)
-  order by area(box(shape)) limit 1;
+  delete from public.post_votes where user_id = any (demo) and created_at > now() - interval '2 hours';
+  update public.stickers set expires_at = now() + interval '22 hours' where user_id = any (demo);
+  -- Maya's streak waits for her to open the app today.
+  update public.profiles set streak_day = (now() at time zone 'Australia/Adelaide')::date - 1 where id = any (demo);
 end $$;

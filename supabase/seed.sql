@@ -188,9 +188,9 @@ begin
 end;
 $$;
 
--- City blocks: what the neighbours call them, what they say about them, and the
--- four crews' turf. The outlines are the app's own, traced from the map's
--- streets. Blocks someone already made here are used as they are.
+-- City blocks: what the neighbours call them and what they say about them. The
+-- outlines are the app's own, traced from the map's streets. Blocks someone
+-- already made here are used as they are.
 do $$
 declare
   maya uuid := 'd0000000-0000-4000-8000-000000000001';
@@ -263,28 +263,6 @@ begin
     end if;
     update demo_blocks set id = kept where key = b.key;
   end loop;
-
-  -- Crews.
-  update public.profiles set crew = v.crew, crew_since = now() - interval '30 days'
-  from (values (maya, 'galahs'), (priya, 'galahs'), (tom, 'magpies'), (ben, 'magpies'), (lucas, 'possums'), (hannah, 'owls')) as v (who, crew)
-  where id = v.who;
-
-  -- Tags, as (block, who, points, hours ago). The Galahs have the west of the
-  -- middle of town, the Magpies the north, the Possums the east, the Owls the
-  -- south-east; and the Galahs are going after the Magpies' Busker Row.
-  insert into public.tags (block_id, user_id, crew, points, created_at)
-  select d.id, v.who, (select crew from public.profiles where id = v.who), v.points, now() - make_interval(hours => v.hours)
-  from (values
-    ('deli', priya, 8, 70), ('deli', maya, 6, 30), ('dumplings', priya, 9, 50), ('dumplings', maya, 7, 20), ('dumplings', tom, 4, 10),
-    ('cafe', priya, 7, 26), ('bakery', maya, 6, 60), ('bakery', ben, 5, 90), ('g31', maya, 5, 40), ('g30', priya, 6, 80), ('g51', maya, 4, 30), ('g50', priya, 5, 100),
-    ('keys', ben, 8, 20), ('keys', tom, 6, 44), ('probe', tom, 7, 12), ('busker', tom, 7, 30), ('busker', ben, 6, 8), ('g11', ben, 5, 60),
-    ('g12', tom, 6, 36), ('g22', ben, 7, 50), ('g22', priya, 5, 70), ('g10', tom, 4, 90),
-    ('band', lucas, 9, 30), ('park', lucas, 8, 48), ('park', ben, 6, 70), ('g36', lucas, 6, 20), ('g46', lucas, 5, 60), ('g25', lucas, 7, 12), ('bench', lucas, 4, 80), ('bench', maya, 3, 90),
-    ('power', hannah, 9, 16), ('cleanup', hannah, 8, 40), ('g44', hannah, 5, 30), ('g45', hannah, 6, 55), ('g35', hannah, 4, 80), ('g56', hannah, 5, 25), ('g53', hannah, 3, 70)
-  ) as v (key, who, points, hours)
-  join demo_blocks d on d.key = v.key;
-  insert into public.tags (block_id, user_id, crew, points, created_at)
-  select id, priya, 'galahs', 6, now() - interval '12 minutes' from demo_blocks where key = 'busker';
 
   -- What people call the blocks, and what they say about them, with the votes:
   -- (block, who, words, a name?, hours ago, up, down). Old memories of a place
@@ -396,5 +374,76 @@ begin
   ) as v (line, who, body, after)
   join public.block_words w on w.body = v.line and w.author_id = any (demo);
   update public.word_votes v set created_at = w.created_at from public.block_words w where v.word_id = w.id and v.user_id = w.author_id and w.parent_id is not null;
+end;
+$$;
+
+-- Lore: sightings and stories, some already voted into Legends; a few stickers
+-- where things were seen; and everyone's streaks.
+do $$
+declare
+  maya uuid := 'd0000000-0000-4000-8000-000000000001';
+  tom uuid := 'd0000000-0000-4000-8000-000000000002';
+  priya uuid := 'd0000000-0000-4000-8000-000000000003';
+  lucas uuid := 'd0000000-0000-4000-8000-000000000004';
+  hannah uuid := 'd0000000-0000-4000-8000-000000000005';
+  ben uuid := 'd0000000-0000-4000-8000-000000000006';
+  demo uuid[] := array[maya, tom, priya, lucas, hannah, ben];
+  p record;
+  post uuid;
+begin
+  if not exists (select 1 from auth.users where id = maya) then
+    raise notice 'Load the demo neighbourhood first.';
+    return;
+  end if;
+  if exists (select 1 from public.posts where flair in ('sighting', 'story') and author_id = any (demo)) then
+    raise notice 'Demo lore is already here.';
+    return;
+  end if;
+
+  -- (who, kind, title, text, lat, lng, hours ago, up-voters, down-voters)
+  create temporary table demo_lore (who uuid, flair text, title text, body text, lat float8, lng float8, hours int, up uuid[], down uuid[]) on commit drop;
+  insert into demo_lore values
+    (tom, 'sighting', 'Something big on the Torrens path at 5am', 'Riding in before sunrise and something the size of a man, but wider, crossed the path near the footbridge and went down into the reeds. No torch, no dog, no sound. I stopped and it didn''t come back up. Footprints in the mud this morning, I''m not kidding.', -34.91700, 138.59880, 30, array[maya, ben, lucas, hannah], array[]::uuid[]),
+    (hannah, 'sighting', 'Lights over the parklands, 3am', 'Three orange lights in a line, no noise, drifting east over Victoria Park, then they just weren''t there. My neighbour saw them too from her balcony.', -34.92980, 138.61700, 20, array[priya, maya], array[tom]),
+    (ben, 'sighting', 'A koala. On Rundle Mall. At lunch.', 'Just sitting on a bench outside the arcade like it owned the place. Security had no idea what to do. Anyone know where it went?', -34.92255, 138.60220, 5, array[tom, priya, lucas, maya], array[]::uuid[]),
+    (lucas, 'story', 'The night shift at the old gaol', E'I did a winter of night security at the old gaol on Gaol Road, back when they ran the ghost tours.\n\nEvery night at 2:10 the motion light in the east yard came on. Every night. No wind, no possums on the camera, nothing. The guy before me said it was a guard who''d done his last round at ten past two in 1890-something and just kept doing it.\n\nOne night I stood in the yard at 2:09 to prove him wrong. The light came on over my head, and from somewhere down the row a door I''d locked myself went clunk, like someone checking it.\n\nI finished the winter. I didn''t go back into the yard at ten past two.', -34.91760, 138.58640, 60, array[maya, tom, priya, hannah, ben], array[]::uuid[]),
+    (priya, 'story', 'Why the Gouger St dumpling place has a second door', E'Ask the old man who owns it and he''ll tell you: in the 80s the council made him brick up the back door, so every night one of the regulars would come in the front, eat, and leave through the kitchen anyway.\n\nWhen they rebuilt, he put in a second front door. It opens onto the same street, three metres along. It''s for "the ones who don''t like to leave the way they came in". Nobody has ever explained this to me further.', -34.92905, 138.59745, 44, array[lucas, ben], array[]::uuid[]),
+    (maya, 'story', 'The possum who rings the doorbell', 'Every night around 11 the doorbell goes. Nobody there. We put a camera up: it''s a brushtail, standing on the letterbox, leaning on the button with its whole face. We have named him Gerald. Gerald wants apple.', -34.92231, 138.61912, 12, array[hannah, priya, tom], array[]::uuid[]);
+
+  for p in select * from demo_lore loop
+    with place as (
+      insert into public.places (latitude, longitude, created_at) values (p.lat, p.lng, now() - make_interval(hours => p.hours)) returning id
+    )
+    insert into public.posts (place_id, title, description, latitude, longitude, flair, author_id, author_name, created_at)
+    select place.id, p.title, p.body, p.lat, p.lng, p.flair, p.who, (select display_name from public.profiles where id = p.who), now() - make_interval(hours => p.hours)
+    from place
+    returning id into post;
+    insert into public.post_votes (post_id, user_id, value, created_at)
+    select post, u, 1, now() - make_interval(hours => p.hours) + interval '1 hour' from unnest(p.up) u
+    union all
+    select post, u, -1, now() - make_interval(hours => p.hours) + interval '2 hours' from unnest(p.down) u;
+  end loop;
+  -- Voted in when the votes came in, not just now.
+  update public.posts set legend_at = created_at + interval '1 hour' where legend_at is not null and author_id = any (demo);
+  update public.notifications set created_at = now() - interval '20 hours' where kind = 'legend' and user_id = any (demo);
+
+  -- A few votes on the other pins too.
+  insert into public.post_votes (post_id, user_id, value)
+  select id, v.who, 1 from public.posts, (values (maya), (tom), (priya), (lucas)) as v (who)
+  where title in ('Street clean-up, Saturday 9am', 'Too many zucchinis, come grab some') and author_id = any (demo) and author_id <> v.who
+  on conflict do nothing;
+
+  -- Stickers where the things were seen: footprints on the path, a ghost on the gaol.
+  insert into public.stickers (user_id, emoji, latitude, longitude, created_at, expires_at) values
+    (tom, '👣', -34.91712, 138.59840, now() - interval '2 hours', now() + interval '22 hours'),
+    (ben, '👣', -34.91690, 138.59810, now() - interval '1 hour', now() + interval '23 hours'),
+    (lucas, '👻', -34.91740, 138.58680, now() - interval '3 hours', now() + interval '21 hours'),
+    (hannah, '🛸', -34.92940, 138.61760, now() - interval '5 hours', now() + interval '19 hours'),
+    (priya, '🎉', -34.92890, 138.59770, now() - interval '30 minutes', now() + interval '23 hours');
+
+  -- Streaks and sparks.
+  update public.profiles set streak = v.streak, streak_day = (now() at time zone 'Australia/Adelaide')::date - 1, sparks = v.sparks, sparks_earned = v.earned
+  from (values (maya, 12, 23, 61), (tom, 30, 40, 160), (priya, 6, 11, 34), (lucas, 3, 8, 20), (hannah, 45, 52, 190), (ben, 2, 5, 12)) as v (who, streak, sparks, earned)
+  where id = v.who;
 end;
 $$;
