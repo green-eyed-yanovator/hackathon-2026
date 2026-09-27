@@ -37,7 +37,17 @@ function save(settings) {
   writeFileSync('.env.local', [...kept, ...set.map(([key, value]) => `${key}=${value}`)].join('\n') + '\n')
 }
 
-const offline = process.argv.includes('--offline') || !works('docker info')
+// Docker that runs Linux containers, which is what Supabase needs (Docker on
+// Windows can be switched to Windows containers, which won't do).
+function dockerForSupabase() {
+  try {
+    return run('docker info --format "{{.OSType}}"', true).trim() === 'linux'
+  } catch {
+    return false
+  }
+}
+
+const offline = process.argv.includes('--offline') || !dockerForSupabase()
 let where
 
 if (!offline) {

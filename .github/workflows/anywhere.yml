@@ -1,0 +1,49 @@
+# Can someone just clone it and run it? A clean Windows, Linux and macOS
+# machine each: the README's three commands, then .github/smoke.mjs using the
+# app in Chrome the way a person would. No Docker involved: on Windows setup
+# picks the offline backend by itself (the runner's Docker runs Windows
+# containers, which Supabase can't use); the others ask for it outright.
+
+name: Runs anywhere
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  run:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run setup
+        if: runner.os == 'Windows'
+      - run: npm run setup -- --offline
+        if: runner.os != 'Windows'
+      - name: npm run dev, and use it
+        shell: bash
+        run: |
+          npm run dev > dev.log 2>&1 &
+          node .github/smoke.mjs; status=$?
+          echo '--- dev server ---'
+          cat dev.log
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-${{ matrix.os }}
+          path: |
+            smoke.png
+            dev.log
+          if-no-files-found: ignore
