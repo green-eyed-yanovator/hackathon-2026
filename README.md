@@ -101,6 +101,13 @@ the migrations and loads the demo the first time, and writes `.env.local`.
 Run it again after pulling: it applies any new migrations and never wipes
 anything. The first run downloads the Supabase images, a few minutes.
 
+No Docker? `npm run setup` notices and uses the team's shared Supabase
+instead: the one on Nick's Mac, reached over Tailscale (`supabase/shared.env`).
+Join the team's tailnet first; it works while that Mac is awake and running
+Supabase, and everyone's data is in it together. `npm run setup -- --shared`
+uses it even with Docker. (On that Mac, the API is opened to the tailnet with
+`tailscale serve --bg --tcp 54321 tcp://127.0.0.1:54321`.)
+
 To start over from nothing: `npx supabase db reset` (wipes local data). To load
 the demo into a database you want to keep:
 

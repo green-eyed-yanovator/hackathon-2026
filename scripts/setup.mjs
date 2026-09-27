@@ -7,8 +7,9 @@
 // migrations and loads the demo neighbourhood; later runs, after a pull, apply
 // whatever migrations are new. Safe to run again: it never wipes anything.
 //
-// Without Docker, or with `npm run setup -- --hosted`: uses the team's shared
-// Supabase project instead (supabase/hosted.env), the same for everyone.
+// Without Docker, or with `npm run setup -- --shared`: uses the team's shared
+// Supabase instead (supabase/shared.env), the one on Nick's Mac, reached over
+// Tailscale. Everyone's data is in it together, and it's up while that Mac is.
 //
 // Either way, .env.local gets the address and key the app needs.
 
@@ -38,15 +39,10 @@ const settingsIn = (file) =>
 
 let settings
 let where
-if (process.argv.includes('--hosted') || !has('docker info')) {
-  if (!existsSync('supabase/hosted.env')) {
-    console.error('There’s no shared Supabase project set up yet (supabase/hosted.env).')
-    console.error('Start Docker (Desktop, OrbStack or Colima) and run npm run setup to use a local one.')
-    process.exit(1)
-  }
-  if (!process.argv.includes('--hosted')) console.log('No Docker running: using the shared Supabase project instead.')
-  settings = settingsIn('supabase/hosted.env')
-  where = `the shared project at ${settings.VITE_SUPABASE_URL} (everyone's data is in it together)`
+if (process.argv.includes('--shared') || !has('docker info')) {
+  if (!process.argv.includes('--shared')) console.log('No Docker running: using the team’s shared Supabase instead.')
+  settings = settingsIn('supabase/shared.env')
+  where = `the shared Supabase at ${settings.VITE_SUPABASE_URL}. It's reached over Tailscale: this computer needs to be on the team's tailnet, and that Mac awake`
 } else {
   const supabase = has('supabase --version') ? 'supabase' : 'npx --yes supabase'
   run(`${supabase} start`)
