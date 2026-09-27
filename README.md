@@ -14,20 +14,36 @@ pin on what's going on:
 What you can do:
 
 - **Pins are threads.** Reply (mention people with `@`, heart a good reply), say you're in, save,
-  or share. Give a pin a time and it counts down in the feed, shows under
+  or share. Answer a reply and it nests under it, Reddit-style: whoever you
+  answered hears about it, and the line down a thread's side folds it away. A
+  comment taken back after others answered it stays as "[deleted]", so the
+  thread under it isn't lost. Give a pin a time and it counts down in the feed, shows under
   Soon, ripples on the map while it's on, and goes to your calendar in a tap;
   anything you're in on gets you a word an hour before.
-- **Lore: what a place remembers.** A kind of pin of its own, with the year
-  it happened: your nan's corner deli in 1964, the band's first gig in 1994.
-  The clock button (or `Y`) takes the map back in time: slide the years and
-  it shows only what people remember from up to then, yellowing the further
-  back it goes. Lore never goes quiet the way news does.
-- **Areas, like a game's districts.** A pin can be about a stretch of the
-  city, not just a spot: a circle of so many metres, or a few blocks drawn
-  corner by corner on the map. Each style marks them its own way (a territory
-  patch on Palm Coast, hatched ink on Frontier, a glowing edge on Phosphor), big
-  ones carry their name across them, a tap inside one opens its pin, and walking
-  into one brings its name up in the corner.
+- **City blocks, and what the neighbours make of them.** Tap the map between
+  streets and that block opens: the app finds it from the map's own streets,
+  and it's the same block for everyone from then on. People give it names and
+  write on it (a rumour, a joke, what used to be here), and vote each line up
+  or down, Reddit-style: the best-liked name becomes what the block is called,
+  written across it on the map, and the best-liked lines float to the top.
+  Every pin ever dropped there stays in its history. Nobody writes "lore";
+  it builds up out of what people say and do.
+- **Pins take over blocks.** Something that happens across a few blocks (a
+  street party, a clean-up, a blackout) is pinned to them: tap the blocks when
+  making the pin. They're marked out the way each style marks ground.
+- **Turf.** Four crews (Magpies, Galahs, Possums, Owls) fight over the blocks,
+  like the gang territories on a 2004 console map. Stand in a block and tag it:
+  a twelve-second spraying game where you cover the other crews' tags on a
+  wall, and how well you do is what the tag is worth. The crew with the most
+  tags holds the block and colours it; tags fade by half every three days, so
+  ground has to be kept. A block being hit flashes red, and the people who
+  tagged it hear about it. The flag button shows the standings and the fights
+  on right now.
+- **Back in time.** The clock button (or `Y`) shows the map as it was at any
+  moment: the pins up then, what the blocks were called and who held them. Pick
+  how far back the timeline reaches (an hour, a day, a week, a month, a year)
+  and it steps a minute at a time over the last hour, up to a day at a time over
+  the year. Play runs it forward: pins drop in, names appear, turf spreads.
 - **Get there.** A walking route along the streets, drawn on the map (a GPS
   line in the game styles) with the minutes it takes and
   the street most of it is on. It shortens as you walk, finds a new way if
@@ -79,11 +95,23 @@ sheet has one-tap buttons for them (never in a production build).
 
 Emails (sign-in codes, password resets) land in Mailpit at http://127.0.0.1:54324.
 
-To try it on a phone on the same Wi-Fi, run `npm run dev -- --host` and set
-`VITE_SUPABASE_URL` to the laptop's address (`http://192.168…:54321`) so the
-phone can reach the database too. Everything works over plain `http` except
-where you are (the locate button, Get there, friends nearby): browsers only
-say that to secure pages, so for those use a deployed build or an HTTPS tunnel.
+To try it on a phone over Tailscale, connect both devices to the same tailnet.
+With the dev server on port 5173, run:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:5173
+```
+
+On the first run, follow Tailscale's link to enable HTTPS. Open the HTTPS URL
+printed by the command on your phone, with Tailscale connected. Keep the Mac
+awake and the dev server running. The current Mac's URL is
+`https://nicks-macbook-pro.tail1185f0.ts.net/`; another Mac needs its hostname
+added to `server.allowedHosts` in `vite.config.ts`.
+
+Keep `VITE_SUPABASE_URL` pointing to local Supabase. The dev server passes
+auth, database, storage and realtime requests through the same HTTPS address,
+so location features can work too. To stop sharing this app, run
+`tailscale serve --https=443 off`.
 
 Shared locations only count while they're fresh (a real phone refreshes its
 own), so the demo neighbours fade after half an hour and leave the map after
@@ -127,7 +155,13 @@ password reset) into Authentication → Email Templates, so emails carry a
    purple GPS line. (It starts from where you really are;
    away from Adelaide, set a location near the city centre in the browser's
    dev tools, under Sensors.)
-6. On a phone (or the browser's phone view): the tab bar, sheets you drag up
+6. As Maya, switch to Palm Coast and zoom out a little: the crews' turf in
+   their colours, Busker Row on Rundle Mall flashing because the Galahs are
+   hitting it. Tap Dumpling Alley: its names and what people say about it,
+   with votes, and its pins. Press Tag it (Touch up, since it's Maya's crew's)
+   to play the spraying game; it needs you to be there, so set the location in
+   dev tools to the block first.
+7. On a phone (or the browser's phone view): the tab bar, sheets you drag up
    and down, pinch to zoom, and the locate button that follows you around.
 
 ## Map styles
@@ -187,6 +221,9 @@ Four source files, no UI or map libraries:
   tiles: the roads between the two ends are joined into a graph (crossings
   found by intersecting segments, since the tiles drop vertices on straight
   lines; bridges and tunnels meet only what joins their ends) and A* walks it.
+  City blocks come from the same graph, of streets this time: dead ends
+  pruned, a block is a face of it, traced by walking round from the nearest
+  street turning as far left as the streets allow at every corner.
 - `src/data.ts` is the store. The public picture (pins, replies, people) loads
   once and stays live over Supabase realtime; the signed-in user's inbox,
   friends and saved pins load on sign-in. Every write is a plain function
