@@ -1,0 +1,1730 @@
+// Everything the app knows, in one place.
+//
+// A neighbourhood is small, so the whole public picture (pins, replies,
+// people) is loaded once and kept live over realtime. The signed-in user's
+// private rows (inbox, friends, saved pins, blocks) load on sign-in. Actions
+// below write to Supabase and then to the store; changed() re-renders the UI.
+// At the bottom: where I am, sharing it with friends, telling them I'm around, and
+// the few things worth a word that are worked out here (a friend a street away,
+// something I'm in on starting soon).
+//
+// Privacy rule for realtime: every client hears every DELETE with the row's
+// key, whatever the row security says, so rows keyed by a person (locations,
+// presence) are only ever updated, never deleted.
+
+import { createClient, type Session } from '@supabase/supabase-js'
+import { useSyncExternalStore } from 'react'
+
+// Supabase is where .env.local says. When that's this computer (127.0.0.1) but
+// the page was opened from another device (a phone over Tailscale), the dev
+// server passes Supabase through on the page's own address: see vite.config.ts.
+const configured: string = import.meta.env.VITE_SUPABASE_URL
+const onThisComputer = (host: string) => ['localhost', '127.0.0.1', '[::1]'].includes(host)
+export const supabaseUrl: string =
+  configured && onThisComputer(new URL(configured).hostname) && !onThisComputer(window.location.hostname) ? window.location.origin : configured
+export const supabaseKey: string = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
+
+// Without these two the app can't reach its database. Say so on the page, rather
+// than leaving the loading mark breathing forever.
+if (!supabaseUrl || !supabaseKey) {
+  document.getElementById('root')!.innerHTML =
+    '<p style="max-width: 520px; margin: 20vh auto; padding: 0 24px; font: 15px/1.5 system-ui, sans-serif; color: #888">' +
+    'AroundHere needs <b>VITE_SUPABASE_URL</b> and <b>VITE_SUPABASE_PUBLISHABLE_KEY</b> in <code>.env.local</code> ' +
+    '(copy <code>.env.example</code>, fill the key in from <code>supabase status</code>), then a restart of the dev server.</p>'
+  throw new Error('VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY is missing')
+}
+
+export const supabase = createClient(supabaseUrl, supabaseKey)
+
+// Photos only ever come from our own storage: whatever host a stored address names,
+// the picture is fetched from ours, by its path in the bucket (so a database moved
+// to another address still finds them). The columns can be written directly, and
+// a picture on someone's own server would tell them who looked at it, and when.
+const ourStorage = new URL('storage/v1/object/public/', supabaseUrl.replace(/\/?$/, '/')).href
+
+function fromOurStorage(url: string | null, bucket: string) {
+  const at = url ? url.indexOf(`/storage/v1/object/public/${bucket}/`) : -1
+  return at < 0 ? null : ourStorage + url!.slice(at + '/storage/v1/object/public/'.length)
+}
+const ownPhotoOnly = (p: Profile): Profile => ({ ...p, avatar_url: fromOurStorage(p.avatar_url, 'avatars') })
+const ownMedia = (m: Media) => {
+  const url = fromOurStorage(m.url, 'post-media')
+  return url ? { ...m, url } : null
+}
+
+export type Flair = 'general' | 'food' | 'music' | 'sports' | 'event' | 'lost' | 'sighting' | 'story' | 'snap'
+
+export type Post = {
+  id: string
+  title: string
+  description: string
+  latitude: number
+  longitude: number
+  created_at: string
+  author_id: string | null
+  author_name: string | null
+  edited_at: string | null
+  resolved_at: string | null
+  place_id: string | null // posts within ~30 m share a place and one marker
+  flair: Flair
+  starts_at: string | null // when it happens, for events and meetups
+  blocks: string[] | null // the city blocks it covers, if more than a spot
+  expires_at: string | null // a snap: gone after this, unless it's a legend
+  legend_at: string | null // voted into the neighbourhood's lore: here for good
+  boosted_until: string | null // someone spent sparks to make it stand out
+}
+
+export type Reply = {
+  id: string
+  post_id: string
+  parent_id: string | null // the reply it answers, if it answers one
+  content: string
+  created_at: string
+  author_id: string | null
+  author_name: string | null
+  deleted_at: string | null // taken back while others had answered it: kept, empty, for the thread under it
+}
+
+export type Profile = {
+  id: string
+  display_name: string
+  neighbourhood: string | null
+  bio: string | null
+  avatar_url: string | null
+  created_at: string
+  streak: number // days in a row they've opened the app
+  streak_day: string | null
+  sparks: number // to spend on stickers and boosts
+  sparks_earned: number // ever
+}
+
+// City blocks: the ground the streets close round, kept once someone does
+// something with one. What's said on them, and the votes.
+export type CityBlock = { id: string; ring: [number, number][]; latitude: number; longitude: number; created_at: string }
+export type Word = { id: string; block_id: string; parent_id: string | null; author_id: string | null; body: string; is_name: boolean; created_at: string; deleted_at: string | null }
+export type Vote = { word_id: string; user_id: string; value: 1 | -1; created_at: string }
+export type PostVote = { post_id: string; user_id: string; value: 1 | -1; created_at: string }
+export type Sticker = { id: string; user_id: string; emoji: string; latitude: number; longitude: number; created_at: string; expires_at: string }
+
+// Enough more up than down and a pin is a legend: it stays on the map for good.
+export const LEGEND_VOTES = 3
+export const STICKERS = ['👣', '👻', '🛸', '🐻', '🦝', '👀', '💀', '🔥', '🎉', '🍕', '🎸', '🌈']
+export const STICKER_SPARKS = 3
+export const BOOST_SPARKS = 10
+
+export type Media = { id: string; post_id: string; reply_id: string | null; author_id: string | null; media_type: 'image' | 'video'; url: string; created_at: string }
+export type Interest = { user_id: string; post_id: string; created_at: string }
+export type Like = { user_id: string; reply_id: string; created_at: string }
+export type Saved = { post_id: string; created_at: string }
+export type Revision = { id: string; title: string; description: string; replaced_at: string }
+
+export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention' | 'comment_reply' | 'word_reply' | 'legend'
+
+export type Notification = {
+  id: string
+  kind: NotificationKind
+  actor_id: string | null
+  actor_name: string | null
+  post_id: string | null
+  post_title: string | null // for an answer on a block, the block's name
+  preview: string | null
+  block_id: string | null
+  created_at: string
+  read_at: string | null
+}
+
+export type Message = { id: string; sender_id: string; recipient_id: string; body: string; created_at: string; read_at: string | null }
+export type Friendship = { id: string; requester: string; addressee: string; created_at: string; accepted_at: string | null }
+export type Location = { user_id: string; latitude: number; longitude: number; accuracy: number | null; heading: number | null; updated_at: string; shared: boolean }
+export type Here = { latitude: number; longitude: number; accuracy: number; heading: number | null }
+export type Presence = { user_id: string; device: string; here: boolean; seen_at: string }
+
+export const flairs: Record<Flair, { label: string; icon: 'chat' | 'burger' | 'note' | 'ball' | 'star' | 'alert' | 'eye' | 'book' | 'camera'; color: string }> = {
+  general: { label: 'General', icon: 'chat', color: '#4f7cff' },
+  food: { label: 'Food', icon: 'burger', color: '#f07b2d' },
+  music: { label: 'Music', icon: 'note', color: '#a259ff' },
+  sports: { label: 'Sports', icon: 'ball', color: '#16a974' },
+  event: { label: 'Event', icon: 'star', color: '#e0a100' },
+  lost: { label: 'Lost & found', icon: 'alert', color: '#ef4444' },
+  sighting: { label: 'Sighting', icon: 'eye', color: '#0f9488' }, // a bear on the bike path, something big in the parklands at 3am
+  story: { label: 'Story', icon: 'book', color: '#8b5a2b' }, // told at length, the way the good ones on Reddit are
+  snap: { label: 'Snap', icon: 'camera', color: '#e8458b' }, // a photo that's gone in a day
+}
+
+export const S = {
+  ready: false,
+  offline: false, // the server couldn't be reached; loading retries on its own
+  outdated: false, // the server answered, but its tables are older than this app: migrations to apply
+  authKnown: false, // true once the stored session has been read
+  session: null as Session | null,
+  userId: null as string | null,
+
+  posts: [] as Post[], // newest first
+  replies: [] as Reply[], // oldest first
+  media: [] as Media[],
+  interests: [] as Interest[],
+  likes: [] as Like[],
+  profiles: new Map<string, Profile>(),
+  blocks: new Map<string, CityBlock>(),
+  words: [] as Word[], // oldest first
+  votes: [] as Vote[],
+  postVotes: [] as PostVote[],
+  stickers: [] as Sticker[], // up for a day
+
+  saved: [] as Saved[],
+  notifications: [] as Notification[], // oldest first
+  hasOlderNotifications: false,
+  messages: [] as Message[], // oldest first
+  mutedKinds: [] as string[],
+  friendships: [] as Friendship[],
+  blocked: new Set<string>(), // people I've blocked: their pins, replies and messages stay out of sight
+  locations: new Map<string, Location>(),
+  seen: new Map<string, Map<string, Presence>>(), // friends' devices and when each was last here
+
+  here: null as Here | null,
+  sharing: false,
+  sharingUntil: null as number | null, // sharing for a while stops itself at this time
+}
+
+let version = 0
+const listeners = new Set<() => void>()
+
+export function changed() {
+  version++
+  for (const listener of listeners) listener()
+}
+
+export function useStore() {
+  useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    () => version,
+  )
+  return S
+}
+
+// Counts every view needs, worked out once per change instead of once per row.
+type Stats = {
+  replies: Map<string, number>
+  interested: Map<string, number>
+  active: Map<string, number> // last reply, or when it was posted
+  unread: Set<string> // pins with unread notifications
+  joined: Set<string> // pins I posted, saved, replied to or said I'm in
+  photo: Map<string, Media> // each pin's first photo
+  likes: Map<string, number> // hearts per reply
+  liked: Set<string> // replies I've hearted
+  score: Map<string, number> // up minus down, per pin
+  myVote: Map<string, 1 | -1> // my vote on each pin I've voted on
+}
+
+let statsVersion = -1
+let statsCache: Stats
+
+export function stats() {
+  if (statsVersion === version) return statsCache
+  const st: Stats = { replies: new Map(), interested: new Map(), active: new Map(), unread: new Set(), joined: new Set(), photo: new Map(), likes: new Map(), liked: new Set(), score: new Map(), myVote: new Map() }
+  for (const v of S.postVotes) {
+    if (S.blocked.has(v.user_id)) continue
+    st.score.set(v.post_id, (st.score.get(v.post_id) ?? 0) + v.value)
+    if (v.user_id === S.userId) st.myVote.set(v.post_id, v.value)
+  }
+  for (const like of S.likes) {
+    if (S.blocked.has(like.user_id)) continue
+    st.likes.set(like.reply_id, (st.likes.get(like.reply_id) ?? 0) + 1)
+    if (like.user_id === S.userId) st.liked.add(like.reply_id)
+  }
+  for (const m of S.media) if (m.media_type === 'image' && !st.photo.has(m.post_id)) st.photo.set(m.post_id, m)
+  for (const p of S.posts) {
+    st.active.set(p.id, time(p.created_at))
+    if (p.author_id && p.author_id === S.userId) st.joined.add(p.id)
+  }
+  for (const r of S.replies) {
+    if (r.deleted_at) continue
+    st.replies.set(r.post_id, (st.replies.get(r.post_id) ?? 0) + 1)
+    st.active.set(r.post_id, Math.max(st.active.get(r.post_id) ?? 0, time(r.created_at)))
+    if (r.author_id && r.author_id === S.userId) st.joined.add(r.post_id)
+  }
+  for (const i of S.interests) {
+    st.interested.set(i.post_id, (st.interested.get(i.post_id) ?? 0) + 1)
+    if (i.user_id === S.userId) st.joined.add(i.post_id)
+  }
+  for (const saved of S.saved) st.joined.add(saved.post_id)
+  for (const n of S.notifications) if (!n.read_at && n.post_id) st.unread.add(n.post_id)
+  statsCache = st
+  statsVersion = version
+  return st
+}
+
+// Where something went wrong, in words for a toast. Set by actions, taken (and
+// cleared) by the UI, so an old failure is never reported for a new one.
+let lastError = ''
+function fail(what: string, error: { message: string } | null) {
+  console.error(what, error)
+  lastError = error?.message ?? what
+  return false
+}
+
+export function takeError() {
+  const error = lastError
+  lastError = ''
+  return error
+}
+
+//
+// Small helpers the UI uses everywhere.
+//
+
+export const time = (iso: string) => new Date(iso).getTime()
+
+export function nameOf(id: string | null, fallback: string | null = null) {
+  if (!id) return fallback ?? 'Someone'
+  return S.profiles.get(id)?.display_name ?? fallback ?? 'Neighbour'
+}
+
+export function friendshipWith(id: string) {
+  return S.friendships.find((f) => (f.requester === id && f.addressee === S.userId) || (f.addressee === id && f.requester === S.userId)) ?? null
+}
+
+export function friendIds() {
+  const ids: string[] = []
+  for (const f of S.friendships) {
+    if (!f.accepted_at) continue
+    ids.push(f.requester === S.userId ? f.addressee : f.requester)
+  }
+  return ids
+}
+
+// What's waiting for me, not counting anyone I've blocked (their old messages
+// and notifications stay out of sight, and out of the badges).
+export function unreadMessages() {
+  return S.messages.filter((m) => m.recipient_id === S.userId && !m.read_at && !S.blocked.has(m.sender_id))
+}
+
+export function visibleNotifications() {
+  return S.notifications.filter((n) => !(n.actor_id && S.blocked.has(n.actor_id)))
+}
+
+// How far the server's clock is ahead of ours, learnt from our own check-ins.
+let clockSkew = 0
+
+function rememberPresence(p: Presence) {
+  let devices = S.seen.get(p.user_id)
+  if (!devices) S.seen.set(p.user_id, (devices = new Map()))
+  devices.set(p.device, p)
+}
+
+// Online dots come from the presence table, which only friends can read.
+export function isOnline(id: string) {
+  if (id === S.userId) return document.visibilityState === 'visible'
+  if (!friendIds().includes(id)) return false
+  // Devices check in every minute; times are the server's, so compare on its clock.
+  const now = Date.now() + clockSkew
+  for (const p of S.seen.get(id)?.values() ?? []) if (p.here && now - time(p.seen_at) < 150000) return true
+  return false
+}
+
+// A friend's shared position, unless it's too old to mean anything.
+export function locationOf(id: string) {
+  const loc = S.locations.get(id)
+  return loc && Date.now() - time(loc.updated_at) < 12 * 3600000 ? loc : null
+}
+
+// Posts without a place (older ones) each count as their own place.
+export const placeKey = (post: Post) => post.place_id ?? post.id
+
+//
+// Loading.
+//
+
+function upsert<T>(list: T[], row: T, same: (a: T, b: T) => boolean, atStart = false) {
+  const index = list.findIndex((existing) => same(existing, row))
+  if (index >= 0) list[index] = row
+  else if (atStart) list.unshift(row)
+  else list.push(row)
+}
+
+const byId = (a: { id: string }, b: { id: string }) => a.id === b.id
+const sameInterest = (a: Interest, b: Interest) => a.user_id === b.user_id && a.post_id === b.post_id
+const sameLike = (a: Like, b: Like) => a.user_id === b.user_id && a.reply_id === b.reply_id
+const sameVote = (a: Vote, b: Vote) => a.user_id === b.user_id && a.word_id === b.word_id
+const samePostVote = (a: PostVote, b: PostVote) => a.user_id === b.user_id && a.post_id === b.post_id
+
+let retrying = false
+
+// No such table or column: the database hasn't had this version's migrations. The
+// public and the private loads each say whether their tables were behind, last time.
+const behind = { public: false, private: false }
+function markBehind(part: 'public' | 'private', error: { code?: string } | null) {
+  behind[part] = ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(error?.code ?? '')
+  S.outdated = behind.public || behind.private
+} // a reload is already waiting
+
+async function loadPublic() {
+  const [posts, replies, media, interests, profiles, likes, blocks, words, votes, postVotes, stickers] = await Promise.all([
+    supabase.from('posts').select('*').order('created_at', { ascending: false }),
+    supabase.from('replies').select('*').order('created_at', { ascending: true }),
+    supabase.from('post_media').select('*').order('created_at', { ascending: true }),
+    supabase.from('post_interest').select('user_id, post_id, created_at'),
+    supabase.from('profiles').select('*'),
+    supabase.from('reply_likes').select('user_id, reply_id, created_at'),
+    supabase.from('city_blocks').select('id, ring, latitude, longitude, created_at'),
+    supabase.from('block_words').select('*').order('created_at', { ascending: true }),
+    supabase.from('word_votes').select('*'),
+    supabase.from('post_votes').select('*'),
+    supabase.from('stickers').select('*'),
+  ])
+
+  // All or nothing: a half-loaded map (pins without their replies) is worse than the one we had.
+  const failed = [posts, replies, media, interests, profiles, likes, blocks, words, votes, postVotes, stickers].find((r) => r.error)
+  if (failed) {
+    fail('Loading pins', failed.error)
+    S.offline = true
+    markBehind('public', failed.error)
+    changed()
+    if (!retrying) {
+      retrying = true
+      setTimeout(() => {
+        retrying = false
+        loadPublic()
+      }, 5000)
+    }
+    return
+  }
+  S.offline = false
+  markBehind('public', null)
+  S.posts = posts.data ?? []
+  S.replies = replies.data ?? []
+  S.media = (media.data ?? []).map(ownMedia).filter((m) => m !== null)
+  S.interests = interests.data ?? []
+  S.likes = likes.data ?? []
+  S.profiles = new Map((profiles.data ?? []).map((p: Profile) => [p.id, ownPhotoOnly(p)]))
+  S.blocks = new Map((blocks.data ?? []).map((b: CityBlock) => [b.id, b]))
+  S.words = words.data ?? []
+  S.votes = votes.data ?? []
+  S.postVotes = postVotes.data ?? []
+  S.stickers = stickers.data ?? []
+  S.ready = true
+  changed()
+  remindSoon()
+}
+
+function subscribePublic() {
+  supabase
+    .channel('public-live')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, ({ new: row }) => {
+      const post = row as Post
+      const fresh = !S.posts.some((p) => p.id === post.id)
+      upsert(S.posts, post, byId, true)
+      changed()
+      // Someone else pinned something close to me: worth a word. Worked out here,
+      // so my position never leaves this device. (Friends hear via notifications.)
+      const mine = post.author_id === S.userId
+      const known = post.author_id && (S.blocked.has(post.author_id) || friendIds().includes(post.author_id))
+      if (fresh && !mine && !known && !muted('nearby_pin') && S.here && distance(S.here.latitude, S.here.longitude, post.latitude, post.longitude) < 1500) {
+        onIncoming('New nearby', post.title, `pin/${post.id}`)
+      }
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, ({ new: row }) => {
+      upsert(S.posts, row as Post, byId, true)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, ({ old }) => {
+      forgetPost((old as Post).id)
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'replies' }, ({ new: row }) => {
+      upsert(S.replies, row as Reply, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'replies' }, ({ new: row }) => {
+      upsert(S.replies, row as Reply, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'replies' }, ({ old }) => {
+      S.replies = S.replies.filter((r) => r.id !== (old as Reply).id)
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_media' }, ({ new: row }) => {
+      const media = ownMedia(row as Media)
+      if (!media) return
+      upsert(S.media, media, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'post_interest' }, ({ new: row }) => {
+      upsert(S.interests, row as Interest, sameInterest)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'post_interest' }, ({ old }) => {
+      S.interests = S.interests.filter((i) => !sameInterest(i, old as Interest))
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reply_likes' }, ({ new: row }) => {
+      upsert(S.likes, row as Like, sameLike)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reply_likes' }, ({ old }) => {
+      S.likes = S.likes.filter((l) => !sameLike(l, old as Like))
+      changed()
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
+      if (payload.eventType === 'DELETE') S.profiles.delete((payload.old as Profile).id)
+      else S.profiles.set((payload.new as Profile).id, ownPhotoOnly(payload.new as Profile))
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'city_blocks' }, ({ new: row }) => {
+      const { id, ring, latitude, longitude, created_at } = row as CityBlock
+      S.blocks.set(id, { id, ring, latitude, longitude, created_at })
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'block_words' }, ({ new: row }) => {
+      upsert(S.words, row as Word, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'block_words' }, ({ new: row }) => {
+      upsert(S.words, row as Word, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'block_words' }, ({ old }) => {
+      S.words = S.words.filter((w) => w.id !== (old as Word).id)
+      changed()
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'word_votes' }, (payload) => {
+      if (payload.eventType === 'DELETE') S.votes = S.votes.filter((v) => !sameVote(v, payload.old as Vote))
+      else upsert(S.votes, payload.new as Vote, sameVote)
+      changed()
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'post_votes' }, (payload) => {
+      if (payload.eventType === 'DELETE') S.postVotes = S.postVotes.filter((v) => !samePostVote(v, payload.old as PostVote))
+      else upsert(S.postVotes, payload.new as PostVote, samePostVote)
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'stickers' }, ({ new: row }) => {
+      upsert(S.stickers, row as Sticker, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'stickers' }, ({ old }) => {
+      S.stickers = S.stickers.filter((x) => x.id !== (old as Sticker).id)
+      changed()
+    })
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'post_media' }, ({ old }) => {
+      S.media = S.media.filter((x) => x.id !== (old as Media).id)
+      changed()
+    })
+    .subscribe()
+}
+
+type Channel = ReturnType<typeof supabase.channel>
+let privateChannel: Channel | null = null
+
+// Something arrived for the signed-in user; the UI may raise a desktop alert.
+let onIncoming: (title: string, body: string, route: string) => void = () => {}
+export function setIncomingHandler(handler: typeof onIncoming) {
+  onIncoming = handler
+}
+
+async function loadPrivate(userId: string, attempt = 0) {
+  const results = await Promise.all([
+    supabase.from('saved_posts').select('post_id, created_at'),
+    supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(60),
+    supabase.from('messages').select('*').order('created_at', { ascending: false }).limit(1000),
+    supabase.from('notification_settings').select('muted_kinds').maybeSingle(),
+    supabase.from('friendships').select('*'),
+    supabase.from('locations').select('*'),
+    supabase.from('blocks').select('blocked'),
+    supabase.from('presence').select('user_id, device, here, seen_at'),
+  ] as const)
+  if (S.userId !== userId) return
+  // A network blip keeps what we had, rather than emptying the inbox and the
+  // friends off the map, and tries again: in 5 s, then 10, 20, up to a minute.
+  const failed = results.find((r) => r.error)
+  if (failed) {
+    markBehind('private', failed.error)
+    changed()
+    setTimeout(() => S.userId === userId && loadPrivate(userId, attempt + 1), Math.min(60000, 5000 * 2 ** attempt))
+    return
+  }
+  const [saved, notifications, messages, settings, friendships, locations, blocks, presence] = results
+  privateLoaded = true
+  markBehind('private', null)
+
+  S.saved = saved.data ?? []
+  // A reload keeps any older notifications already paged in.
+  const fresh: Notification[] = (notifications.data ?? []).reverse()
+  const oldestFresh = fresh[0] ? time(fresh[0].created_at) : Infinity
+  const keptOlder = S.notifications.filter((n) => time(n.created_at) < oldestFresh)
+  S.notifications = [...keptOlder, ...fresh]
+  if (!keptOlder.length) S.hasOlderNotifications = (notifications.data?.length ?? 0) === 60
+  S.messages = (messages.data ?? []).reverse()
+  S.mutedKinds = settings.data?.muted_kinds ?? []
+  S.friendships = friendships.data ?? []
+  S.blocked = new Set((blocks.data ?? []).map((b: { blocked: string }) => b.blocked))
+  S.seen = new Map()
+  for (const p of (presence.data ?? []) as Presence[]) rememberPresence(p)
+  checkIn()
+  S.locations = new Map((locations.data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
+  const remembered = recallSharing()
+  S.sharing = remembered.on
+  S.sharingUntil = remembered.until
+  changed()
+  remindSoon()
+  noticeNearby()
+  checkInDay()
+  // Sharing from last time on this device picks up again. A row without it may
+  // be another device of yours sharing right now, so it's left alone, unless
+  // it's this device's own hour that ran out while the app was closed.
+  if (S.sharing) watchHere().then(() => pushLocation(true))
+  else if (remembered.expired) {
+    rememberSharing(false)
+    // Only if the row is still the one this device left: another device may be sharing now.
+    const row = S.locations.get(userId)
+    if (row && remembered.until && time(row.updated_at) <= remembered.until + 60000) withdrawLocation()
+  }
+}
+
+function subscribePrivate(userId: string) {
+  privateChannel = supabase
+    .channel(`private-${userId}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, ({ new: row }) => {
+      const n = row as Notification
+      upsert(S.notifications, n, byId)
+      changed()
+      if (n.actor_id && S.blocked.has(n.actor_id)) return // (the server stops these too, since the block)
+      const text = describeNotification(n)
+      const route = n.post_id ? `pin/${n.post_id}` : n.block_id ? `block/${n.block_id}` : n.actor_id ? `user/${n.actor_id}` : 'inbox'
+      onIncoming(`${n.actor_name ?? (n.kind === 'legend' ? 'The neighbours' : 'Someone')} ${text}`, n.preview ?? '', route)
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, ({ new: row }) => {
+      // Read on another device.
+      upsert(S.notifications, row as Notification, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: row }) => {
+      const message = row as Message
+      upsert(S.messages, message, byId)
+      changed()
+      if (message.sender_id !== userId && !S.blocked.has(message.sender_id)) onIncoming(nameOf(message.sender_id), readable(message.body), `chat/${message.sender_id}`)
+    })
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, ({ new: row }) => {
+      upsert(S.messages, row as Message, byId)
+      changed()
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'friendships' }, (payload) => {
+      if (payload.eventType === 'DELETE') {
+        // Deletes reach everyone and carry only the id, so act only on our own.
+        const gone = S.friendships.find((f) => f.id === (payload.old as Friendship).id)
+        if (!gone) return
+        S.friendships = S.friendships.filter((f) => f !== gone)
+        // Their dot and their online light go with the friendship.
+        const other = gone.requester === userId ? gone.addressee : gone.requester
+        S.locations.delete(other)
+        S.seen.delete(other)
+      } else {
+        upsert(S.friendships, payload.new as Friendship, byId)
+        // A new friend may already be sharing, and around.
+        if ((payload.new as Friendship).accepted_at) refreshFriendsNow()
+      }
+      changed()
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'presence' }, (payload) => {
+      // Rows are only ever deleted with their account; otherwise it's an arrival or a departure.
+      if (payload.eventType === 'DELETE') S.seen.delete((payload.old as Presence).user_id)
+      else rememberPresence(payload.new as Presence)
+      changed()
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'locations' }, (payload) => {
+      // A row that stops being shared (or, for a deleted account, goes) leaves the map.
+      const row = (payload.eventType === 'DELETE' ? payload.old : payload.new) as Location
+      if (payload.eventType === 'DELETE' || !row.shared) S.locations.delete(row.user_id)
+      else S.locations.set(row.user_id, row)
+      changed()
+      noticeNearby()
+    })
+    .subscribe()
+
+}
+
+// crypto.randomUUID only exists on secure pages (https, localhost). A phone trying
+// the dev server over the LAN gets the same shape of id from getRandomValues.
+function uuid() {
+  if (crypto.randomUUID) return crypto.randomUUID()
+  const b = crypto.getRandomValues(new Uint8Array(16))
+  b[6] = (b[6] & 0x0f) | 0x40 // version 4
+  b[8] = (b[8] & 0x3f) | 0x80 // variant 1
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+
+// Saying "I'm here" to friends: a row per device, which the server stamps with
+// its own time. Refreshed every minute while the app is in view; leaving sets
+// here = false (never a delete: realtime would announce it to everyone).
+const device = (() => {
+  try {
+    let id = localStorage.getItem('aroundhere.device')
+    if (!id) localStorage.setItem('aroundhere.device', (id = uuid()))
+    return id
+  } catch {
+    return uuid()
+  }
+})()
+
+let leaving = false // signing out: no more check-ins from this session
+
+function checkIn() {
+  if (!S.userId || leaving || document.visibilityState !== 'visible') return
+  const sent = Date.now()
+  supabase
+    .from('presence')
+    .upsert({ device, here: true }, { onConflict: 'user_id,device' })
+    .select('seen_at')
+    .single()
+    .then(({ data, error }) => {
+      if (error) console.error('Presence', error)
+      else clockSkew = time(data.seen_at) - (sent + Date.now()) / 2
+    })
+}
+
+export async function checkOut() {
+  leaving = true
+  if (S.userId) await supabase.from('presence').update({ here: false }).eq('user_id', S.userId).eq('device', device)
+}
+
+function checkOutNow() {
+  if (!S.userId || !S.session) return
+  fetch(`${supabaseUrl}/rest/v1/presence?user_id=eq.${S.userId}&device=eq.${device}`, {
+    method: 'PATCH',
+    keepalive: true,
+    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ here: false }),
+  }).catch(() => {})
+}
+
+// After a friendship starts: their position and presence, which we couldn't read before.
+async function refreshFriendsNow() {
+  await refreshLocations()
+  const { data, error } = await supabase.from('presence').select('user_id, device, here, seen_at')
+  if (error) return
+  S.seen = new Map()
+  for (const p of (data ?? []) as Presence[]) rememberPresence(p)
+  changed()
+}
+
+async function refreshLocations() {
+  const { data, error } = await supabase.from('locations').select('*')
+  if (error) return // keep who we had; a blip shouldn't take friends off the map
+  S.locations = new Map((data ?? []).filter((l: Location) => l.shared).map((l: Location) => [l.user_id, l]))
+  changed()
+  noticeNearby()
+}
+
+function resetPrivate() {
+  if (privateChannel) supabase.removeChannel(privateChannel)
+  privateChannel = null
+  S.saved = []
+  S.notifications = []
+  S.messages = []
+  S.mutedKinds = []
+  S.friendships = []
+  S.blocked = new Set()
+  S.locations = new Map()
+  S.seen = new Map()
+  S.sharing = false
+  S.sharingUntil = null
+  privateLoaded = false
+  said = null
+  markBehind('private', null)
+}
+
+let started = false
+
+export function start() {
+  if (started) return
+  started = true
+  loadPublic()
+  subscribePublic()
+
+  // Sharing only while the app is in view. And coming back after a while
+  // (a phone in a pocket, a laptop asleep) reloads what realtime couldn't
+  // deliver while we were away.
+  let hiddenAt = 0
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now()
+      if (S.userId && S.sharing) withdrawNow()
+      checkOutNow()
+      return
+    }
+    if (hiddenAt && Date.now() - hiddenAt > 30000) {
+      loadPublic()
+      if (S.userId) loadPrivate(S.userId) // which also checks in, and puts my dot back if I share
+    } else {
+      checkIn()
+      if (S.userId && S.sharing) pushLocation(true)
+    }
+  })
+  window.addEventListener('pagehide', () => {
+    if (S.userId && S.sharing) withdrawNow()
+    checkOutNow()
+  })
+  // Back from a dropped connection: realtime missed whatever happened meanwhile.
+  window.addEventListener('online', () => {
+    loadPublic()
+    if (S.userId) loadPrivate(S.userId)
+  })
+  setInterval(checkIn, 60000)
+
+  // A share for a while ends by itself, even if nothing moves.
+  setInterval(endSharingIfTimeIsUp, 15000)
+  setInterval(remindSoon, 30000)
+
+  // Fires once with the stored session, then on every sign-in and sign-out.
+  supabase.auth.onAuthStateChange((_event, session) => {
+    const userId = session?.user.id ?? null
+    S.authKnown = true
+    S.session = session
+    if (userId !== S.userId) {
+      resetPrivate()
+      S.userId = userId
+      leaving = false
+      if (userId) {
+        // Outside the callback: supabase-js deadlocks if we query from inside it.
+        setTimeout(() => {
+          loadPrivate(userId)
+          subscribePrivate(userId)
+        }, 0)
+      }
+    }
+    changed()
+  })
+}
+
+//
+// Pins.
+//
+
+function forgetPost(postId: string) {
+  S.posts = S.posts.filter((p) => p.id !== postId)
+  S.replies = S.replies.filter((r) => r.post_id !== postId)
+  S.interests = S.interests.filter((i) => i.post_id !== postId)
+  S.saved = S.saved.filter((s) => s.post_id !== postId)
+  changed()
+}
+
+export type Draft = { title: string; description: string; flair: Flair; startsAt: string | null; latitude: number; longitude: number; blocks: string[]; files: File[] }
+
+export async function createPost(draft: Draft) {
+  // Posts within 30 m of an existing place join it and share its marker.
+  let place: { id: string; latitude: number; longitude: number } | null = null
+  let best = 30
+  for (const post of S.posts) {
+    if (!post.place_id) continue
+    const d = distance(post.latitude, post.longitude, draft.latitude, draft.longitude)
+    if (d <= best) {
+      best = d
+      place = { id: post.place_id, latitude: post.latitude, longitude: post.longitude }
+    }
+  }
+
+  if (!place) {
+    const { data, error } = await supabase.from('places').insert({ latitude: draft.latitude, longitude: draft.longitude }).select().single()
+    if (error) {
+      fail("Couldn't save the spot", error)
+      return null
+    }
+    place = data
+  }
+
+  const { data: post, error } = await supabase
+    .from('posts')
+    .insert({ place_id: place!.id, title: draft.title, description: draft.description, latitude: place!.latitude, longitude: place!.longitude, flair: draft.flair, starts_at: draft.startsAt, blocks: draft.blocks.length ? draft.blocks : null })
+    .select()
+    .single()
+  if (error) {
+    fail("Couldn't post the pin", error)
+    return null
+  }
+
+  upsert(S.posts, post as Post, byId, true)
+  changed()
+
+  await addMedia(post.id, draft.files)
+  return post as Post
+}
+
+// Photos and videos on a pin: its author's, or anyone's from the meetup, maybe
+// with a reply. They go into storage in the pin's folder, anyone else's in a
+// folder of their own inside it. True if every one made it.
+export async function addMedia(postId: string, files: File[], replyId: string | null = null) {
+  const mine = (S.posts.find((p) => p.id === postId)?.author_id ?? null) === S.userId
+  let all = true
+  for (const file of files) {
+    const extension = file.name.split('.').pop() ?? 'bin'
+    const path = mine ? `${postId}/${uuid()}.${extension}` : `${postId}/${S.userId}/${uuid()}.${extension}`
+    const upload = await supabase.storage.from('post-media').upload(path, file)
+    if (upload.error) {
+      all = fail(`Couldn't upload ${file.name}`, upload.error)
+      continue
+    }
+    const { data: row, error: rowError } = await supabase
+      .from('post_media')
+      .insert({ post_id: postId, reply_id: replyId, media_type: file.type.startsWith('video/') ? 'video' : 'image', url: supabase.storage.from('post-media').getPublicUrl(path).data.publicUrl })
+      .select()
+      .single()
+    if (rowError) all = fail("Couldn't attach it", rowError)
+    else {
+      const media = ownMedia(row as Media)
+      if (media) upsert(S.media, media, byId)
+    }
+    changed()
+  }
+  return all
+}
+
+export async function removeMedia(id: string) {
+  const { error } = await supabase.from('post_media').delete().eq('id', id)
+  if (error) return fail("Couldn't take it down", error)
+  S.media = S.media.filter((m) => m.id !== id)
+  changed()
+  return true
+}
+
+// A snap: a photo or a video from right where you are, gone in a day unless the
+// neighbours vote it into the lore.
+export function createSnap(file: File, caption: string, latitude: number, longitude: number) {
+  return createPost({ title: caption.trim() || 'Snap', description: '', flair: 'snap', startsAt: null, latitude, longitude, blocks: [], files: [file] })
+}
+
+export async function updatePost(id: string, patch: Partial<Pick<Post, 'title' | 'description' | 'resolved_at' | 'starts_at' | 'flair' | 'blocks'>>) {
+  const { data, error } = await supabase.from('posts').update(patch).eq('id', id).select().single()
+  if (error) return fail("Couldn't save the change", error)
+  upsert(S.posts, data as Post, byId, true)
+  changed()
+  return true
+}
+
+export async function deletePost(id: string) {
+  const { error } = await supabase.from('posts').delete().eq('id', id)
+  if (error) return fail("Couldn't delete the pin", error)
+  forgetPost(id)
+  return true
+}
+
+export async function loadRevisions(postId: string) {
+  const { data } = await supabase.from('post_revisions').select('id, title, description, replaced_at').eq('post_id', postId).order('replaced_at', { ascending: false })
+  return (data ?? []) as Revision[]
+}
+
+export async function reply(postId: string, content: string, parentId: string | null = null, files: File[] = []) {
+  const { data, error } = await supabase.from('replies').insert({ post_id: postId, content, parent_id: parentId }).select().single()
+  if (error) return fail("Couldn't send the reply", error)
+  upsert(S.replies, data as Reply, byId)
+  changed()
+  if (files.length) await addMedia(postId, files, (data as Reply).id)
+  return true
+}
+
+export async function report(postId: string, reason: 'spam' | 'unkind' | 'unsafe' | 'other') {
+  const { error } = await supabase.from('reports').insert({ post_id: postId, reason })
+  // Reporting the same pin twice is fine: the first report stands.
+  if (error && error.code !== '23505') return fail("Couldn't send the report", error)
+  return true
+}
+
+// One write at a time per toggle (and per friendship): a second tap while the first
+// is on its way is let go, so an insert and a delete never race to the database.
+const inFlight = new Map<string, Promise<boolean>>()
+
+function once(key: string, write: () => Promise<boolean>) {
+  const pending = inFlight.get(key)
+  if (pending) return pending // the second tap gets the first one's answer
+  const promise = write().finally(() => inFlight.delete(key))
+  inFlight.set(key, promise)
+  return promise
+}
+
+export const toggleLike = (replyId: string) => once(`like/${replyId}`, () => flipLike(replyId))
+export const toggleInterest = (postId: string) => once(`in/${postId}`, () => flipInterest(postId))
+export const toggleSave = (postId: string) => once(`save/${postId}`, () => flipSave(postId))
+
+async function flipLike(replyId: string) {
+  const userId = S.userId!
+  const mine = { user_id: userId, reply_id: replyId, created_at: new Date().toISOString() }
+  const was = S.likes.some((l) => sameLike(l, mine))
+  // Show it straight away; undo if the database says no.
+  S.likes = was ? S.likes.filter((l) => !sameLike(l, mine)) : [...S.likes, mine]
+  changed()
+  const { error } = was
+    ? await supabase.from('reply_likes').delete().eq('reply_id', replyId).eq('user_id', userId)
+    : await supabase.from('reply_likes').insert({ reply_id: replyId })
+  // Liked already (on another device, say): that's the state we wanted.
+  if (error && error.code !== '23505') {
+    S.likes = was ? [...S.likes, mine] : S.likes.filter((l) => !sameLike(l, mine))
+    changed()
+    return fail("Couldn't update", error)
+  }
+  return true
+}
+
+export async function deleteReply(id: string) {
+  const { error } = await supabase.from('replies').delete().eq('id', id)
+  if (error) return fail("Couldn't delete the reply", error)
+  S.replies = takeBack(S.replies, id, (r) => ({ ...r, content: '', author_id: null, author_name: null, deleted_at: new Date().toISOString() }))
+  changed()
+  return true
+}
+
+// A comment taken back, in a list of comments: emptied if others answered it,
+// otherwise gone, along with any emptied comment above it that was only kept for it.
+function takeBack<T extends { id: string; parent_id: string | null; deleted_at: string | null }>(list: T[], id: string, empty: (row: T) => T) {
+  const row = list.find((r) => r.id === id)
+  if (!row) return list
+  if (list.some((r) => r.parent_id === id)) return list.map((r) => (r.id === id ? empty(r) : r))
+  let rest = list.filter((r) => r.id !== id)
+  let parent = rest.find((r) => r.id === row.parent_id)
+  while (parent?.deleted_at && !rest.some((r) => r.parent_id === parent!.id)) {
+    const up = parent.parent_id
+    rest = rest.filter((r) => r.id !== parent!.id)
+    parent = rest.find((r) => r.id === up)
+  }
+  return rest
+}
+
+async function flipInterest(postId: string) {
+  const userId = S.userId!
+  const mine = { user_id: userId, post_id: postId, created_at: new Date().toISOString() }
+  const was = S.interests.some((i) => sameInterest(i, mine))
+  // Show it straight away; undo if the database says no.
+  S.interests = was ? S.interests.filter((i) => !sameInterest(i, mine)) : [...S.interests, mine]
+  changed()
+  const { error } = was
+    ? await supabase.from('post_interest').delete().eq('post_id', postId).eq('user_id', userId)
+    : await supabase.from('post_interest').insert({ post_id: postId })
+  // In already (on another device, say): that's the state we wanted.
+  if (error && error.code !== '23505') {
+    S.interests = was ? [...S.interests, mine] : S.interests.filter((i) => !sameInterest(i, mine))
+    changed()
+    return fail("Couldn't update", error)
+  }
+  return true
+}
+
+async function flipSave(postId: string) {
+  const was = S.saved.some((s) => s.post_id === postId)
+  const { error } = was
+    ? await supabase.from('saved_posts').delete().eq('post_id', postId)
+    : await supabase.from('saved_posts').insert({ post_id: postId })
+  if (error) return fail("Couldn't update your saved pins", error)
+  if (was) S.saved = S.saved.filter((s) => s.post_id !== postId)
+  else S.saved.push({ post_id: postId, created_at: new Date().toISOString() })
+  changed()
+  return true
+}
+
+//
+// People.
+//
+
+export async function saveProfile(patch: Partial<Pick<Profile, 'display_name' | 'neighbourhood' | 'bio' | 'avatar_url'>>) {
+  const { data, error } = await supabase.from('profiles').update(patch).eq('id', S.userId!).select().single()
+  if (error) return fail("Couldn't save your profile", error)
+  const profile = data as Profile
+  S.profiles.set(profile.id, ownPhotoOnly(profile))
+  // The database renames old posts and replies too; mirror that here.
+  for (const post of S.posts) if (post.author_id === profile.id) post.author_name = profile.display_name
+  for (const r of S.replies) if (r.author_id === profile.id) r.author_name = profile.display_name
+  changed()
+  return true
+}
+
+// Crops the middle square of a photo, shrinks it to 256 px and uploads it as a JPEG.
+export async function uploadAvatar(file: File) {
+  const bitmap = await createImageBitmap(file).catch(() => null)
+  if (!bitmap) return fail("That file isn't a photo we can read", null)
+  const size = 256
+  const side = Math.min(bitmap.width, bitmap.height)
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  canvas.getContext('2d')!.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size)
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+  if (!blob) return fail("Couldn't read that photo", null)
+
+  const previous = storagePath(S.profiles.get(S.userId!)?.avatar_url, 'avatars')
+  const path = `${S.userId}/${uuid()}.jpg`
+  const { error } = await supabase.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg' })
+  if (error) return fail("Couldn't upload the photo", error)
+  const saved = await saveProfile({ avatar_url: supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl })
+  if (saved && previous) supabase.storage.from('avatars').remove([previous])
+  return saved
+}
+
+// The path inside a bucket, from one of its public URLs.
+function storagePath(url: string | null | undefined, bucket: string) {
+  return url?.split(`/object/public/${bucket}/`)[1] ?? null
+}
+
+// Supabase emails both the old and the new address; the change happens once both confirm.
+export async function changeEmail(email: string) {
+  const { error } = await supabase.auth.updateUser({ email })
+  if (error) return fail(error.message, error)
+  return true
+}
+
+// Everything you made goes with you: the database cascades the rows, and the
+// photos in storage are removed first, while we still own them.
+export async function deleteAccount() {
+  const me = S.userId!
+  const mine = new Set(S.posts.filter((p) => p.author_id === me).map((p) => p.id))
+  const media = S.media.filter((m) => mine.has(m.post_id)).map((m) => storagePath(m.url, 'post-media')).filter((p) => p !== null)
+  if (media.length) await supabase.storage.from('post-media').remove(media)
+  const { data: avatars } = await supabase.storage.from('avatars').list(me)
+  if (avatars?.length) await supabase.storage.from('avatars').remove(avatars.map((f) => `${me}/${f.name}`))
+
+  rememberSharing(false)
+  const { error } = await supabase.rpc('delete_my_account')
+  if (error) return fail("Couldn't delete your account", error)
+  await supabase.auth.signOut({ scope: 'local' })
+  loadPublic()
+  return true
+}
+
+// One change at a time per person, like the toggles above.
+export const requestFriend = (id: string) => once(`friend/${id}`, () => sendRequest(id))
+export const acceptFriend = (id: string) => once(`friend/${id}`, () => acceptRequest(id))
+export const removeFriend = (id: string) => once(`friend/${id}`, () => endFriendship(id))
+
+async function sendRequest(id: string) {
+  const { data, error } = await supabase.from('friendships').insert({ addressee: id }).select().single()
+  if (error) return fail("Couldn't send the request", error)
+  upsert(S.friendships, data as Friendship, byId)
+  changed()
+  return true
+}
+
+async function acceptRequest(id: string) {
+  const { data, error } = await supabase.from('friendships').update({ accepted_at: new Date().toISOString() }).eq('requester', id).eq('addressee', S.userId!).select().single()
+  if (error) return fail("Couldn't accept", error)
+  upsert(S.friendships, data as Friendship, byId)
+  changed()
+  refreshFriendsNow()
+  readFriendRequestsFrom(id)
+  return true
+}
+
+// Answering a request, either way, settles its notification.
+function readFriendRequestsFrom(id: string) {
+  markNotificationsRead(S.notifications.filter((n) => n.kind === 'friend_request' && n.actor_id === id).map((n) => n.id))
+}
+
+async function endFriendship(id: string) {
+  const f = friendshipWith(id)
+  if (!f) return true
+  const { error } = await supabase.from('friendships').delete().eq('id', f.id)
+  if (error) return fail("Couldn't remove", error)
+  S.friendships = S.friendships.filter((x) => x.id !== f.id)
+  S.locations.delete(id)
+  S.seen.delete(id)
+  changed()
+  readFriendRequestsFrom(id)
+  return true
+}
+
+//
+// Messages and notifications.
+//
+
+export async function sendMessage(to: string, body: string) {
+  const { data, error } = await supabase.from('messages').insert({ recipient_id: to, body }).select().single()
+  // A refusal from row security means they aren't taking messages from you.
+  if (error?.code === '42501') return fail(`${nameOf(to)} isn't taking messages right now`, { message: `${nameOf(to)} isn't taking messages right now` })
+  if (error) return fail("Couldn't send", error)
+  upsert(S.messages, data as Message, byId)
+  changed()
+  return true
+}
+
+export async function markConversationRead(otherId: string) {
+  const unread = S.messages.filter((m) => m.sender_id === otherId && m.recipient_id === S.userId && !m.read_at)
+  if (!unread.length) return
+  const readAt = new Date().toISOString()
+  for (const m of unread) m.read_at = readAt
+  changed()
+  await supabase.from('messages').update({ read_at: readAt }).eq('sender_id', otherId).eq('recipient_id', S.userId!).is('read_at', null)
+}
+
+export async function markNotificationsRead(ids: string[]) {
+  const unread = S.notifications.filter((n) => ids.includes(n.id) && !n.read_at)
+  if (!unread.length) return
+  const readAt = new Date().toISOString()
+  for (const n of unread) n.read_at = readAt
+  changed()
+  await supabase.from('notifications').update({ read_at: readAt }).in('id', unread.map((n) => n.id))
+}
+
+export async function loadOlderNotifications() {
+  const oldest = S.notifications[0]
+  if (!oldest) return
+  const { data, error } = await supabase.from('notifications').select('*').lt('created_at', oldest.created_at).order('created_at', { ascending: false }).limit(60)
+  if (error) return // the button stays, to try again
+  S.notifications = [...(data ?? []).reverse(), ...S.notifications]
+  S.hasOlderNotifications = (data?.length ?? 0) === 60
+  changed()
+}
+
+export async function setMutedKinds(kinds: string[]) {
+  S.mutedKinds = kinds
+  changed()
+  const { error } = await supabase.from('notification_settings').upsert({ muted_kinds: kinds }, { onConflict: 'user_id' })
+  if (error) fail("Couldn't save notification settings", error)
+}
+
+export function describeNotification(n: Notification) {
+  const title = `“${n.post_title ?? 'a pin'}”`
+  switch (n.kind) {
+    case 'reply': return `replied to your pin ${title}`
+    case 'saved_reply': return `replied to ${title}, a pin you saved`
+    case 'thread_reply': return `also replied to ${title}`
+    case 'resolved': return `marked ${title} as resolved`
+    case 'save': return `saved your pin ${title}`
+    case 'interest': return `is interested in ${title}`
+    case 'friend_request': return 'wants to be friends'
+    case 'friend_accept': return 'accepted your friend request'
+    case 'friend_post': return `pinned ${title}`
+    case 'mention': return `mentioned you in ${title}`
+    case 'comment_reply': return `answered your comment on ${title}`
+    case 'word_reply': return `answered you on ${n.post_title ? `“${n.post_title}”` : 'a block'}`
+    case 'legend': return `voted your pin ${title} a Legend: it stays on the map for good`
+  }
+}
+
+// "Typing…" in a chat: a broadcast on a private channel only these two people
+// may join. Nothing is stored.
+export function typingChannel(otherId: string, onTyping: () => void) {
+  const me = S.userId
+  // Private: the database only lets these two people on (see the typing migration).
+  const channel = supabase.channel(`typing:${[me, otherId].sort().join(':')}`, { config: { private: true } })
+  channel.on('broadcast', { event: 'typing' }, ({ payload }) => {
+    if (payload?.from === otherId) onTyping()
+  })
+  channel.subscribe()
+
+  let last = 0
+  return {
+    ping() {
+      const now = Date.now()
+      if (now - last < 1500) return
+      last = now
+      channel.send({ type: 'broadcast', event: 'typing', payload: { from: me } })
+    },
+    close() {
+      supabase.removeChannel(channel)
+    },
+  }
+}
+
+// Blocking also ends any friendship, so they drop off your map too.
+export async function block(id: string) {
+  const { error } = await supabase.from('blocks').insert({ blocked: id })
+  if (error) return fail("Couldn't block", error)
+  S.blocked.add(id)
+  // A request or accept still on its way lands first; then the friendship ends
+  // whatever it was, rather than being let go as a second tap.
+  await inFlight.get(`friend/${id}`)
+  if (friendshipWith(id)) await endFriendship(id)
+  changed()
+  return true
+}
+
+export async function unblock(id: string) {
+  const { error } = await supabase.from('blocks').delete().eq('blocked', id)
+  if (error) return fail("Couldn't unblock", error)
+  S.blocked.delete(id)
+  changed()
+  return true
+}
+
+// A message as a line of text for previews and alerts: links to our own pins
+// don't read well as addresses, so they become words.
+export function readable(body: string) {
+  const text = body.replace(new RegExp(`${window.location.origin.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/#pin/[0-9a-f-]{36}`, 'g'), '').trim()
+  return text ? (text === body ? text : `Pin: ${text}`) : 'Sent you a pin'
+}
+
+// One entry per person you've messaged, latest first.
+export function conversations() {
+  const byOther = new Map<string, { other: string; last: Message; unread: number }>()
+  for (const m of S.messages) {
+    const other = m.sender_id === S.userId ? m.recipient_id : m.sender_id
+    if (S.blocked.has(other)) continue
+    const unread = m.recipient_id === S.userId && !m.read_at ? 1 : 0
+    byOther.set(other, { other, last: m, unread: (byOther.get(other)?.unread ?? 0) + unread })
+  }
+  return [...byOther.values()].sort((a, b) => time(b.last.created_at) - time(a.last.created_at))
+}
+
+//
+// Where I am, and sharing it with friends.
+//
+
+let watchId: number | null = null
+let lastSent = { at: 0, latitude: 0, longitude: 0 }
+
+export function distance(lat1: number, lng1: number, lat2: number, lng2: number) {
+  const r = Math.PI / 180
+  const h = Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lng2 - lng1) * r) / 2) ** 2
+  return 12742000 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
+}
+
+// Everyone waiting for the first fix; they all hear about it together.
+let waiting: ((here: Here | null) => void)[] = []
+
+function answerWaiting(here: Here | null) {
+  for (const resolve of waiting) resolve(here)
+  waiting = []
+}
+
+// Starts following the device's position (once). Resolves with the first fix,
+// or null if we can't get one.
+export function watchHere(): Promise<Here | null> {
+  if (!navigator.geolocation) return Promise.resolve(null)
+  if (watchId !== null && S.here) return Promise.resolve(S.here)
+
+  return new Promise((resolve) => {
+    waiting.push(resolve)
+    if (watchId !== null) return // already looking; this caller joins the queue
+
+    watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        S.here = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          heading: position.coords.heading ?? S.here?.heading ?? null,
+        }
+        changed()
+        answerWaiting(S.here)
+        if (S.sharing) pushLocation(false)
+        noticeNearby()
+      },
+      () => {
+        // Denied, or no fix at all: give up so the next ask starts fresh. A
+        // hiccup after we've had fixes keeps the watch going.
+        if (!S.here && watchId !== null) {
+          navigator.geolocation.clearWatch(watchId)
+          watchId = null
+        }
+        answerWaiting(S.here)
+      },
+      { enableHighAccuracy: true, maximumAge: 15000, timeout: 15000 },
+    )
+  })
+}
+
+// Which way the phone points, for the arrow on the map. iOS asks for permission,
+// and only from a tap, so this is called from the locate button.
+let compassOn = false
+let lastHeadingAt = 0
+
+export async function enableCompass() {
+  if (compassOn || typeof DeviceOrientationEvent === 'undefined') return
+  const ask = (DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> }).requestPermission
+  if (ask && (await ask().catch(() => 'denied')) !== 'granted') return
+  compassOn = true
+
+  const onTurn = (e: DeviceOrientationEvent) => {
+    const ios = (e as DeviceOrientationEvent & { webkitCompassHeading?: number }).webkitCompassHeading
+    const heading = ios ?? (e.absolute && e.alpha !== null ? 360 - e.alpha : null)
+    const now = Date.now()
+    if (heading === null || !S.here || now - lastHeadingAt < 100) return
+    const old = S.here.heading
+    if (old !== null && Math.abs(((heading - old + 540) % 360) - 180) < 3) return
+    lastHeadingAt = now
+    S.here = { ...S.here, heading }
+    changed()
+  }
+  window.addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onTurn as EventListener)
+}
+
+// The words worked out on this device can be turned off in Settings like the
+// server's notifications; their kinds sit in the same list, which the server ignores.
+// Signed in, nothing is said until that list (and who's blocked) has loaded.
+let privateLoaded = false
+const muted = (kind: string) => (S.userId !== null && !privateLoaded) || S.mutedKinds.includes(kind)
+
+// What's been said already, per person on this device: 'soon/<pin>' and 'near/<friend>',
+// with when. Entries older than a week go, so it never grows.
+let said: Record<string, number> | null = null
+
+function saidAt(key: string) {
+  if (!said) {
+    try {
+      said = JSON.parse(localStorage.getItem(`aroundhere.said.${S.userId}`) ?? '{}') as Record<string, number>
+    } catch {
+      said = {}
+    }
+  }
+  return said[key] ?? 0
+}
+
+function sayOnce(key: string) {
+  saidAt(key) // loads the memory, the first time
+  const now = Date.now()
+  said![key] = now
+  for (const k in said) if (now - said[k] > 7 * 86400000) delete said[k]
+  try {
+    localStorage.setItem(`aroundhere.said.${S.userId}`, JSON.stringify(said))
+  } catch {
+    // Private browsing: it may say something twice. No harm.
+  }
+}
+
+// A friend who shares where they are comes within a couple of streets of you: a
+// word about it, at most every two hours each. Worked out here, from what we see:
+// only from where they are now (the last ten minutes), and a fix of mine good to 100 m.
+function noticeNearby() {
+  const here = S.here
+  if (!here || here.accuracy > 100 || !S.userId || muted('friend_nearby')) return
+  for (const id of S.locations.keys()) {
+    const loc = locationOf(id)
+    if (!loc || id === S.userId || S.blocked.has(id) || Date.now() - time(loc.updated_at) > 600000) continue
+    const d = distance(here.latitude, here.longitude, loc.latitude, loc.longitude)
+    if (d > 200 || Date.now() - saidAt(`near/${id}`) < 2 * 3600000) continue
+    sayOnce(`near/${id}`)
+    onIncoming(`${nameOf(id)} is nearby`, `${Math.max(10, Math.round(d / 10) * 10)} m away`, `user/${id}`)
+  }
+}
+
+// Something you're in on starts within the hour: a word about it, once. Saying
+// you're in when it's that close already is reminder enough.
+function remindSoon() {
+  if (!S.userId || !S.ready || muted('starting_soon')) return
+  for (const i of S.interests) {
+    if (i.user_id !== S.userId || saidAt(`soon/${i.post_id}`)) continue
+    const post = S.posts.find((p) => p.id === i.post_id)
+    const left = post?.starts_at && !post.resolved_at ? time(post.starts_at) - Date.now() : -1
+    if (!post || left <= 0 || left > 3600000) continue
+    sayOnce(`soon/${post.id}`)
+    if (time(i.created_at) > time(post.starts_at!) - 3600000) continue
+    onIncoming('Starting soon', `${post.title}, in ${Math.max(1, Math.round(left / 60000))} min`, `pin/${post.id}`)
+  }
+}
+
+// Sharing is a choice remembered on this device. The row friends read is only
+// shared while the app is open and in view, so nobody sees a "here" from hours ago.
+const sharingKey = () => `aroundhere.sharing.${S.userId}`
+
+// Stored as 'on', or as the time a "for an hour" share ends.
+function recallSharing() {
+  try {
+    const value = localStorage.getItem(sharingKey())
+    if (value === 'on') return { on: true, until: null, expired: false }
+    const until = Number(value)
+    if (until > Date.now()) return { on: true, until, expired: false }
+    return { on: false, until: until > 0 ? until : null, expired: until > 0 }
+  } catch {
+    return { on: false, until: null, expired: false }
+  }
+}
+
+function rememberSharing(on: boolean, until: number | null = null) {
+  try {
+    if (on) localStorage.setItem(sharingKey(), until ? String(until) : 'on')
+    else localStorage.removeItem(sharingKey())
+  } catch {
+    // Private mode: sharing just won't resume next time.
+  }
+}
+
+// Location writes go one at a time, so switching sharing off always lands last.
+let locationWrites: Promise<unknown> = Promise.resolve()
+
+function queueLocationWrite(write: () => Promise<unknown>) {
+  locationWrites = locationWrites.then(write, write)
+  return locationWrites
+}
+
+// Sends my position to friends, at most every 20 s unless I moved a fair bit.
+function pushLocation(force: boolean) {
+  const here = S.here
+  if (!here || !S.userId || !S.sharing) return
+  if (endSharingIfTimeIsUp()) return
+  const now = Date.now()
+  const moved = distance(lastSent.latitude, lastSent.longitude, here.latitude, here.longitude)
+  if (!force && now - lastSent.at < 20000 && moved < 40) return
+  lastSent = { at: now, latitude: here.latitude, longitude: here.longitude }
+
+  return queueLocationWrite(async () => {
+    // Switched off, or hidden, while this waited its turn.
+    if (!S.sharing || !S.userId || document.visibilityState === 'hidden') return
+    const { data, error } = await supabase
+      .from('locations')
+      .upsert({ latitude: here.latitude, longitude: here.longitude, accuracy: here.accuracy, heading: here.heading, shared: true }, { onConflict: 'user_id' })
+      .select()
+      .single()
+    if (error) fail("Couldn't share your location", error)
+    else if (S.sharing) S.locations.set(S.userId, data as Location)
+    changed()
+  })
+}
+
+// Not sharing any more: the row stays (a delete would be announced to every
+// client), but it no longer says where you are.
+const UNSHARED = { shared: false, latitude: 0, longitude: 0, accuracy: null, heading: null }
+
+function withdrawLocation() {
+  const userId = S.userId
+  if (!userId) return
+  S.locations.delete(userId)
+  lastSent = { at: 0, latitude: 0, longitude: 0 }
+  return queueLocationWrite(async () => {
+    const { error } = await supabase.from('locations').update(UNSHARED).eq('user_id', userId)
+    if (error) fail("Couldn't stop sharing", error)
+  })
+}
+
+// The page is going out of view (or away): take my dot off friends' maps now.
+// A keepalive request finishes even if the page doesn't.
+function withdrawNow() {
+  const userId = S.userId
+  if (!userId || !S.session) return
+  S.locations.delete(userId)
+  lastSent = { at: 0, latitude: 0, longitude: 0 }
+  fetch(`${supabaseUrl}/rest/v1/locations?user_id=eq.${userId}`, {
+    method: 'PATCH',
+    keepalive: true,
+    headers: { apikey: supabaseKey, Authorization: `Bearer ${S.session.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(UNSHARED),
+  }).catch(() => {})
+}
+
+// A share for a while ends when its time is up; checked on the timer and before every send.
+function endSharingIfTimeIsUp() {
+  if (!S.sharing || !S.sharingUntil || Date.now() < S.sharingUntil) return false
+  setSharing(false)
+  onIncoming('Stopped sharing your location', 'Your hour is up', 'friends')
+  return true
+}
+
+// Share until switched off, or for a while (in ms) after which it stops by itself.
+export async function setSharing(on: boolean, forMs: number | null = null) {
+  if (!S.userId) return false
+  if (on) {
+    const here = await watchHere()
+    if (!here) return fail("Can't find you: location is blocked or unavailable", null)
+    S.sharing = true
+    S.sharingUntil = forMs ? Date.now() + forMs : null
+    rememberSharing(true, S.sharingUntil)
+    changed()
+    await pushLocation(true)
+    return true
+  }
+  S.sharing = false
+  S.sharingUntil = null
+  rememberSharing(false)
+  changed()
+  await withdrawLocation()
+  changed()
+  return true
+}
+
+//
+// City blocks: what people say about them.
+//
+
+// Is a spot inside a ring of corners (lng, lat)? Crossings of a line going east from it.
+export function inRing(ring: [number, number][], lng: number, lat: number) {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [ax, ay] = ring[j]
+    const [bx, by] = ring[i]
+    if (ay > lat !== by > lat && lng < ((bx - ax) * (lat - ay)) / (by - ay) + ax) inside = !inside
+  }
+  return inside
+}
+
+// The kept block a spot is in, if any; the smallest, should two overlap.
+export function blockOf(lat: number, lng: number) {
+  let best: CityBlock | null = null
+  let bestSpan = Infinity
+  for (const block of S.blocks.values()) {
+    const span = Math.max(...block.ring.map((c) => c[0])) - Math.min(...block.ring.map((c) => c[0]))
+    if (span < bestSpan && inRing(block.ring, lng, lat)) {
+      best = block
+      bestSpan = span
+    }
+  }
+  return best
+}
+
+// Scores and names, worked out once per change. A line's score is its votes
+// (its writer's +1 among them); a block is called by its best-liked name.
+type Talk = { score: Map<string, number>; mine: Map<string, 1 | -1>; names: Map<string, string> }
+let talkVersion = -1
+let talkCache: Talk
+
+export function talk(at?: number) {
+  if (at === undefined && talkVersion === version) return talkCache
+  const t: Talk = { score: new Map(), mine: new Map(), names: new Map() }
+  for (const v of S.votes) {
+    if (S.blocked.has(v.user_id) || (at !== undefined && time(v.created_at) > at)) continue
+    t.score.set(v.word_id, (t.score.get(v.word_id) ?? 0) + v.value)
+    if (v.user_id === S.userId) t.mine.set(v.word_id, v.value)
+  }
+  const best = new Map<string, Word>()
+  for (const w of S.words) {
+    if (!w.is_name || (w.author_id && S.blocked.has(w.author_id)) || (at !== undefined && time(w.created_at) > at)) continue
+    const score = t.score.get(w.id) ?? 0
+    const top = best.get(w.block_id)
+    if (score >= 1 && (!top || score > (t.score.get(top.id) ?? 0))) best.set(w.block_id, w) // oldest first, so ties stay with the first
+  }
+  for (const [block, w] of best) t.names.set(block, w.body)
+  if (at !== undefined) return t
+  talkCache = t
+  talkVersion = version
+  return t
+}
+
+// The block for a ring found on the map: the one already kept there, or a new one.
+export async function blockFor(found: { ring: [number, number][]; lng: number; lat: number }) {
+  const { data, error } = await supabase.rpc('block_for', { ring: found.ring, latitude: found.lat, longitude: found.lng })
+  if (error) {
+    fail("Couldn't mark out the block", error)
+    return null
+  }
+  const id = data as string
+  if (!S.blocks.has(id)) {
+    S.blocks.set(id, { id, ring: found.ring, latitude: found.lat, longitude: found.lng, created_at: new Date().toISOString() })
+    changed()
+  }
+  return id
+}
+
+export async function say(blockId: string, body: string, isName = false, parentId: string | null = null) {
+  const { data, error } = await supabase.from('block_words').insert({ block_id: blockId, body: body.trim(), is_name: isName, parent_id: parentId }).select().single()
+  if (error) return fail(isName ? "Couldn't put the name up" : "Couldn't say it", error)
+  const word = data as Word
+  upsert(S.words, word, byId)
+  // The writer's own point, which the database adds too.
+  upsert(S.votes, { word_id: word.id, user_id: S.userId!, value: 1, created_at: word.created_at }, sameVote)
+  changed()
+  return true
+}
+
+export async function unsay(id: string) {
+  const { error } = await supabase.from('block_words').delete().eq('id', id)
+  if (error) return fail("Couldn't take it back", error)
+  S.words = takeBack(S.words, id, (w) => ({ ...w, body: '', author_id: null, deleted_at: new Date().toISOString() }))
+  if (!S.words.some((w) => w.id === id)) S.votes = S.votes.filter((v) => v.word_id !== id)
+  changed()
+  return true
+}
+
+// Up or down; the same way again takes the vote back.
+export const vote = (wordId: string, value: 1 | -1) => once(`vote/${wordId}`, () => castVote(wordId, value))
+
+async function castVote(wordId: string, value: 1 | -1) {
+  const userId = S.userId!
+  const was = S.votes.find((v) => v.word_id === wordId && v.user_id === userId) ?? null
+  const next = was?.value === value ? null : value
+  const put = (v: Vote | null) => {
+    S.votes = S.votes.filter((x) => !(x.word_id === wordId && x.user_id === userId))
+    if (v) S.votes.push(v)
+    changed()
+  }
+  put(next ? { word_id: wordId, user_id: userId, value: next, created_at: new Date().toISOString() } : null)
+  const { error } = !next
+    ? await supabase.from('word_votes').delete().eq('word_id', wordId).eq('user_id', userId)
+    : was
+      ? await supabase.from('word_votes').update({ value: next }).eq('word_id', wordId).eq('user_id', userId)
+      : await supabase.from('word_votes').insert({ word_id: wordId, value: next })
+  if (error) {
+    put(was)
+    return fail("Couldn't vote", error)
+  }
+  return true
+}
+
+//
+// Pins: votes, and legends.
+//
+
+// Up or down, Reddit-style; the same way again takes the vote back.
+export const votePost = (postId: string, value: 1 | -1) => once(`postvote/${postId}`, () => castPostVote(postId, value))
+
+async function castPostVote(postId: string, value: 1 | -1) {
+  const userId = S.userId!
+  const was = S.postVotes.find((v) => v.post_id === postId && v.user_id === userId) ?? null
+  const next = was?.value === value ? null : value
+  const put = (v: PostVote | null) => {
+    S.postVotes = S.postVotes.filter((x) => !(x.post_id === postId && x.user_id === userId))
+    if (v) S.postVotes.push(v)
+    changed()
+  }
+  put(next ? { post_id: postId, user_id: userId, value: next, created_at: new Date().toISOString() } : null)
+  const { error } = !next
+    ? await supabase.from('post_votes').delete().eq('post_id', postId).eq('user_id', userId)
+    : was
+      ? await supabase.from('post_votes').update({ value: next }).eq('post_id', postId).eq('user_id', userId)
+      : await supabase.from('post_votes').insert({ post_id: postId, value: next })
+  if (error) {
+    put(was)
+    return fail("Couldn't vote", error)
+  }
+  return true
+}
+
+//
+// Sparks: a daily streak, and what they buy.
+//
+
+// Opening the app on a new day keeps the streak going (and earns a spark).
+// Once per day per device is plenty; the database knows if it's already counted.
+let onStreak: (streak: number, prize: number) => void = () => {}
+export function setStreakHandler(handler: typeof onStreak) {
+  onStreak = handler
+}
+
+const localDay = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+async function checkInDay() {
+  const userId = S.userId
+  const before = userId ? S.profiles.get(userId) : null
+  if (!userId || before?.streak_day === localDay()) return
+  const { data, error } = await supabase.rpc('check_in_day', { today: localDay() })
+  if (error || S.userId !== userId) return
+  const { prize, profile } = data as { prize: number; profile: Profile }
+  const me = ownPhotoOnly(profile)
+  S.profiles.set(me.id, me)
+  changed()
+  if (prize > 0) onStreak(me.streak, prize)
+}
+
+export async function dropSticker(emoji: string, latitude: number, longitude: number) {
+  const { data, error } = await supabase.rpc('drop_sticker', { emoji, latitude, longitude })
+  if (error) return fail("Couldn't drop it", error)
+  upsert(S.stickers, data as Sticker, byId)
+  const me = S.profiles.get(S.userId!)
+  if (me) S.profiles.set(me.id, { ...me, sparks: me.sparks - STICKER_SPARKS })
+  changed()
+  return true
+}
+
+export async function peelSticker(id: string) {
+  const { error } = await supabase.from('stickers').delete().eq('id', id)
+  if (error) return fail("Couldn't peel it off", error)
+  S.stickers = S.stickers.filter((x) => x.id !== id)
+  changed()
+  return true
+}
+
+export async function boostPost(postId: string) {
+  const { data, error } = await supabase.rpc('boost_post', { post: postId })
+  if (error) return fail("Couldn't boost it", error)
+  upsert(S.posts, data as Post, byId, true)
+  const me = S.profiles.get(S.userId!)
+  if (me) S.profiles.set(me.id, { ...me, sparks: me.sparks - BOOST_SPARKS })
+  changed()
+  return true
+}

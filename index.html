@@ -3,11 +3,40 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>aroundhere</title>
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="theme-color" content="#16171b" />
+    <meta name="description" content="What's happening on your street: a map of pins from people nearby." />
+    <meta property="og:title" content="AroundHere" />
+    <meta property="og:description" content="What's happening on your street: a map of pins from people nearby." />
+    <meta property="og:image" content="/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <title>AroundHere</title>
+    <style>
+      /* Shown until the app's script arrives: the map's colour and the mark, breathing. */
+      html, body { margin: 0; height: 100%; background: #f3f1ec; }
+      @media (prefers-color-scheme: dark) { html, body { background: #16181d; } }
+      .splash { position: fixed; inset: 0; display: grid; place-items: center; }
+      .splash img { width: 56px; height: 56px; animation: breathe 1.4s ease-in-out infinite; }
+      @keyframes breathe { 50% { transform: scale(0.88); opacity: 0.7; } }
+    </style>
+    <script>
+      // The last map style's colour, so there's no flash of the wrong one.
+      try {
+        var land = { day: '#f3f1ec', night: '#16181d', coast: '#8b9468', metro: '#2b3138', frontier: '#dcc9a0', radar: '#030b06', neon: '#1a0b2e' }
+        var theme = localStorage.getItem('aroundhere.theme')
+        if (land[theme]) document.documentElement.style.background = land[theme]
+      } catch (e) {}
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="splash"><img src="/favicon.svg" alt="" /></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,823 +1,4766 @@
-import { useEffect, useRef, useState } from 'react'
+// The whole interface. One store (data.ts), one map (map.ts), and the panels
+// around it. UI state lives in the UI object below; anything that changes it
+// calls changed(), and React redraws from scratch.
+
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+
 import {
-  Map,
-  Marker,
-  NavigationControl,
-  setWorkerUrl,
-} from 'maplibre-gl'
+  // The store and its helpers.
+  S, useStore, changed, start, stats, takeError, time, distance, placeKey, flairs,
+  supabase, supabaseUrl, supabaseKey,
+  // People.
+  nameOf, friendIds, friendshipWith, isOnline, locationOf, saveProfile, uploadAvatar,
+  requestFriend, acceptFriend, removeFriend, block, unblock,
+  // Pins.
+  createPost, updatePost, deletePost, loadRevisions, reply, deleteReply, toggleLike, toggleInterest, toggleSave, report,
+  // Messages and notifications.
+  conversations, readable, unreadMessages, visibleNotifications, describeNotification, typingChannel,
+  sendMessage, markConversationRead, markNotificationsRead, loadOlderNotifications, setMutedKinds, setIncomingHandler,
+  // Where I am.
+  watchHere, setSharing, enableCompass, checkOut,
+  // Accounts.
+  changeEmail, deleteAccount,
+  // City blocks.
+  talk, blockOf, inRing, blockFor, say, unsay, vote,
+  // Lore, snaps and sparks.
+  votePost, createSnap, addMedia, removeMedia, dropSticker, peelSticker, boostPost, setStreakHandler,
+  LEGEND_VOTES, STICKERS, STICKER_SPARKS, BOOST_SPARKS,
+  type Flair, type Post, type Reply, type Revision, type Notification, type Word,
+} from './data'
+import {
+  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, requestFrame,
+  project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, findBlock,
+  icons, mapThemes, LEGEND, poiColor,
+  MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE, MARK_LEGEND, MARK_BOOSTED, setPlacesShown,
+  type IconName, type MapState, type Marker, type Region, type Block,
+} from './map'
+import './App.css'
 
-import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
+//
+// UI state.
+//
 
-import 'maplibre-gl/dist/maplibre-gl.css'
-import { supabase } from './lib/supabase'
+type AuthMode = 'signin' | 'signup' | 'code' | 'reset' | 'new-password'
+type Tab = 'around' | 'latest' | 'soon' | 'friends' | 'mine' | 'past'
 
-setWorkerUrl(workerUrl)
+const THEMES = [
+  { id: 'auto', name: 'Sun', note: 'Day while the sun is up here, Night after' },
+  { id: 'day', name: 'Day', note: 'Clean and bright' },
+  { id: 'night', name: 'Night', note: 'Easy on the eyes' },
+  { id: 'coast', name: 'Palm Coast', note: '2004 console map, chunky square blips' },
+  { id: 'metro', name: 'Metro', note: 'Pause-menu atlas of a modern sprawl' },
+  { id: 'frontier', name: 'Frontier', note: 'Hand-inked survey map on parchment' },
+  { id: 'radar', name: 'Phosphor', note: 'Green CRT tracking screen' },
+  { id: 'neon', name: 'Neon Bay', note: 'Eighties beachfront nights, pink and cyan' },
+]
 
-type Post = {
-  id: string
-  title: string
-  description: string
-  latitude: number
-  longitude: number
-  created_at: string
+function readRoute() {
+  const [kind = '', id = ''] = window.location.hash.replace(/^#\/?/, '').split('/')
+  return { kind, id: decodeURIComponent(id) }
 }
 
-type Location = {
-  latitude: number
-  longitude: number
-}
-type Reply = {
-  id: string
-  post_id: string
-  content: string
-  created_at: string
-}
-
-function App() {
-  const mapContainer = useRef<HTMLDivElement>(null)
-  const map = useRef<Map | null>(null)
-
-  const markers = useRef<Marker[]>([])
-  const locationMarker = useRef<Marker | null>(null)
-
-  const [posts, setPosts] = useState<Post[]>([])
-  const [showAddForm, setShowAddForm] = useState(false)
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null)
-const [replies, setReplies] = useState<Reply[]>([])
-const [replyText, setReplyText] = useState('')
-
-
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-
-  const [selectedLocation, setSelectedLocation] =
-    useState<Location | null>(null)
-
-  const [isChoosingLocation, setIsChoosingLocation] =
-    useState(false)
-
-  const [locationStatus, setLocationStatus] =
-    useState('Finding your location...')
-
-  useEffect(() => {
-    async function loadPosts() {
-      const { data, error } = await supabase
-        .from('posts')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      if (error) {
-        console.error('Supabase error:', error)
-        return
-      }
-
-      setPosts(data ?? [])
-    }
-
-    loadPosts()
-
-    if (!mapContainer.current || map.current) {
-      return
-    }
-
-    map.current = new Map({
-      container: mapContainer.current,
-      style: 'https://tiles.openfreemap.org/styles/liberty',
-      center: [138.6007, -34.9285],
-      zoom: 12,
-    })
-
-    map.current.addControl(
-      new NavigationControl(),
-      'bottom-right',
-    )
-
-    return () => {
-      markers.current.forEach((marker) => marker.remove())
-      markers.current = []
-
-      locationMarker.current?.remove()
-      locationMarker.current = null
-
-      map.current?.remove()
-      map.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-  const channel = supabase
-    .channel('posts-realtime')
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'posts',
-      },
-      (payload) => {
-        const newPost = payload.new as Post
-
-        setPosts((currentPosts) => {
-          // Prevent duplicates from our own insert
-          if (
-            currentPosts.some(
-              (post) => post.id === newPost.id,
-            )
-          ) {
-            return currentPosts
-          }
-
-          return [newPost, ...currentPosts]
-        })
-      },
-    )
-    .subscribe()
-
-  return () => {
-    supabase.removeChannel(channel)
+function stored(key: string) {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
   }
-}, [])
+}
 
-  useEffect(() => {
-  const channel = supabase
-    .channel('replies-realtime')
-    .on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'replies',
-      },
-      (payload) => {
-        const newReply = payload.new as Reply
-
-        // Only add it if the currently-open thread
-        // is the thread this reply belongs to
-        if (selectedPost?.id !== newReply.post_id) {
-          return
-        }
-
-        setReplies((currentReplies) => {
-          if (
-            currentReplies.some(
-              (reply) => reply.id === newReply.id,
-            )
-          ) {
-            return currentReplies
-          }
-
-          return [...currentReplies, newReply]
-        })
-      },
-    )
-    .subscribe()
-
-  return () => {
-    supabase.removeChannel(channel)
+function store(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    // Private mode: it just won't be remembered.
   }
-}, [selectedPost])
+}
 
-  useEffect(() => {
-    if (!map.current || posts.length === 0) {
-      return
-    }
+const narrow = () => window.matchMedia('(max-width: 760px)').matches
 
-    markers.current.forEach((marker) => marker.remove())
-    markers.current = []
+function initialTheme() {
+  const saved = stored('aroundhere.theme')
+  if (saved && (mapThemes[saved] || saved === 'auto')) return saved
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day'
+}
 
-    posts.forEach((post) => {
-      const marker = new Marker()
-        .setLngLat([post.longitude, post.latitude])
-        .addTo(map.current!)
+function initialView() {
+  try {
+    const view = JSON.parse(stored('aroundhere.view') ?? '')
+    if (typeof view.lat === 'number') return view as { lat: number; lng: number; zoom: number }
+  } catch {
+    // First visit.
+  }
+  return { lat: -34.9235, lng: 138.6007, zoom: 15.2 }
+}
 
-      marker.getElement().addEventListener('click', () => {
-        setSelectedPost(post)
-      })
+type Filters = {
+  kinds: Flair[] // only these kinds of pin; none picked is every kind
+  friendsOnly: boolean // pins by friends (and me)
+  soon: boolean // on now, or in the next day
+  legends: boolean // only the legends
+  people: boolean // friends' dots
+  places: boolean // shops, cafes and the rest of the map's own places
+  names: boolean // what people call the blocks
+  stickers: boolean
+}
 
-      markers.current.push(marker)
-    })
-      }, [posts])
+const EVERYTHING: Filters = { kinds: [], friendsOnly: false, soon: false, legends: false, people: true, places: true, names: true, stickers: true }
 
-      useEffect(() => {
-  if (!selectedPost) {
-    setReplies([])
+function initialFilters(): Filters {
+  try {
+    return { ...EVERYTHING, ...JSON.parse(stored('aroundhere.filters') ?? '{}') }
+  } catch {
+    return EVERYTHING
+  }
+}
+
+const UI = {
+  route: readRoute(),
+  theme: initialTheme(),
+  toast: '',
+  toastTo: '', // where tapping the toast goes, for news that came in
+  auth: null as AuthMode | null,
+  palette: false,
+  hover: null as string | null, // marker id under the mouse, for the hover card
+  tab: 'around' as Tab,
+  filters: initialFilters(),
+  tray: false, // the sticker tray is open
+  placing: null as string | null, // a sticker picked, waiting for a tap on the map
+  snap: null as { file: File; url: string } | null, // a photo or video about to go up as a snap
+  feed: !narrow(),
+  view: initialView(),
+  draft: null as { latitude: number; longitude: number } | null,
+  draftBlocks: [] as string[], // the blocks the pin being made covers
+  picking: false, // making a pin, taps pick the blocks it covers instead of moving it
+  loose: null as Block | null, // a block found on the map by someone signed out: shown, not kept
+  district: null as { name: string; sub: string } | null, // a block just walked into, named in the corner
+  then: null as number | null, // looking back: the moment the map shows, instead of now
+  thenSpan: 'week' as SpanId, // how far back the timeline reaches
+  playing: false, // the timeline running forward by itself
+  alerts: stored('aroundhere.alerts') === 'on',
+  sounds: stored('aroundhere.sounds') !== 'off',
+  started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
+  banner: null as { title: string; sub: string } | null,
+  objective: null as { verb: string; place: string } | null, // "Go to the Street clean-up.", in the game styles
+  follow: false, // the camera keeps you in the middle until you move the map
+  sheetFull: false, // phones: the open sheet is pulled up to full height
+  legend: false,
+  walk: null as string | null, // "Get there": what's being walked to: "pin/<id>", "user/<id>" or "spot/<lat>,<lng>/<name>"
+}
+
+// When this device last had the app open, for "new since your last visit".
+// Read once at start; saved as the page goes away.
+const lastVisit = Number(stored('aroundhere.lastVisit') ?? 0)
+window.addEventListener('pagehide', () => store('aroundhere.lastVisit', String(Date.now())))
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') store('aroundhere.lastVisit', String(Date.now()))
+})
+
+let map: MapState | null = null
+let toastTimer = 0
+
+// The one way components change UI state.
+function ui(patch: Partial<typeof UI>) {
+  Object.assign(UI, patch)
+  changed()
+}
+
+// The phone's status bar takes the map's colour.
+function paintChrome(id: string) {
+  document.documentElement.dataset.theme = id
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', mapThemes[id].land)
+}
+
+// How high the sun is over a place, in degrees, from the usual low-precision
+// solar formulas (good to a fraction of a degree, plenty for dusk).
+function sunAltitude(time: number, lat: number, lng: number) {
+  const r = Math.PI / 180
+  const d = time / 86400000 - 10957.5 // days since noon, 1 January 2000
+  const g = (357.529 + 0.98560028 * d) * r // the sun's mean anomaly
+  const q = 280.459 + 0.98564736 * d // its mean longitude, degrees
+  const l = (q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) * r // ecliptic longitude
+  const e = (23.439 - 0.00000036 * d) * r // tilt of the earth
+  const ra = Math.atan2(Math.cos(e) * Math.sin(l), Math.cos(l))
+  const dec = Math.asin(Math.sin(e) * Math.sin(l))
+  const sidereal = ((18.697374558 + 24.06570982441908 * d) % 24) * 15 * r
+  const hourAngle = sidereal + lng * r - ra
+  return Math.asin(Math.sin(lat * r) * Math.sin(dec) + Math.cos(lat * r) * Math.cos(dec) * Math.cos(hourAngle)) / r
+}
+
+// The style actually on screen: the choice, unless it's "Sun", which is Day
+// until the sun is a few degrees under the horizon wherever you are (or are looking).
+function shown() {
+  if (UI.theme !== 'auto') return UI.theme
+  const lat = S.here?.latitude ?? UI.view.lat
+  const lng = S.here?.longitude ?? UI.view.lng
+  return sunAltitude(Date.now(), lat, lng) > -4 ? 'day' : 'night'
+}
+
+paintChrome(shown())
+
+window.addEventListener('popstate', () => {
+  UI.route = readRoute()
+  changed()
+})
+
+function go(path: string) {
+  const hash = path ? `#${path}` : ''
+  if (window.location.hash !== hash) window.history.pushState(null, '', hash || window.location.pathname + window.location.search)
+  UI.route = readRoute()
+  UI.hover = null
+  UI.sheetFull = false
+  if (UI.route.kind !== 'new') {
+    UI.draft = null
+    UI.draftBlocks = []
+    UI.picking = false
+  } else if (!UI.draft) UI.draft = viewCenter()
+  changed()
+}
+
+function viewCenter() {
+  const c = map ? center(map) : UI.view
+  return { latitude: c.lat, longitude: c.lng }
+}
+
+// A line at the bottom for a moment. News that came in (a message, a friend nearby)
+// stays a little longer, and a tap goes to it.
+function toast(message: string, to = '') {
+  UI.toast = message
+  UI.toastTo = to
+  changed()
+  window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => ui({ toast: '', toastTo: '' }), to ? 5000 : 2800)
+}
+
+//
+// Sounds, synthesized on the spot: every style has its own short sting for big
+// moments, and a tick for messages. No audio files.
+//
+
+let audio: AudioContext | null = null
+
+function note(at: number, freq: number, length: number, type: OscillatorType, volume: number, out: AudioNode) {
+  const a = audio!
+  const osc = a.createOscillator()
+  const gain = a.createGain()
+  osc.type = type
+  osc.frequency.value = freq
+  gain.gain.setValueAtTime(0, at)
+  gain.gain.linearRampToValueAtTime(volume, at + 0.01)
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + length)
+  osc.connect(gain).connect(out)
+  osc.start(at)
+  osc.stop(at + length + 0.05)
+}
+
+// A plucked string (Karplus-Strong): a burst of noise fed round a short delay
+// that averages itself, so it rings at the delay's pitch and dies away.
+function pluck(at: number, freq: number, volume: number, out: AudioNode) {
+  const a = audio!
+  const length = Math.floor(a.sampleRate * 1.2)
+  const buffer = a.createBuffer(1, length, a.sampleRate)
+  const data = buffer.getChannelData(0)
+  const period = Math.round(a.sampleRate / freq)
+  for (let i = 0; i < period; i++) data[i] = Math.random() * 2 - 1
+  for (let i = period; i < length; i++) data[i] = 0.498 * (data[i - period] + data[i - period + 1])
+  const source = a.createBufferSource()
+  const gain = a.createGain()
+  source.buffer = buffer
+  gain.gain.value = volume
+  source.connect(gain).connect(out)
+  source.start(at)
+}
+
+// A can going off: a short burst of noise through a band-pass.
+function hiss(at: number, length: number, volume: number, out: AudioNode) {
+  const a = audio!
+  const buffer = a.createBuffer(1, Math.floor(a.sampleRate * length), a.sampleRate)
+  const data = buffer.getChannelData(0)
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1
+  const source = a.createBufferSource()
+  const filter = a.createBiquadFilter()
+  const gain = a.createGain()
+  source.buffer = buffer
+  filter.type = 'bandpass'
+  filter.frequency.value = 4500
+  filter.Q.value = 0.7
+  gain.gain.setValueAtTime(volume, at)
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + length)
+  source.connect(filter).connect(gain).connect(out)
+  source.start(at)
+}
+
+const hz = (semitonesFromA4: number) => 440 * 2 ** (semitonesFromA4 / 12)
+
+function play(kind: 'sting' | 'tick' | 'spray') { // spray: a sticker going down
+  if (!UI.sounds) return
+  try {
+    audio ??= new AudioContext()
+    if (audio.state === 'suspended') audio.resume()
+  } catch {
+    return
+  }
+  const a = audio
+  const t0 = a.currentTime + 0.02
+  const out = a.createGain()
+  out.gain.value = 0.5
+  out.connect(a.destination)
+  setTimeout(() => out.disconnect(), 3000) // every sound is over by then
+  const style = shown()
+
+  if (kind === 'spray') {
+    hiss(t0, 0.16, 0.4, out)
+    return
+  }
+  if (kind === 'tick') {
+    const type: OscillatorType = style === 'coast' ? 'square' : style === 'neon' ? 'sawtooth' : 'sine'
+    if (style === 'frontier') pluck(t0, hz(7), 0.5, out)
+    else note(t0, style === 'radar' ? 1320 : hz(12), 0.12, type, style === 'coast' || style === 'neon' ? 0.08 : 0.2, out)
     return
   }
 
-  async function loadReplies() {
-    const { data, error } = await supabase
-      .from('replies')
-      .select('*')
-      .eq('post_id', selectedPost!.id)
-      .order('created_at', { ascending: true })
-
-    if (error) {
-      console.error('Failed to load replies:', error)
-      return
+  switch (style) {
+    case 'coast': // a quick 8-bit climb
+      ;[0, 4, 7, 12, 16].forEach((n, i) => note(t0 + i * 0.07, hz(n + 3), 0.18, 'square', 0.09, out))
+      break
+    case 'metro': { // a slow, soft chord over a low thump
+      note(t0, hz(-33), 0.5, 'sine', 0.5, out)
+      ;[-9, -2, 3, 7].forEach((n, i) => note(t0 + 0.05 + i * 0.03, hz(n), 1.4, 'sine', 0.12, out))
+      break
     }
-
-    setReplies(data ?? [])
+    case 'frontier': // a plucked arpeggio, like a guitar on a porch
+      ;[-14, -10, -7, -2, 2].forEach((n, i) => pluck(t0 + i * 0.11, hz(n), 0.45, out))
+      break
+    case 'radar': // two clean beeps
+      note(t0, 1200, 0.09, 'sine', 0.25, out)
+      note(t0 + 0.13, 1600, 0.14, 'sine', 0.25, out)
+      break
+    case 'neon': { // a sawtooth run through a closing filter
+      const filter = a.createBiquadFilter()
+      filter.type = 'lowpass'
+      filter.frequency.setValueAtTime(4000, t0)
+      filter.frequency.exponentialRampToValueAtTime(600, t0 + 0.8)
+      filter.connect(out)
+      ;[0, 7, 12, 15, 19].forEach((n, i) => note(t0 + i * 0.09, hz(n - 5), 0.3, 'sawtooth', 0.07, filter))
+      break
+    }
+    default: // Day and Night: a gentle two-note chime
+      note(t0, hz(7), 0.5, 'sine', 0.2, out)
+      note(t0 + 0.12, hz(12), 0.7, 'sine', 0.2, out)
   }
-
-  loadReplies()
-}, [selectedPost])
-
-async function handleCreateReply() {
-  if (!selectedPost || !replyText.trim()) {
-    return
-  }
-
-  const { data, error } = await supabase
-    .from('replies')
-    .insert({
-      post_id: selectedPost.id,
-      content: replyText.trim(),
-    })
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Failed to create reply:', error)
-    alert('Failed to post reply.')
-    return
-  }
-
-  setReplies((currentReplies) => [
-    ...currentReplies,
-    data,
-  ])
-
-  setReplyText('')
 }
 
-  function setLocation(location: Location) {
-    setSelectedLocation(location)
-
-    locationMarker.current?.remove()
-
-    if (!map.current) {
-      return
-    }
-
-    locationMarker.current = new Marker({
-      color: '#000000',
-    })
-      .setLngLat([
-        location.longitude,
-        location.latitude,
-      ])
-      .addTo(map.current)
-
-    map.current.flyTo({
-      center: [
-        location.longitude,
-        location.latitude,
-      ],
-      zoom: 15,
-    })
-  }
-
-  function requestCurrentLocation() {
-    setLocationStatus('Finding your location...')
-
-    if (!navigator.geolocation) {
-      setLocationStatus(
-        'Location unavailable. Choose a location on the map.',
-      )
-
-      setIsChoosingLocation(true)
-      return
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const location = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        }
-
-        setLocation(location)
-        setLocationStatus('Using your current location')
-      },
-      () => {
-        setLocationStatus(
-          'Location unavailable. Choose a location on the map.',
-        )
-
-        setIsChoosingLocation(true)
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 30000,
-      },
-    )
-  }
-
-  function handleOpenForm() {
-    setShowAddForm(true)
-    setIsChoosingLocation(false)
-    requestCurrentLocation()
-  }
-
-  async function handleCreatePost() {
-  if (!title.trim() || !description.trim() || !selectedLocation) {
+// Big moments get a full-screen banner in the game styles, a toast elsewhere.
+let bannerTimer = 0
+function celebrate(title: string, sub: string) {
+  play('sting')
+  if (shown() === 'day' || shown() === 'night') {
+    toast(sub)
     return
   }
-
-  const { data, error } = await supabase
-    .from('posts')
-    .insert({
-      title: title.trim(),
-      description: description.trim(),
-      latitude: selectedLocation.latitude,
-      longitude: selectedLocation.longitude,
-    })
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Failed to create post:', error)
-    alert('Failed to create thread.')
-    return
-  }
-
-  // Immediately show the new marker
-  setPosts((currentPosts) => [data, ...currentPosts])
-
-  // Close and reset the form
-  handleCloseForm()
+  UI.banner = { title, sub }
+  changed()
+  window.clearTimeout(bannerTimer)
+  bannerTimer = window.setTimeout(() => {
+    UI.banner = null
+    changed()
+  }, 2600)
 }
 
-  function handleCloseForm() {
-    setShowAddForm(false)
-    setIsChoosingLocation(false)
+// Setting off somewhere, the game styles say so the way their games do: a line of
+// subtitle at the bottom with the place picked out. Day and Night have the walk bar.
+let objectiveTimer = 0
+function objective(verb: string, place: string) {
+  if (shown() === 'day' || shown() === 'night') return
+  UI.objective = { verb, place }
+  changed()
+  window.clearTimeout(objectiveTimer)
+  objectiveTimer = window.setTimeout(() => ui({ objective: null }), 4000)
+}
 
-    setTitle('')
-    setDescription('')
-    setSelectedLocation(null)
+function failed(fallback: string) {
+  toast(takeError() || fallback)
+}
 
-    locationMarker.current?.remove()
-    locationMarker.current = null
+function applyTheme(id: string) {
+  UI.theme = id
+  paintChrome(shown())
+  store('aroundhere.theme', id)
+  if (map) setTheme(map, shown())
+  changed()
+}
+
+function needAccount(mode: AuthMode = 'signup') {
+  if (S.userId) return false
+  UI.auth = mode
+  changed()
+  return true
+}
+
+//
+// Actions for buttons: do the thing, then say how it went.
+//
+
+async function interest(postId: string) {
+  if (needAccount()) return
+  if (!(await toggleInterest(postId))) failed("Couldn't update")
+}
+
+async function saveToggle(postId: string, wasSaved: boolean) {
+  if (await toggleSave(postId)) toast(wasSaved ? 'Removed from saved' : 'Saved')
+  else failed("Couldn't save")
+}
+
+async function resolve(postId: string) {
+  if (await updatePost(postId, { resolved_at: new Date().toISOString() })) celebrate('Resolved', 'Moved to Past, thanks for closing the loop')
+  else failed("Couldn't resolve")
+}
+
+async function befriend(id: string) {
+  if (await requestFriend(id)) toast('Friend request sent')
+  else failed("Couldn't send")
+}
+
+async function accept(id: string) {
+  if (await acceptFriend(id)) celebrate('New friend', `You and ${nameOf(id)} are friends`)
+  else failed("Couldn't accept")
+}
+
+async function shareForAnHour() {
+  if (await setSharing(true, 3600000)) toast('Friends can see you for the next hour')
+  else failed("Couldn't share your location")
+}
+
+async function toggleSharing() {
+  if (await setSharing(!S.sharing)) toast(S.sharing ? 'Friends can see you now' : 'Stopped sharing')
+  else failed("Couldn't change sharing")
+}
+
+//
+// Formatting.
+//
+
+function ago(when: string | number) {
+  const seconds = (Date.now() - (typeof when === 'number' ? when : time(when))) / 1000
+  if (seconds < 60) return 'now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)}d`
+  return new Date(when).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+// "right now", "5m ago", "3h ago", or "on 12 Sep".
+function since(iso: string) {
+  const text = ago(iso)
+  if (text === 'now') return 'right now'
+  return /\d[mhd]$/.test(text) ? `${text} ago` : `on ${text}`
+}
+
+function meters(m: number) {
+  if (m < 50) return 'here'
+  if (m < 1000) return `${Math.round(m / 10) * 10} m`
+  if (m < 10000) return `${(m / 1000).toFixed(1)} km`
+  return `${Math.round(m / 1000).toLocaleString()} km`
+}
+
+const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+
+// "Today, 7:00 pm", "Tomorrow, 9:00 am", "Saturday, 9:00 am", or a date further out.
+function whenText(iso: string) {
+  const d = new Date(iso)
+  const days = Math.round((startOfDay(d) - startOfDay(new Date())) / 86400000)
+  const day =
+    days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : days === -1 ? 'Yesterday'
+    : days > 1 && days < 7 ? d.toLocaleDateString(undefined, { weekday: 'long' })
+    : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+  return `${day}, ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+}
+
+// The short version for lists: "now", "in 40m", "in 3h", then the day. Null once it's long over.
+function soonText(iso: string) {
+  const minutes = (time(iso) - Date.now()) / 60000
+  if (minutes < -180) return null
+  if (minutes < 0) return 'now'
+  if (minutes < 60) return `in ${Math.max(1, Math.round(minutes))}m`
+  if (minutes < 12 * 60) return `in ${Math.round(minutes / 60)}h`
+  const d = new Date(iso)
+  if (minutes < 6 * 24 * 60) return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric' })}`
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+// datetime-local inputs speak local time without a zone; these convert both ways.
+const toLocalInput = (iso: string) => {
+  const d = new Date(iso)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+const fromLocalInput = (value: string) => (value ? new Date(value).toISOString() : null)
+
+const minutesLeft = (until: number) => Math.max(1, Math.ceil((until - Date.now()) / 60000))
+
+// How far something is from me, in metres; null if I don't know where I am.
+function fromMe(at: { latitude: number; longitude: number } | null | undefined) {
+  return at && S.here ? distance(S.here.latitude, S.here.longitude, at.latitude, at.longitude) : null
+}
+
+const awayText = (m: number) => (m < 50 ? 'right here' : `${meters(m)} away`)
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+
+function hue(id: string) {
+  let h = 0
+  for (const ch of id) h = (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0
+  return h % 360
+}
+
+const firstName = (id: string) => nameOf(id).split(' ')[0]
+
+// Who wrote a pin or a reply; pins from before accounts have no one.
+const authorName = (row: { author_id: string | null; author_name: string | null }) => (row.author_id ? nameOf(row.author_id, row.author_name) : 'Anonymous')
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?'
+}
+
+function dayLabel(iso: string) {
+  const days = Math.round((startOfDay(new Date()) - startOfDay(new Date(iso))) / 86400000)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return 'This week'
+  return 'Earlier'
+}
+
+//
+// What the map and the feed show (the Filters above): kinds of pin, whose,
+// when, and what else is on the map. Kept on this device.
+//
+
+function setFilters(patch: Partial<Filters>) {
+  UI.filters = { ...UI.filters, ...patch }
+  store('aroundhere.filters', JSON.stringify(UI.filters))
+  changed()
+}
+
+// Quick ways to look at the map: they set which pins show, and leave the rest alone.
+const PRESETS: { label: string; pins: Pick<Filters, 'kinds' | 'friendsOnly' | 'soon' | 'legends'> }[] = [
+  { label: 'Everything', pins: { kinds: [], friendsOnly: false, soon: false, legends: false } },
+  { label: 'On now', pins: { kinds: [], friendsOnly: false, soon: true, legends: false } },
+  { label: 'Weird stuff', pins: { kinds: ['sighting', 'story'], friendsOnly: false, soon: false, legends: false } },
+  { label: 'Legends', pins: { kinds: [], friendsOnly: false, soon: false, legends: true } },
+  { label: 'Snaps', pins: { kinds: ['snap'], friendsOnly: false, soon: false, legends: false } },
+  { label: 'Friends', pins: { kinds: [], friendsOnly: true, soon: false, legends: false } },
+]
+
+const samePins = (a: Pick<Filters, 'kinds' | 'friendsOnly' | 'soon' | 'legends'>, b: Filters) =>
+  a.friendsOnly === b.friendsOnly && a.soon === b.soon && a.legends === b.legends && a.kinds.length === b.kinds.length && a.kinds.every((k) => b.kinds.includes(k))
+
+// What's narrowed down, in words, for the chip over the map: "Music, Food · friends' pins".
+function filterWords(f = UI.filters) {
+  const words: string[] = []
+  if (f.kinds.length) words.push(f.kinds.map((k) => flairs[k].label).join(', '))
+  if (f.friendsOnly) words.push("friends' pins")
+  if (f.soon) words.push('on now')
+  if (f.legends) words.push('legends')
+  return words.join(' · ')
+}
+
+const isBoosted = (p: Post) => !!p.boosted_until && time(p.boosted_until) > Date.now()
+const msLeft = (iso: string | null) => (iso ? time(iso) - Date.now() : null)
+const liveStickers = () => S.stickers.filter((x) => time(x.expires_at) > Date.now() && !S.blocked.has(x.user_id))
+
+const onNowOrSoon = (p: Post) => !!p.starts_at && time(p.starts_at) > Date.now() - 3 * 3600000 && time(p.starts_at) < Date.now() + 24 * 3600000
+
+//
+// Derived data.
+//
+
+// The feed and the map always show the same pins.
+function visiblePosts(anyKind = false) {
+  const friends = new Set(friendIds())
+  const { joined, active } = stats()
+  // Pins nobody has touched in a month quietly leave the map; Past still has them.
+  // An event still to come counts as recent however long ago it was pinned.
+  // Legends never go quiet.
+  const recent = (p: Post) => !!p.legend_at || Math.max(active.get(p.id) ?? 0, p.starts_at ? time(p.starts_at) : 0) > Date.now() - 30 * 86400000
+
+  const then = UI.then
+  const f = UI.filters
+  return S.posts.filter((p) => {
+    if (p.author_id && S.blocked.has(p.author_id)) return false
+    // A snap is gone after its day, unless it's a legend.
+    if (p.expires_at && !p.legend_at && time(p.expires_at) <= (then ?? Date.now())) return false
+    if (f.kinds.length && !anyKind && !f.kinds.includes(p.flair)) return false
+    if (f.friendsOnly && !(p.author_id && (friends.has(p.author_id) || p.author_id === S.userId))) return false
+    if (f.legends && !p.legend_at) return false
+    if (f.soon && !onNowOrSoon(p)) return false
+    // Back then: pinned by then, not resolved yet, and not a month old.
+    if (then !== null) return time(p.created_at) <= then && !(p.resolved_at && time(p.resolved_at) <= then) && then - time(p.created_at) < 30 * 86400000
+    switch (UI.tab) {
+      case 'around':
+      case 'latest':
+        return !p.resolved_at && recent(p)
+      case 'soon':
+        // Happening now (started within 3 hours) or in the coming week.
+        return !p.resolved_at && !!p.starts_at && time(p.starts_at) > Date.now() - 3 * 3600000 && time(p.starts_at) < Date.now() + 7 * 86400000
+      case 'friends':
+        return !!p.author_id && friends.has(p.author_id)
+      case 'mine':
+        return joined.has(p.id)
+      case 'past':
+        return !!p.resolved_at || !recent(p)
+    }
+  })
+}
+
+function sortedFeed(posts: Post[]) {
+  const active = stats().active
+  const withMeta = posts.map((post) => ({
+    post,
+    active: active.get(post.id) ?? 0,
+    away: distance(UI.view.lat, UI.view.lng, post.latitude, post.longitude),
+  }))
+  if (UI.tab === 'around') withMeta.sort((a, b) => a.away - b.away)
+  else if (UI.tab === 'soon') withMeta.sort((a, b) => time(a.post.starts_at!) - time(b.post.starts_at!))
+  else withMeta.sort((a, b) => b.active - a.active)
+  // Someone spent sparks on these: they go first.
+  withMeta.sort((a, b) => Number(isBoosted(b.post)) - Number(isBoosted(a.post)))
+  return withMeta
+}
+
+// The block the open sheet is about: a kept one, or one found by someone signed out.
+function openBlock(): { id: string | null; ring: [number, number][]; latitude: number; longitude: number } | null {
+  if (UI.route.kind !== 'block') return null
+  if (UI.route.id === 'here') return UI.loose ? { id: null, ring: UI.loose.ring, latitude: UI.loose.lat, longitude: UI.loose.lng } : null
+  return S.blocks.get(UI.route.id) ?? null
+}
+
+// What the map marks out: what people call the blocks they've named, the
+// blocks pins cover, and, strongest, the open block and the ones being picked.
+function buildRegions(posts: Post[]): Region[] {
+  const regions: Region[] = []
+  const at = UI.then ?? undefined
+  const { names } = talk(at)
+  for (const block of S.blocks.values()) {
+    if (!UI.filters.names || (at !== undefined && time(block.created_at) > at)) continue
+    const name = names.get(block.id)
+    if (name) regions.push({ id: block.id, rings: [block.ring], color: '', look: 'plain', name, lng: block.longitude, lat: block.latitude, hot: false })
+  }
+  for (const p of posts) {
+    const rings = (p.blocks ?? []).map((id) => S.blocks.get(id)?.ring).filter((ring) => !!ring)
+    if (!rings.length) continue
+    const open = UI.route.kind === 'pin' && UI.route.id === p.id
+    regions.push({ id: `pin:${p.id}`, rings, color: (flairs[p.flair] ?? flairs.general).color, look: open ? 'picked' : 'area', name: '', lng: p.longitude, lat: p.latitude, hot: false })
+  }
+  const open = openBlock()
+  if (open) regions.push({ id: 'open', rings: [open.ring], color: '#f25c2a', look: 'picked', name: '', lng: open.longitude, lat: open.latitude, hot: false })
+  if (UI.route.kind === 'new' && UI.draftBlocks.length) {
+    const rings = UI.draftBlocks.map((id) => S.blocks.get(id)?.ring).filter((ring) => !!ring)
+    regions.push({ id: 'draft', rings, color: '#f25c2a', look: 'picked', name: '', lng: 0, lat: 0, hot: false })
+  }
+  return regions
+}
+
+// How big a block is, in words: "about 4 football pitches".
+function sizeText(ring: [number, number][]) {
+  const my = 111320 // metres in a degree of latitude
+  const mx = my * Math.cos((ring[0][1] * Math.PI) / 180)
+  const [x0, y0] = ring[0]
+  let twice = 0
+  ring.forEach(([x1, y1], i) => {
+    const [x2, y2] = ring[(i + 1) % ring.length]
+    twice += (x1 - x0) * mx * (y2 - y0) * my - (x2 - x0) * mx * (y1 - y0) * my
+  })
+  const pitches = Math.abs(twice) / 2 / 7140
+  if (pitches < 1) return 'smaller than a football pitch'
+  if (pitches < 60) return `about ${plural(Math.round(pitches), 'football pitch', 'football pitches')}`
+  return `about ${((pitches * 7140) / 1e6).toFixed(1)} km²`
+}
+
+const blockName = (id: string | null) => (id && talk().names.get(id)) || null
+
+// What to call a block when it has no name yet: the street it's on.
+function blockTitle(block: { id: string | null; latitude: number; longitude: number }) {
+  const name = blockName(block.id)
+  if (name) return name
+  const street = map ? nearestStreet(map, block.longitude, block.latitude) : ''
+  return street ? `A block off ${street}` : 'A block'
+}
+
+// Pins on a block, or covering it: what's gone on there, newest first. The
+// block's history builds itself from what people pin.
+function pinsOn(block: { id: string | null; ring: [number, number][] }) {
+  return S.posts
+    .filter((p) => !(p.author_id && S.blocked.has(p.author_id)) && ((block.id && p.blocks?.includes(block.id)) || inRing(block.ring, p.longitude, p.latitude)))
+    .sort((a, b) => time(b.created_at) - time(a.created_at))
+}
+
+
+// Tapping the map between streets opens that block: one already kept, or one
+// found from the streets right now and kept from then on (for someone signed in).
+async function openBlockAt(lng: number, lat: number) {
+  if (!map) return
+  const kept = blockOf(lat, lng)
+  const found = kept ? null : await findBlock(map, lng, lat)
+  if (!kept && !found) return
+  const id = kept?.id ?? (S.userId ? await blockFor(found!) : null)
+  if (id) go(`block/${id}`)
+  else {
+    UI.loose = found
+    go('block/here')
+  }
+  // On a phone the sheet comes up over where you tapped: the block moves into view.
+  reveal(lat, lng)
+}
+
+// Making a pin, a tap picks the block it's on, or drops it if it was picked.
+async function pickBlock(lng: number, lat: number) {
+  if (!map) return
+  const kept = blockOf(lat, lng)
+  const found = kept ? null : await findBlock(map, lng, lat)
+  if (!kept && !found) return toast('No block there: pick one between the streets')
+  const id = kept?.id ?? (await blockFor(found!))
+  if (!id) return failed("Couldn't pick that block")
+  if (UI.route.kind !== 'new') return
+  const had = UI.draftBlocks.includes(id)
+  if (!had && UI.draftBlocks.length >= 12) return toast('Twelve blocks at most')
+  const blocks = had ? UI.draftBlocks.filter((b) => b !== id) : [...UI.draftBlocks, id]
+  // The pin goes in the first block picked, unless it's in one already.
+  const draft = UI.draft ?? viewCenter()
+  const inside = blocks.some((b) => {
+    const block = S.blocks.get(b)
+    return block && inRing(block.ring, draft.longitude, draft.latitude)
+  })
+  const first = S.blocks.get(blocks[0])
+  ui({ draftBlocks: blocks, draft: !inside && first ? { latitude: first.latitude, longitude: first.longitude } : draft })
+}
+
+// Looking back: the map, the feed and the blocks as they were at a moment. The
+// timeline reaches back an hour, a day, a week, a month or a year, and moves a
+// minute at a time over the last hour, up to a day at a time over the year.
+const SPANS = [
+  { id: 'hour', label: 'Hour', span: 3600000, step: 60000 },
+  { id: 'day', label: 'Day', span: 86400000, step: 600000 },
+  { id: 'week', label: 'Week', span: 7 * 86400000, step: 3600000 },
+  { id: 'month', label: 'Month', span: 30 * 86400000, step: 6 * 3600000 },
+  { id: 'year', label: 'Year', span: 365 * 86400000, step: 86400000 },
+] as const
+type SpanId = (typeof SPANS)[number]['id']
+const spanOf = (id: SpanId) => SPANS.find((s) => s.id === id)!
+
+// "Now", "Today 2:35 pm", "Tue 9 Sep, 9 pm", "9 Sep 2025": as fine as the span.
+function thenText(at: number, span: SpanId) {
+  if (Date.now() - at < 60000) return 'Now'
+  const d = new Date(at)
+  const clock = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const today = startOfDay(new Date())
+  if (span === 'hour' || span === 'day') {
+    const day = startOfDay(d) === today ? 'Today' : startOfDay(d) === today - 86400000 ? 'Yesterday' : d.toLocaleDateString(undefined, { weekday: 'short' })
+    return `${day} ${clock}`
+  }
+  if (span === 'week' || span === 'month') {
+    return `${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, ${d.toLocaleTimeString(undefined, { hour: 'numeric' })}`
+  }
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+// Now, and the moment the timeline is at (never later than now).
+function thenNow() {
+  const now = Date.now()
+  return { now, at: Math.min(UI.then ?? now, now) }
+}
+
+let playTimer = 0
+
+function stopPlaying() {
+  window.clearInterval(playTimer)
+  UI.playing = false
+}
+
+function toggleThen() {
+  stopPlaying()
+  ui({ then: UI.then === null ? Date.now() : null })
+}
+
+// Somewhere on the timeline, kept within it.
+function setThen(at: number) {
+  const { span } = spanOf(UI.thenSpan)
+  const now = Date.now()
+  ui({ then: Math.max(now - span, Math.min(now, at)) })
+}
+
+function setSpan(id: SpanId) {
+  UI.thenSpan = id
+  setThen(UI.then ?? Date.now())
+}
+
+// Play: from the start of the span (or from where it is), up to now in about
+// ten seconds, the city filling in as it goes.
+function playThen() {
+  if (UI.playing) {
+    stopPlaying()
+    changed()
+    return
+  }
+  const { span } = spanOf(UI.thenSpan)
+  let at = UI.then === null || UI.then > Date.now() - span / 60 ? Date.now() - span : UI.then
+  UI.playing = true
+  setThen(at)
+  playTimer = window.setInterval(() => {
+    at += span / 125
+    if (at >= Date.now()) {
+      stopPlaying()
+      setThen(Date.now())
+    } else setThen(at)
+  }, 80)
+}
+
+// The block last walked into, so it's named once on the way in.
+let lastRegion = ''
+let districtTimer = 0
+
+function district(name: string, sub: string) {
+  UI.district = { name, sub }
+  changed()
+  window.clearTimeout(districtTimer)
+  districtTimer = window.setTimeout(() => ui({ district: null }), 4500)
+}
+
+function buildMarkers(posts: Post[]): Marker[] {
+  const markers: Marker[] = []
+  const unread = stats().unread
+  const saved = new Set(S.saved.map((s) => s.post_id))
+  const route = UI.route
+
+  // The open pin stays on the map even when the filter would hide it.
+  const onMap = [...posts]
+  if (route.kind === 'pin') {
+    const open = S.posts.find((p) => p.id === route.id)
+    if (open && !onMap.includes(open)) onMap.push(open)
   }
 
-  useEffect(() => {
-    if (!map.current || !isChoosingLocation) {
-      return
+  const places = new Map<string, Post[]>()
+  for (const post of onMap) {
+    const key = placeKey(post)
+    const list = places.get(key)
+    if (list) list.push(post)
+    else places.set(key, [post])
+  }
+
+  for (const [key, list] of places) {
+    const newest = list[0] // posts are newest first
+    const f = flairs[newest.flair] ?? flairs.general
+    let flags = 0
+    if (list.some((p) => p.author_id && p.author_id === S.userId)) flags |= MARK_MINE
+    if (list.some((p) => saved.has(p.id))) flags |= MARK_SAVED
+    if (list.some((p) => unread.has(p.id))) flags |= MARK_NEW
+    if (list.every((p) => p.resolved_at)) flags |= MARK_RESOLVED
+    if (list.some((p) => p.starts_at && !p.resolved_at && Math.abs(time(p.starts_at) - Date.now()) < 3 * 3600000)) flags |= MARK_LIVE
+    if (list.some((p) => p.legend_at)) flags |= MARK_LEGEND
+    if (list.some(isBoosted)) flags |= MARK_BOOSTED
+    if ((route.kind === 'pin' && list.some((p) => p.id === route.id)) || (route.kind === 'place' && route.id === key)) flags |= MARK_SELECTED
+    markers.push({
+      id: key, kind: 'pin', x: lngToX(newest.longitude), y: latToY(newest.latitude), icon: f.icon, color: f.color,
+      count: list.length, flags, text: '', name: newest.title, accuracy: 0, heading: null,
+      // A snap shows its photo, and how much of its day is left.
+      image: newest.flair === 'snap' ? (stats().photo.get(newest.id)?.url ?? null) : null,
+      life: newest.expires_at ? Math.max(0, (time(newest.expires_at) - Date.now()) / 86400000) : 1,
+    })
+  }
+
+  // Friends are where they are now, so looking back leaves them out.
+  for (const userId of UI.then === null && UI.filters.people ? S.locations.keys() : []) {
+    const loc = locationOf(userId)
+    if (userId === S.userId || !loc) continue
+    const name = nameOf(userId)
+    const unreadFrom = S.messages.filter((m) => m.sender_id === userId && m.recipient_id === S.userId && !m.read_at).length
+    markers.push({
+      id: `person:${userId}`, kind: 'person', x: lngToX(loc.longitude), y: latToY(loc.latitude), icon: 'user',
+      color: `hsl(${hue(userId)} 55% 45%)`, count: unreadFrom,
+      flags: (Date.now() - time(loc.updated_at) > 30 * 60000 ? MARK_STALE : 0) | (isOnline(userId) ? MARK_ONLINE : 0),
+      text: initials(name), name: name.split(' ')[0],
+      accuracy: loc.accuracy ?? 0, heading: loc.heading, image: S.profiles.get(userId)?.avatar_url ?? null, life: 1,
+    })
+  }
+
+  // Stickers, as they are now.
+  for (const sticker of UI.then === null && UI.filters.stickers ? liveStickers() : []) {
+    markers.push({
+      id: `sticker:${sticker.id}`, kind: 'sticker', x: lngToX(sticker.longitude), y: latToY(sticker.latitude), icon: 'star', color: '',
+      count: 0, flags: 0, text: sticker.emoji, name: nameOf(sticker.user_id), accuracy: 0, heading: null, image: null, life: 1,
+    })
+  }
+
+  if (S.here) {
+    markers.push({
+      id: 'me', kind: 'me', x: lngToX(S.here.longitude), y: latToY(S.here.latitude), icon: 'user', color: '', count: 0,
+      flags: 0, text: '', name: 'You', accuracy: S.here.accuracy, heading: S.here.heading, image: null, life: 1,
+    })
+  }
+
+  if (UI.route.kind === 'new' && UI.draft) {
+    markers.push({
+      id: 'draft', kind: 'draft', x: lngToX(UI.draft.longitude), y: latToY(UI.draft.latitude), icon: 'pin', color: '',
+      count: 0, flags: 0, text: '', name: '', accuracy: 0, heading: null, image: null, life: 1,
+    })
+  }
+
+  return markers
+}
+
+//
+// Camera helpers: panels cover parts of the map, so "centre" means the middle of what's visible.
+//
+
+// Is the feed on screen? Below 1180 px it steps aside while a panel is open (see App.css).
+const feedShowing = () => UI.feed && !(UI.route.kind && window.innerWidth < 1180)
+
+function openArea() {
+  const w = window.innerWidth
+  const h = window.innerHeight
+  if (narrow()) {
+    // Sheet heights match the phone layout in App.css.
+    const kind = UI.route.kind
+    const sheet = kind === 'pin' || kind === 'place' || kind === 'new' ? h * 0.58 : kind ? h * 0.86 : UI.feed ? h * 0.56 : 0
+    return { left: 0, top: 64, right: w, bottom: h - 60 - sheet }
+  }
+  const left = feedShowing() ? 392 : 0
+  const right = UI.route.kind ? w - 436 : w
+  return { left, top: 72, right, bottom: h }
+}
+
+function reveal(lat: number, lng: number, zoom?: number, force = false) {
+  if (!map) return
+  const area = openArea()
+  const p = project(map, lngToX(lng), latToY(lat))
+  const inside = p.x > area.left + 40 && p.x < area.right - 40 && p.y > area.top + 60 && p.y < area.bottom - 30
+  const z = zoom ?? map.zoom
+  if (inside && !force && z === map.zoom) return
+  flyTo(map, lng, lat, z, (area.left + area.right) / 2 - map.width / 2, (area.top + area.bottom) / 2 - map.height / 2)
+}
+
+function openPin(post: Post) {
+  go(`pin/${post.id}`)
+  reveal(post.latitude, post.longitude, Math.max(map?.zoom ?? 16, 16))
+}
+
+async function locate() {
+  enableCompass()
+  const here = S.here ?? (await watchHere())
+  if (!here) {
+    toast("Can't find you: location is blocked or unavailable")
+    return
+  }
+  reveal(here.latitude, here.longitude, Math.max(map?.zoom ?? 16, 16.5), true)
+  followed = here
+  ui({ follow: true })
+}
+
+// Opened from a link: once the pins have loaded, bring that one into view.
+let linkRevealed = false
+
+function revealLinked() {
+  if (linkRevealed || !S.ready || !map) return
+  linkRevealed = true
+  const route = UI.route
+  const post = S.posts.find((p) => (route.kind === 'pin' && p.id === route.id) || (route.kind === 'place' && placeKey(p) === route.id))
+  if (post) reveal(post.latitude, post.longitude, Math.max(map.zoom, 16), true)
+}
+
+// Following: when my position moves, the camera goes with it.
+let followed: { latitude: number; longitude: number } | null = null
+
+function keepFollowing() {
+  const here = S.here
+  if (!UI.follow || !here || !map || map.fly) return
+  if (followed && distance(followed.latitude, followed.longitude, here.latitude, here.longitude) < 3) return
+  followed = here
+  reveal(here.latitude, here.longitude, map.zoom, true)
+}
+
+function startCompose() {
+  if (needAccount()) return
+  UI.draft = S.here ? { latitude: S.here.latitude, longitude: S.here.longitude } : viewCenter()
+  go('new')
+  // Get a real fix in the background; move the draft there if it arrives before the user moves it.
+  const first = UI.draft
+  watchHere().then((here) => {
+    if (here && UI.draft === first && UI.route.kind === 'new') {
+      UI.draft = { latitude: here.latitude, longitude: here.longitude }
+      changed()
+      reveal(here.latitude, here.longitude, Math.max(map?.zoom ?? 16, 16.5))
     }
+  })
+  reveal(UI.draft.latitude, UI.draft.longitude)
+}
 
-    function handleMapClick(event: {
-      lngLat: {
-        lng: number
-        lat: number
-      }
-    }) {
-      setLocation({
-        latitude: event.lngLat.lat,
-        longitude: event.lngLat.lng,
-      })
+//
+// Getting there on foot: the map works out the way along the streets and draws it.
+//
 
-      setLocationStatus('Location selected')
-      setIsChoosingLocation(false)
-    }
+// Where the walk is heading: a pin, a friend (who may be moving), or a spot found by search.
+function walkTarget(to = UI.walk) {
+  if (!to) return null
+  const [kind, id, ...name] = to.split('/')
+  if (kind === 'spot') {
+    const [lat, lng] = id.split(',').map(Number)
+    return { lat, lng, name: name.join('/'), person: false }
+  }
+  if (kind === 'pin') {
+    const post = S.posts.find((p) => p.id === id)
+    return post ? { lat: post.latitude, lng: post.longitude, name: post.title, person: false } : null
+  }
+  const loc = locationOf(id)
+  return loc ? { lat: loc.latitude, lng: loc.longitude, name: firstName(id), person: true } : null
+}
 
-    map.current.on('click', handleMapClick)
+// What's open, if it can be walked to: a pin, or a friend who shares where they are.
+function walkable() {
+  const r = UI.route
+  if (r.kind === 'pin') return `pin/${r.id}`
+  if ((r.kind === 'user' || r.kind === 'chat') && r.id !== S.userId && locationOf(r.id)) return `user/${r.id}`
+  return null
+}
 
-    return () => {
-      map.current?.off('click', handleMapClick)
-    }
-  }, [isChoosingLocation])
+// G: walk to what's open (again to stop), or stop walking when nothing is.
+function walkKey() {
+  const to = walkable()
+  if (to) walkTo(to)
+  else if (UI.walk) ui({ walk: null })
+}
+
+// Location was asked for and never came (blocked, or no fix): the walk bar
+// says so, and still has the way to your maps app.
+let noFix = false
+
+async function walkTo(to: string) {
+  if (UI.walk === to) return ui({ walk: null })
+  const there = walkTarget(to)
+  if (S.here && there && distance(S.here.latitude, S.here.longitude, there.lat, there.lng) < 30) return toast("You're already there")
+  UI.walk = to
+  UI.follow = false
+  play('tick') // a waypoint set, in the style's own voice
+  if (there) objective('Go to', there.name)
+  // Phones put the map first, so the way is what you see.
+  if (narrow()) {
+    UI.feed = false
+    go('')
+  } else changed()
+
+  const here = S.here ?? (await watchHere())
+  noFix = !here
+  changed()
+
+  // Both ends in view.
+  const target = walkTarget()
+  if (!here || !target || !map || UI.walk !== to) return
+  const area = openArea()
+  const x0 = lngToX(here.longitude)
+  const y0 = latToY(here.latitude)
+  const x1 = lngToX(target.lng)
+  const y1 = latToY(target.lat)
+  const fit = (pixels: number, span: number) => Math.log2(Math.max(pixels, 120) / Math.max(span * 256, 1e-9)) // short screens too
+  // Room around the ends for the pin, the walk bar and the map buttons.
+  const zoom = Math.min(17, Math.max(12, Math.min(fit(area.right - area.left - 200, Math.abs(x1 - x0)), fit(area.bottom - area.top - 240, Math.abs(y1 - y0)))))
+  reveal(yToLat((y0 + y1) / 2), xToLng((x0 + x1) / 2), zoom, true)
+}
+
+//
+// Little building blocks.
+//
+
+function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const d = icons[name]
+  return (
+    <svg className="icon" width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <path d={d[0] === '!' ? d.slice(1) : d} fillRule={d[0] === '!' ? 'evenodd' : 'nonzero'} />
+    </svg>
+  )
+}
+
+function Avatar({ id, size = 32, dot = false }: { id: string | null; size?: number; dot?: boolean }) {
+  const name = nameOf(id)
+  const photo = id ? S.profiles.get(id)?.avatar_url : null
+  return (
+    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, background: id ? `hsl(${hue(id)} 52% 44%)` : '#8a8f98' }}>
+      {photo ? <img src={photo} alt="" /> : id ? initials(name) : '?'}
+      {dot && id && isOnline(id) && <i className="online" />}
+    </span>
+  )
+}
+
+function Blip({ flair, size = 30 }: { flair: Flair; size?: number }) {
+  const f = flairs[flair] ?? flairs.general
+  return (
+    <span className="blip" style={{ width: size, height: size, background: f.color }}>
+      <Icon name={f.icon} size={size * 0.56} />
+    </span>
+  )
+}
+
+// Lists get one highlight that glides to the row under the mouse, instead of
+// every row lighting up on its own. It's moved straight in the DOM; no renders.
+function glide(e: React.MouseEvent<HTMLElement>) {
+  const body = e.currentTarget
+  const bar = body.querySelector<HTMLElement>(':scope > .glide')
+  if (!bar) return
+  const row = (e.target as HTMLElement).closest<HTMLElement>('button.row')
+  if (!row || e.type === 'mouseleave') {
+    bar.style.opacity = '0'
+    return
+  }
+  bar.style.opacity = '1'
+  bar.style.width = `${row.offsetWidth}px`
+  bar.style.height = `${row.offsetHeight}px`
+  bar.style.transform = `translate(${row.offsetLeft}px, ${row.offsetTop}px)`
+}
+
+// The handle on top of a phone sheet: drag it down to dismiss, up (or tap it) to
+// pull the sheet to full height and back. It moves its parent, the sheet itself.
+function Grip({ onDismiss }: { onDismiss: () => void }) {
+  const drag = useRef<{ y: number; dy: number } | null>(null)
+
+  const settle = (sheet: HTMLElement) => {
+    sheet.style.transition = ''
+    sheet.style.transform = ''
+    drag.current = null
+  }
 
   return (
     <div
-      ref={mapContainer}
-      style={{
-        width: '100%',
-        height: '100vh',
+      className="grip"
+      onPointerDown={(e) => {
+        drag.current = { y: e.clientY, dy: 0 }
+        e.currentTarget.setPointerCapture(e.pointerId)
+      }}
+      onPointerMove={(e) => {
+        const sheet = e.currentTarget.parentElement
+        if (!drag.current || !sheet) return
+        drag.current.dy = e.clientY - drag.current.y
+        sheet.style.transform = `translateY(${Math.max(0, drag.current.dy)}px)`
+        sheet.style.transition = 'none'
+      }}
+      onPointerUp={(e) => {
+        const sheet = e.currentTarget.parentElement
+        if (!drag.current || !sheet) return
+        const dy = drag.current.dy
+        settle(sheet)
+        if (dy > 110) onDismiss()
+        else if (dy < -40) ui({ sheetFull: true })
+        else if (Math.abs(dy) < 6) ui({ sheetFull: !UI.sheetFull })
+      }}
+      onPointerCancel={(e) => e.currentTarget.parentElement && settle(e.currentTarget.parentElement)}
+    >
+      <i />
+    </div>
+  )
+}
+
+type PanelProps = {
+  title: ReactNode
+  icon?: ReactNode
+  onBack?: () => void
+  children: ReactNode
+  foot?: ReactNode // stays put under the scrolling body, e.g. a reply box
+  className?: string
+}
+
+function Panel({ title, icon, onBack, children, foot, className = '' }: PanelProps) {
+  return (
+    <aside className={`panel detail ${className}`}>
+      <Grip onDismiss={() => go('')} />
+      <header className="panel-head">
+        {onBack && (
+          <button className="icon-btn" onClick={onBack} aria-label="Back">
+            <Icon name="back" />
+          </button>
+        )}
+        {icon}
+        <h2>{title}</h2>
+        <button className="icon-btn" onClick={() => go('')} aria-label="Close" title="Close (Esc)">
+          <Icon name="close" />
+        </button>
+      </header>
+      <div className="panel-body" onMouseOver={glide} onMouseLeave={glide}>
+        <i className="glide" />
+        {children}
+      </div>
+      {foot && <footer className="panel-foot">{foot}</footer>}
+    </aside>
+  )
+}
+
+// Text with its web addresses turned into links. A link to one of our own pins
+// becomes a little card for it that opens here, rather than a bare address.
+function Linked({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s]*[^\s.,!?;:)\]'"])/g)
+  return parts.map((part, i) => {
+    if (i % 2 === 0) return part
+    const pinId = pinInLink(part)
+    const post = pinId ? S.posts.find((p) => p.id === pinId) : null
+    if (post) {
+      return (
+        <button key={i} className="pin-card" onClick={() => openPin(post)}>
+          <Blip flair={post.flair} size={26} />
+          <span className="row-main">
+            <strong className="clip">{post.title}</strong>
+            <span className="small clip">{post.starts_at ? whenText(post.starts_at) : nameOf(post.author_id, post.author_name)}</span>
+          </span>
+        </button>
+      )
+    }
+    return (
+      <a key={i} href={part} target="_blank" rel="noreferrer noopener">
+        {part.replace(/^https?:\/\/(www\.)?/, '')}
+      </a>
+    )
+  })
+}
+
+// Directions are the phone's job: Apple devices open Apple Maps, everything else
+// OpenStreetMap's route planner.
+function directions(lat: number, lng: number) {
+  const at = `${lat.toFixed(6)},${lng.toFixed(6)}`
+  if (/iPhone|iPad|Macintosh/.test(navigator.userAgent)) return `https://maps.apple.com/?daddr=${at}`
+  return `https://www.openstreetmap.org/directions?to=${at}`
+}
+
+// A reply's text with "@Name" of people we know as links to them.
+function Mentions({ text }: { text: string }) {
+  const names = [...S.profiles.values()].filter((p) => text.includes('@' + p.display_name))
+  if (!names.length) return <Linked text={text} />
+  const pattern = new RegExp(`(${names.map((p) => '@' + p.display_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g')
+  return text.split(pattern).map((part, i) => {
+    const person = i % 2 ? names.find((p) => '@' + p.display_name === part) : null
+    return person ? (
+      <button key={i} className="mention" onClick={() => go(`user/${person.id}`)}>
+        {part}
+      </button>
+    ) : (
+      <Linked key={i} text={part} />
+    )
+  })
+}
+
+// The pin a link points at, if it's one of ours.
+function pinInLink(url: string) {
+  if (!url.startsWith(window.location.origin)) return null
+  return /#pin\/([0-9a-f-]{36})/.exec(url)?.[1] ?? null
+}
+
+const pinLink = (post: Post) => `${window.location.origin}/#pin/${post.id}`
+
+// A pin with a time, for the phone's calendar: a small .ics written out by hand
+// (RFC 5545), two hours long, with the way back to the pin in its notes.
+function addToCalendar(post: Post, street: string) {
+  const stamp = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+  const text = (s: string) => s.replace(/[\\;,]/g, (c) => '\\' + c).replace(/\n/g, '\\n')
+  const start = time(post.starts_at!)
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//AroundHere//EN', 'BEGIN:VEVENT',
+    `UID:${post.id}@aroundhere`,
+    `DTSTAMP:${stamp(Date.now())}`,
+    `DTSTART:${stamp(start)}`,
+    `DTEND:${stamp(start + 2 * 3600000)}`,
+    `SUMMARY:${text(post.title)}`,
+    `DESCRIPTION:${text(`${post.description}\n\n${pinLink(post)}`)}`,
+    `LOCATION:${text(street || `${post.latitude.toFixed(5)}, ${post.longitude.toFixed(5)}`)}`,
+    `GEO:${post.latitude.toFixed(6)};${post.longitude.toFixed(6)}`,
+    'END:VEVENT', 'END:VCALENDAR',
+  ]
+  // Lines longer than 75 bytes fold onto the next, which starts with a space;
+  // by whole characters, so an accent or an emoji is never cut in half.
+  const bytes = new TextEncoder()
+  const fold = (line: string) => {
+    let out = ''
+    let used = 0
+    for (const ch of line) {
+      const size = bytes.encode(ch).length
+      if (used + size > 74) {
+        out += '\r\n '
+        used = 1
+      }
+      out += ch
+      used += size
+    }
+    return out
+  }
+  const folded = lines.map(fold).join('\r\n')
+  const url = URL.createObjectURL(new Blob([folded + '\r\n'], { type: 'text/calendar' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${post.title.replace(/[^\w\s-]/g, '').trim().slice(0, 40) || 'event'}.ics`
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// A person in a list: their face and name (tap to open their profile), a line
+// under the name, and whatever you can do with them on the right.
+function PersonRow({ id, sub, children }: { id: string; sub?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="row">
+      <button className="plain person" onClick={() => go(`user/${id}`)}>
+        <Avatar id={id} size={34} dot />
+        <div>
+          <strong>{nameOf(id)}</strong>
+          {sub && <div className="muted small">{sub}</div>}
+        </div>
+      </button>
+      {children}
+    </div>
+  )
+}
+
+function Empty({ icon, children }: { icon: IconName; children: ReactNode }) {
+  return (
+    <div className="empty">
+      <Icon name={icon} size={28} />
+      <div>{children}</div>
+    </div>
+  )
+}
+
+// A textarea that grows with its text, sends on Enter, and keeps Shift+Enter for new lines.
+type ComposerProps = {
+  placeholder: string
+  onSend: (text: string, files: File[]) => Promise<boolean> // true once it's sent, which clears the box
+  attach?: boolean // photos and videos can go with it
+  onType?: () => void
+  autoFocus?: boolean
+  people?: string[] // who "@" suggests, first ones first
+}
+
+function Composer({ placeholder, onSend, onType, autoFocus = false, people, attach = false }: ComposerProps) {
+  const [text, setText] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const [busy, setBusy] = useState(false)
+  const [caret, setCaret] = useState(0)
+  const ref = useRef<HTMLTextAreaElement>(null)
+
+  // "@ma" just before the caret: suggest people whose name starts that way.
+  const typed = people ? /(^|\s)@([^\s@]{0,20})$/.exec(text.slice(0, caret)) : null
+  const suggestions = typed
+    ? people!.filter((id) => nameOf(id).toLowerCase().startsWith(typed[2].toLowerCase())).slice(0, 5)
+    : []
+
+  function mention(id: string) {
+    const start = caret - typed![2].length - 1
+    const next = `${text.slice(0, start)}@${nameOf(id)} ${text.slice(caret)}`
+    setText(next)
+    const at = start + nameOf(id).length + 2
+    setCaret(at)
+    requestAnimationFrame(() => {
+      ref.current?.focus()
+      ref.current?.setSelectionRange(at, at)
+    })
+  }
+
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [text])
+
+  async function send() {
+    const body = text.trim()
+    if ((!body && !files.length) || busy) return
+    setBusy(true)
+    const ok = await onSend(body, files)
+    setBusy(false)
+    if (ok) {
+      setText('')
+      setFiles([])
+    } else failed("Couldn't send")
+    ref.current?.focus()
+  }
+
+  return (
+    <div className="composer">
+      {suggestions.length > 0 && (
+        <div className="mentions" role="listbox" aria-label="Mention someone">
+          {suggestions.map((id) => (
+            <button key={id} role="option" aria-selected={false} onMouseDown={(e) => e.preventDefault()} onClick={() => mention(id)}>
+              <Avatar id={id} size={22} />
+              {nameOf(id)}
+            </button>
+          ))}
+        </div>
+      )}
+      <textarea
+        ref={ref}
+        rows={1}
+        value={text}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        maxLength={2000}
+        onChange={(e) => {
+          setText(e.target.value)
+          setCaret(e.target.selectionStart)
+          onType?.()
+        }}
+        onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            if (suggestions.length) mention(suggestions[0])
+            else send()
+          }
+        }}
+      />
+      {attach && (
+        <label className={files.length ? 'icon-btn attach on' : 'icon-btn attach'} title="Add photos or video" aria-label="Add photos or video">
+          <input type="file" accept="image/*,video/*" multiple hidden onChange={(e) => setFiles([...files, ...Array.from(e.target.files ?? [])].slice(0, 6))} />
+          <Icon name="image" />
+          {files.length > 0 && <b className="badge">{files.length}</b>}
+        </label>
+      )}
+      <button className="icon-btn send" onClick={send} disabled={(!text.trim() && !files.length) || busy} aria-label="Send">
+        <Icon name="send" />
+      </button>
+    </div>
+  )
+}
+
+//
+// The feed: the list twin of the map.
+//
+
+const TABS: [Tab, string][] = [
+  ['around', 'Around'],
+  ['latest', 'Latest'],
+  ['soon', 'Soon'],
+  ['friends', 'Friends'],
+  ['mine', 'Mine'],
+  ['past', 'Past'],
+]
+
+// What each tab says when it has nothing, and how it's sorted.
+const EMPTY_TAB: Record<Tab, string> = {
+  around: 'No pins here yet. Be the first: press N or tap +.',
+  latest: 'No pins here yet. Be the first: press N or tap +.',
+  soon: 'Nothing planned this week. Give a pin a time and it shows up here.',
+  friends: 'Nothing from friends yet. Add people from their profiles.',
+  mine: 'Pins you post, save, reply to or join show up here.',
+  past: 'Nothing here yet: resolved pins, and ones quiet for a month, end up in Past.',
+}
+const TAB_ORDER: Record<Tab, string> = {
+  around: 'nearest first', latest: 'latest activity first', soon: 'soonest first',
+  friends: 'latest activity first', mine: 'latest activity first', past: 'latest activity first',
+}
+
+function PostRow({ post, away, active }: { post: Post; away: number; active: number }) {
+  const st = stats()
+  const replies = st.replies.get(post.id) ?? 0
+  const interested = st.interested.get(post.id) ?? 0
+  const unread = st.unread.has(post.id)
+  const soon = post.starts_at && !post.resolved_at ? soonText(post.starts_at) : null
+  const photo = st.photo.get(post.id)
+  const key = placeKey(post)
+
+  return (
+    <button
+      className={`row post-row${UI.route.id === post.id ? ' selected' : ''}`}
+      onClick={() => openPin(post)}
+      onMouseEnter={() => {
+        if (map) {
+          map.highlight = key
+          requestFrame(map)
+        }
+      }}
+      onMouseLeave={() => {
+        if (map && map.highlight === key) {
+          map.highlight = null
+          requestFrame(map)
+        }
       }}
     >
-      {/* Header */}
-      <header
-        style={{
-          position: 'absolute',
-          top: '16px',
-          left: '16px',
-          zIndex: 10,
-        }}
-      >
-        <div
-          style={{
-            background: 'white',
-            padding: '12px 20px',
-            borderRadius: '16px',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.2)',
+      <Blip flair={post.flair} />
+      <div className="row-main">
+        <div className="row-top">
+          <strong className="clip">
+            {post.legend_at && <span className="legend-star" title="Legend">★</span>}
+            {post.title}
+          </strong>
+          <span className="muted small nowrap">{ago(active)}</span>
+        </div>
+        {post.description && <div className="clip muted">{post.description}</div>}
+        <div className="row-meta">
+          <span className="clip">{authorName(post)}</span>
+          {replies > 0 && (
+            <span>
+              <Icon name="chat" size={12} /> {replies}
+            </span>
+          )}
+          {interested > 0 && (
+            <span>
+              <Icon name="thumb" size={12} /> {interested}
+            </span>
+          )}
+          <span className="nowrap">{meters(away)}</span>
+          {(st.score.get(post.id) ?? 0) !== 0 && (
+            <span>
+              <Icon name="up" size={12} /> {st.score.get(post.id)}
+            </span>
+          )}
+          {isBoosted(post) && <span className="when now">boosted</span>}
+          {soon && (
+            <span className={soon === 'now' ? 'when now' : 'when'}>
+              <Icon name="calendar" size={12} /> {soon}
+            </span>
+          )}
+          {unread && <i className="dot" title="New activity" />}
+        </div>
+      </div>
+      {photo && <img className="row-thumb" src={photo.url} alt="" loading="lazy" />}
+    </button>
+  )
+}
+
+// A new account's first steps into the neighbourhood; each one opens the place to do it.
+function GettingStarted() {
+  const me = S.userId ? S.profiles.get(S.userId) : null
+  if (!me || UI.started) return null
+  const steps: [boolean, string, () => void][] = [
+    [!!(me.neighbourhood || me.bio), 'Tell neighbours who you are', () => go(`user/${me.id}`)],
+    [S.friendships.length > 0, 'Add a friend', () => go('friends')],
+    [S.sharing, 'Share your location with friends', () => go('friends')],
+    [S.posts.some((p) => p.author_id === me.id), 'Pin something', startCompose],
+  ]
+  if (steps.every(([done]) => done)) return null
+
+  return (
+    <div className="welcome started">
+      <div className="row-top">
+        <strong>Get started</strong>
+        <button
+          className="link small"
+          onClick={() => {
+            store('aroundhere.started', 'hidden')
+            ui({ started: true })
           }}
         >
-          <h1
-            style={{
-              margin: 0,
-              fontSize: '20px',
-              fontWeight: 700,
-              color: '#111',
-            }}
-          >
-            AroundHere
-          </h1>
+          Hide
+        </button>
+      </div>
+      {steps.map(([done, label, run]) => (
+        <button key={label} className={done ? 'step done' : 'step'} onClick={run}>
+          <i>{done && <Icon name="check" size={12} />}</i>
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Feed() {
+  const rows = sortedFeed(visiblePosts())
+  const signedOut = !S.userId
+
+  return (
+    <aside className="panel feed">
+      <Grip onDismiss={() => ui({ feed: false, sheetFull: false })} />
+      <header className="feed-head">
+        <div className="tabs" role="tablist">
+          {TABS.map(([id, label]) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={UI.tab === id}
+              className={UI.tab === id ? 'tab on' : 'tab'}
+              onClick={() => {
+                if ((id === 'friends' || id === 'mine') && needAccount('signin')) return
+                ui({ tab: id })
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flair-bar">
+          {(Object.keys(flairs) as Flair[]).map((f) => (
+            <button
+              key={f}
+              className={UI.filters.kinds.includes(f) ? 'flair-chip on' : 'flair-chip'}
+              style={{ '--c': flairs[f].color } as React.CSSProperties}
+              title={flairs[f].label}
+              onClick={() => setFilters({ kinds: UI.filters.kinds.includes(f) ? UI.filters.kinds.filter((k) => k !== f) : [...UI.filters.kinds, f] })}
+            >
+              <Icon name={flairs[f].icon} size={14} />
+              <span>{flairs[f].label}</span>
+            </button>
+          ))}
         </div>
       </header>
 
-      {/* Add button */}
-      {!showAddForm && (
-        <button
-          onClick={handleOpenForm}
-          style={{
-            position: 'absolute',
-            right: '24px',
-            bottom: '24px',
-            zIndex: 10,
-            border: 'none',
-            borderRadius: '999px',
-            background: '#000',
-            color: '#fff',
-            padding: '16px 24px',
-            fontSize: '18px',
-            fontWeight: 600,
-            cursor: 'pointer',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-          }}
-        >
-          + Add
-        </button>
-      )}
-      {/* Thread details */}
-{selectedPost && (
-  <aside
-    style={{
-      position: 'absolute',
-      top: '16px',
-      right: '16px',
-      bottom: '16px',
-      width: '360px',
-      zIndex: 20,
-      background: 'white',
-      borderRadius: '20px',
-      padding: '24px',
-      boxSizing: 'border-box',
-      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.25)',
-      fontFamily: 'Arial, sans-serif',
-      overflowY: 'auto',
-    }}
-  >
-    <button
-      onClick={() => setSelectedPost(null)}
-      style={{
-        border: 'none',
-        background: 'transparent',
-        fontSize: '24px',
-        cursor: 'pointer',
-        padding: 0,
-        marginBottom: '20px',
-      }}
-    >
-      ×
-    </button>
+      <div className="panel-body" onMouseOver={glide} onMouseLeave={glide}>
+        <i className="glide" />
+        {signedOut && (
+          <div className="welcome">
+            <strong>What's happening around here?</strong>
+            <p>Pins from people nearby: events, lost pets, free lemons, street gossip. Join to post, reply and find friends on the map.</p>
+            <div className="btn-row">
+              <button className="btn primary" onClick={() => ui({ auth: 'signup' })}>
+                Create account
+              </button>
+              <button className="btn" onClick={() => ui({ auth: 'signin' })}>
+                Sign in
+              </button>
+            </div>
+            <button className="link small near-me" onClick={locate}>
+              <Icon name="locate" size={14} /> Show what's around me
+            </button>
+          </div>
+        )}
 
-    <h2
-      style={{
-        margin: '0 0 12px',
-        fontSize: '26px',
-        color: '#111',
-      }}
-    >
-      {selectedPost.title}
-    </h2>
+        <GettingStarted />
 
-    <p
-      style={{
-        margin: '0 0 24px',
-        fontSize: '16px',
-        lineHeight: 1.5,
-        color: '#444',
-      }}
-    >
-      {selectedPost.description}
-    </p>
+        {/* Somewhere with nothing yet: say so, and point at where things are. */}
+        {S.ready && UI.tab === 'around' && rows.length > 0 && rows[0].away > 5000 && (
+          <div className="welcome quiet">
+            <strong>Nothing pinned within {meters(rows[0].away)} of here yet</strong>
+            <p>Be the first on your street, or have a look at where people are already busy.</p>
+            <div className="btn-row">
+              <button className="btn primary" onClick={startCompose}>
+                Pin something here
+              </button>
+              <button className="btn" onClick={() => reveal(rows[0].post.latitude, rows[0].post.longitude, 15, true)}>
+                Go to the nearest
+              </button>
+            </div>
+          </div>
+        )}
 
-    <div
-  style={{
-    padding: '12px',
-    background: '#f3f4f6',
-    borderRadius: '10px',
-    fontSize: '13px',
-    color: '#666',
-    marginBottom: '24px',
-  }}
->
-  📍 Thread location
-</div>
-
-<h3
-  style={{
-    margin: '0 0 12px',
-    fontSize: '18px',
-    color: '#111',
-  }}
->
-  Replies
-</h3>
-
-<div
-  style={{
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-    marginBottom: '20px',
-  }}
->
-  {replies.length === 0 ? (
-    <p
-      style={{
-        margin: 0,
-        color: '#777',
-        fontSize: '14px',
-      }}
-    >
-      No replies yet.
-    </p>
-  ) : (
-    replies.map((reply) => (
-      <div
-        key={reply.id}
-        style={{
-          padding: '12px',
-          background: '#f3f4f6',
-          borderRadius: '10px',
-          color: '#333',
-        }}
-      >
-        {reply.content}
+        {S.outdated ? (
+          <Empty icon="alert">
+            The database is older than this app. Apply the migrations (<code>supabase migration up</code>, or <code>supabase db push</code> for a hosted
+            project) and it picks up by itself.
+          </Empty>
+        ) : S.offline ? (
+          <Empty icon="map">Can't reach AroundHere right now. Trying again…</Empty>
+        ) : !S.ready ? (
+          <div className="skeleton">{[0, 1, 2, 3].map((i) => <div key={i} />)}</div>
+        ) : rows.length === 0 ? (
+          <Empty icon="pin">{EMPTY_TAB[UI.tab]}</Empty>
+        ) : (
+          rows.map(({ post, away, active }, i) => {
+            // In Latest, a line where the new stuff since your last visit ends.
+            const divide = UI.tab === 'latest' && lastVisit > 0 && active > lastVisit && (rows[i + 1]?.active ?? 0) <= lastVisit && i < rows.length - 1
+            return (
+              <div key={post.id}>
+                <PostRow post={post} away={away} active={active} />
+                {divide && <div className="section since">Since your last visit ↑</div>}
+              </div>
+            )
+          })
+        )}
       </div>
-    ))
-  )}
-</div>
+      <footer className="feed-foot muted small">
+        {plural(rows.length, 'pin')} · {UI.then === null ? TAB_ORDER[UI.tab] : 'as it was then'}
+      </footer>
+    </aside>
+  )
+}
 
-<textarea
-  value={replyText}
-  onChange={(event) => setReplyText(event.target.value)}
-  placeholder="Write a reply..."
-  rows={3}
-  style={{
-    width: '100%',
-    boxSizing: 'border-box',
-    padding: '12px',
-    border: '1px solid #ccc',
-    borderRadius: '10px',
-    fontSize: '14px',
-    resize: 'vertical',
-    marginBottom: '10px',
-  }}
-/>
+function FlairPick({ value, onPick }: { value: Flair; onPick: (flair: Flair) => void }) {
+  return (
+    <div className="flair-pick" role="radiogroup" aria-label="Kind of pin">
+      {(Object.keys(flairs) as Flair[]).filter((f) => f !== 'snap' || value === 'snap').map((f) => (
+        <button key={f} role="radio" aria-checked={value === f} className={value === f ? 'on' : ''} style={{ '--c': flairs[f].color } as React.CSSProperties} onClick={() => onPick(f)}>
+          <Blip flair={f} size={26} />
+          <span>{flairs[f].label}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
 
-<button
-  onClick={handleCreateReply}
-  disabled={!replyText.trim()}
-  style={{
-    width: '100%',
-    border: 'none',
-    background: replyText.trim() ? '#000' : '#ccc',
-    color: 'white',
-    padding: '12px',
-    borderRadius: '10px',
-    fontSize: '15px',
-    fontWeight: 600,
-    cursor: replyText.trim()
-      ? 'pointer'
-      : 'not-allowed',
-  }}
->
-  Reply
-</button>
-  </aside>
-)}
+//
+// A pin and its thread.
+//
 
-      {/* Location selection message */}
-      {showAddForm && isChoosingLocation && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '20px',
-            left: '390px',
-            zIndex: 20,
-            background: 'white',
-            padding: '14px 20px',
-            borderRadius: '14px',
-            boxShadow: '0 4px 15px rgba(0, 0, 0, 0.25)',
-            fontFamily: 'Arial, sans-serif',
-          }}
-        >
-          <strong>
-            Tap the map to choose a location
-          </strong>
+function PostView({ post }: { post: Post }) {
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(post.title)
+  const [body, setBody] = useState(post.description)
+  const [starts, setStarts] = useState(post.starts_at ? toLocalInput(post.starts_at) : '')
+  const [flair, setFlair] = useState<Flair>(post.flair)
+  const [doomedReply, setDoomedReply] = useState<string | null>(null) // a reply of mine waiting for "really?"
+  const [reporting, setReporting] = useState(false)
+  const [sending, setSending] = useState(false) // choosing a friend to send the pin to
+  const [history, setHistory] = useState<Revision[] | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [lightbox, setLightbox] = useState<string | null>(null)
+  const endRef = useRef<HTMLDivElement>(null)
+
+  const me = S.userId
+  const mine = !!me && post.author_id === me
+  const replies = S.replies.filter((r) => r.post_id === post.id && !(r.author_id && S.blocked.has(r.author_id)))
+  const said = replies.filter((r) => !r.deleted_at).length
+  const tree = threadOf(replies, (a: Reply, b: Reply) => time(a.created_at) - time(b.created_at))
+  const people = [...new Set([post.author_id, ...replies.map((r) => r.author_id), ...friendIds(), ...S.profiles.keys()])].filter(
+    (id): id is string => !!id && id !== me && !S.blocked.has(id),
+  )
+  const { likes, liked } = stats()
+  const media = S.media.filter((m) => m.post_id === post.id && !(m.author_id && S.blocked.has(m.author_id)))
+  const [adding, setAdding] = useState(false) // photos on their way up
+  const interested = S.interests.filter((i) => i.post_id === post.id).map((i) => i.user_id)
+  const iAmIn = !!me && interested.includes(me)
+  const saved = S.saved.some((s) => s.post_id === post.id)
+  const siblings = S.posts.filter((p) => placeKey(p) === placeKey(post))
+  const f = flairs[post.flair] ?? flairs.general
+  const street = map ? nearestStreet(map, post.longitude, post.latitude) : ''
+  const away = fromMe(post)
+  const soon = post.starts_at ? soonText(post.starts_at) : null
+
+  // Opening a pin reads its notifications.
+  const unread = S.notifications.filter((n) => n.post_id === post.id && !n.read_at).map((n) => n.id).join(',')
+  useEffect(() => {
+    if (unread) markNotificationsRead(unread.split(','))
+  }, [unread])
+
+  async function save() {
+    if (!title.trim()) return
+    if (await updatePost(post.id, { title: title.trim(), description: body.trim(), flair, starts_at: fromLocalInput(starts) })) {
+      setEditing(false)
+      setHistory(null)
+    } else failed("Couldn't save")
+  }
+
+  async function remove() {
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      setTimeout(() => setConfirmDelete(false), 4000)
+      return
+    }
+    if (await deletePost(post.id)) {
+      go('')
+      toast('Pin deleted')
+    } else failed("Couldn't delete")
+  }
+
+  async function copyLink() {
+    // Phones get their own share sheet; everything else copies the link.
+    if (narrow() && navigator.share) {
+      navigator.share({ title: post.title, text: post.description.slice(0, 140), url: window.location.href }).catch(() => {})
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(window.location.href)
+      toast('Link copied')
+    } catch {
+      toast(window.location.href)
+    }
+  }
+
+  const interestedNames = interested.map((id) => (id === me ? 'You' : nameOf(id)))
+
+  return (
+    <Panel
+      title={f.label}
+      icon={<Blip flair={post.flair} size={24} />}
+      onBack={siblings.length > 1 ? () => go(`place/${placeKey(post)}`) : undefined}
+      foot={
+        editing ? undefined : me ? (
+          <Composer
+            people={people}
+            placeholder={`Reply to ${post.author_id ? firstName(post.author_id) : 'this pin'}…`}
+            attach
+            onSend={async (text, files) => {
+              const ok = await reply(post.id, text, null, files)
+              if (ok) setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+              return ok
+            }}
+          />
+        ) : (
+          <button className="btn wide" onClick={() => needAccount('signup')}>
+            Join to reply
+          </button>
+        )
+      }
+    >
+      <div className="author">
+        <button className="person" onClick={() => post.author_id && go(`user/${post.author_id}`)} disabled={!post.author_id}>
+          <Avatar id={post.author_id} size={38} dot />
+          <div>
+            <strong>{authorName(post)}</strong>
+            <div className="muted small">
+              {ago(post.created_at)}
+              {street && ` · ${street}`}
+              {away !== null && ` · ${awayText(away)}`}
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {post.resolved_at && (
+        <div className="banner ok">
+          <Icon name="check" size={16} /> Resolved {ago(post.resolved_at)}
+          {mine && (
+            <button className="link" onClick={() => updatePost(post.id, { resolved_at: null })}>
+              Reopen
+            </button>
+          )}
         </div>
       )}
 
-      {/* Side panel */}
-      {showAddForm && (
-        <aside
-          style={{
-            position: 'absolute',
-            top: '16px',
-            left: '16px',
-            bottom: '16px',
-            width: '340px',
-            zIndex: 20,
-            background: 'white',
-            borderRadius: '20px',
-            padding: '24px',
-            boxSizing: 'border-box',
-            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.25)',
-            fontFamily: 'Arial, sans-serif',
-            overflowY: 'auto',
-          }}
-        >
-          <h2
-            style={{
-              margin: '0 0 24px',
-              fontSize: '24px',
-              fontWeight: 700,
-              color: '#111',
-            }}
-          >
-            Create a thread
-          </h2>
-
-          <label
-            style={{
-              display: 'block',
-              marginBottom: '6px',
-              fontWeight: 600,
-              color: '#333',
-            }}
-          >
-            Title
+      {editing ? (
+        <div className="stack">
+          <FlairPick value={flair} onPick={setFlair} />
+          <input className="input title-input" value={title} maxLength={120} onChange={(e) => setTitle(e.target.value)} autoFocus />
+          <textarea className="input" rows={5} value={body} maxLength={post.flair === 'story' ? 10000 : 2000} onChange={(e) => setBody(e.target.value)} />
+          <label className="field when-field">
+            <span>
+              When <em className="muted">· optional</em>
+            </span>
+            <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
           </label>
-
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="e.g. BBQ tonight"
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              padding: '12px',
-              marginBottom: '20px',
-              border: '1px solid #ccc',
-              borderRadius: '10px',
-              fontSize: '16px',
-            }}
-          />
-
-          <label
-            style={{
-              display: 'block',
-              marginBottom: '6px',
-              fontWeight: 600,
-              color: '#333',
-            }}
-          >
-            Description
-          </label>
-
-          <textarea
-            value={description}
-            onChange={(event) =>
-              setDescription(event.target.value)
-            }
-            placeholder="What's happening?"
-            rows={6}
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
-              padding: '12px',
-              marginBottom: '20px',
-              border: '1px solid #ccc',
-              borderRadius: '10px',
-              fontSize: '16px',
-              resize: 'vertical',
-            }}
-          />
-
-          {/* Location */}
-          <div
-            style={{
-              border: '1px solid #ddd',
-              borderRadius: '12px',
-              padding: '14px',
-              marginBottom: '24px',
-            }}
-          >
-            <div
-              style={{
-                fontSize: '13px',
-                color: '#666',
-                marginBottom: '6px',
-              }}
-            >
-              Location
-            </div>
-
-            <div
-              style={{
-                fontWeight: 600,
-                color: '#222',
-                marginBottom: '12px',
-              }}
-            >
-              📍 {locationStatus}
-            </div>
-
-            <button
-              onClick={() => {
-                setIsChoosingLocation(true)
-                setLocationStatus(
-                  'Tap the map to choose a location',
-                )
-              }}
-              style={{
-                width: '100%',
-                border: 'none',
-                background: '#f3f4f6',
-                color: '#222',
-                padding: '11px 14px',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Change location
-            </button>
-          </div>
-
-          {/* Actions */}
-          <div
-            style={{
-              display: 'flex',
-              gap: '10px',
-            }}
-          >
-            <button
-              onClick={handleCloseForm}
-              style={{
-                flex: 1,
-                border: '1px solid #ccc',
-                background: 'white',
-                color: '#333',
-                padding: '12px',
-                borderRadius: '10px',
-                fontSize: '16px',
-                cursor: 'pointer',
-              }}
-            >
+          <div className="btn-row">
+            <button className="btn" onClick={() => setEditing(false)}>
               Cancel
             </button>
-
-            <button
-              onClick={handleCreatePost}
-              disabled={
-                !title.trim() ||
-                !description.trim() ||
-                !selectedLocation
-              }
-              style={{
-                flex: 1,
-                border: 'none',
-                background:
-                  !title.trim() ||
-                  !description.trim() ||
-                  !selectedLocation
-                    ? '#ccc'
-                    : '#000',
-                color: 'white',
-                padding: '12px',
-                borderRadius: '10px',
-                fontSize: '16px',
-                fontWeight: 600,
-                cursor:
-                  !title.trim() ||
-                  !description.trim() ||
-                  !selectedLocation
-                    ? 'not-allowed'
-                    : 'pointer',
-              }}
-            >
-              Post
+            <button className="btn primary" onClick={save} disabled={!title.trim()}>
+              Save
             </button>
           </div>
-        </aside>
+        </div>
+      ) : (
+        <>
+          <div className="post-top">
+            <VoteBox post={post} />
+            <h1 className="post-title">{post.title}</h1>
+          </div>
+          <LoreLine post={post} />
+          {post.blocks && post.blocks.length > 0 && <Covers post={post} />}
+          {post.starts_at && (
+            <div className={soon === 'now' ? 'when-line now' : 'when-line'}>
+              <Icon name="calendar" size={16} />
+              <strong>{whenText(post.starts_at)}</strong>
+              {soon === null && <span className="muted">· over</span>}
+              {soon === 'now' && <span>· happening now</span>}
+              {soon?.startsWith('in ') && <span className="muted">· {soon}</span>}
+              {soon !== null && (
+                <button className="link small when-add" onClick={() => addToCalendar(post, street)} title="Save it to your calendar">
+                  Add to calendar
+                </button>
+              )}
+            </div>
+          )}
+          {post.description && (
+            <p className="post-body">
+              <Linked text={post.description} />
+            </p>
+          )}
+        </>
+      )}
+
+      {post.edited_at && !editing && (
+        <div className="muted small">
+          Edited {ago(post.edited_at)} ·{' '}
+          <button className="link" onClick={async () => setHistory(history ? null : await loadRevisions(post.id))}>
+            {history ? 'hide history' : 'history'}
+          </button>
+        </div>
+      )}
+      {history && (
+        <div className="history">
+          {history.map((rev) => (
+            <div key={rev.id}>
+              <div className="muted small">Before {ago(rev.replaced_at)}</div>
+              <strong>{rev.title}</strong>
+              <p>{rev.description}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {media.length > 0 && (
+        <div className="gallery">
+          {media.map((m) => (
+            <figure key={m.id}>
+              {m.media_type === 'video' ? (
+                <video src={m.url} controls preload="metadata" />
+              ) : (
+                <button onClick={() => setLightbox(m.url)}>
+                  <img src={m.url} alt="" loading="lazy" />
+                </button>
+              )}
+              {m.author_id && m.author_id !== post.author_id && (
+                <figcaption>
+                  <Avatar id={m.author_id} size={18} /> {firstName(m.author_id)}
+                </figcaption>
+              )}
+              {m.author_id === me && m.author_id !== post.author_id && (
+                <button className="icon-btn take-down" title="Take it down" aria-label="Take it down" onClick={() => removeMedia(m.id).then((ok) => ok || failed("Couldn't take it down"))}>
+                  <Icon name="close" size={14} />
+                </button>
+              )}
+            </figure>
+          ))}
+        </div>
+      )}
+      {me && !editing && post.flair !== 'snap' && (
+        <label className="add-photos">
+          <input
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            hidden
+            onChange={async (e) => {
+              const files = Array.from(e.target.files ?? []).slice(0, 6)
+              e.target.value = ''
+              if (!files.length) return
+              setAdding(true)
+              const ok = await addMedia(post.id, files)
+              setAdding(false)
+              if (!ok) failed("Couldn't add them")
+            }}
+          />
+          <Icon name="image" size={16} />
+          {adding ? 'Adding…' : post.flair === 'event' ? 'Add your photos from it' : mine ? 'Add photos or video' : 'Add your photos'}
+        </label>
+      )}
+      {lightbox && (
+        <div className="lightbox" onClick={() => setLightbox(null)}>
+          <img src={lightbox} alt="" />
+        </div>
+      )}
+
+      {!editing && (
+        <>
+          <div className="actions">
+            <button className={iAmIn ? 'btn on' : 'btn'} aria-pressed={iAmIn} onClick={() => interest(post.id)}>
+              <Icon name="thumb" size={16} /> {iAmIn ? "I'm in" : 'Interested'}
+              {interested.length > 0 && <b>{interested.length}</b>}
+            </button>
+            {me && (
+              <button className={saved ? 'btn on gold' : 'btn'} aria-pressed={saved} onClick={() => saveToggle(post.id, saved)}>
+                <Icon name="star" size={16} /> {saved ? 'Saved' : 'Save'}
+              </button>
+            )}
+            {me && post.author_id && !mine && (
+              <button className="btn" onClick={() => go(`chat/${post.author_id}`)}>
+                <Icon name="chat" size={16} /> Message
+              </button>
+            )}
+            {me && friendIds().length > 0 && (
+              <button className={sending ? 'btn on' : 'btn'} onClick={() => setSending(!sending)} title="Send to a friend">
+                <Icon name="send" size={16} />
+              </button>
+            )}
+            <button className="btn" onClick={copyLink} title="Copy link">
+              <Icon name="link" size={16} />
+            </button>
+            <button className={UI.walk === `pin/${post.id}` ? 'btn on' : 'btn'} aria-pressed={UI.walk === `pin/${post.id}`} onClick={() => walkTo(`pin/${post.id}`)} title="The way there on foot">
+              <Icon name="arrow" size={16} /> Get there
+            </button>
+            {me && (
+              <button
+                className={isBoosted(post) ? 'btn on gold' : 'btn'}
+                title={`Make it stand out on the map and top the feed for 12 hours: ${BOOST_SPARKS} sparks`}
+                onClick={async () => {
+                  const have = S.profiles.get(me)?.sparks ?? 0
+                  if (have < BOOST_SPARKS) return toast(`A boost is ${BOOST_SPARKS} sparks; you have ${have}. Come back tomorrow for more.`)
+                  if (await boostPost(post.id)) celebrate('Boosted', `${post.title} stands out for 12 hours`)
+                  else failed("Couldn't boost it")
+                }}
+              >
+                <Icon name="up" size={16} /> Boost <small>✨{BOOST_SPARKS}</small>
+              </button>
+            )}
+          </div>
+
+          {sending && (
+            <div className="send-to">
+              <span className="muted small">Send to</span>
+              {friendIds().map((id) => (
+                <button
+                  key={id}
+                  className="chip-person"
+                  onClick={async () => {
+                    setSending(false)
+                    if (await sendMessage(id, `${post.title} ${pinLink(post)}`)) toast(`Sent to ${firstName(id)}`)
+                    else failed("Couldn't send")
+                  }}
+                >
+                  <Avatar id={id} size={22} />
+                  {firstName(id)}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {mine && (
+            <div className="actions">
+              <button className="btn" onClick={() => setEditing(true)}>
+                <Icon name="pencil" size={16} /> Edit
+              </button>
+              {!post.resolved_at && (
+                <button className="btn" onClick={() => resolve(post.id)} title="Done, found, sorted: moves it to Past">
+                  <Icon name="check" size={16} /> Resolve
+                </button>
+              )}
+              <button className={confirmDelete ? 'btn danger' : 'btn'} onClick={remove}>
+                <Icon name="trash" size={16} /> {confirmDelete ? 'Really delete?' : 'Delete'}
+              </button>
+            </div>
+          )}
+
+          {me && !mine && post.author_id && (
+            <div className="report">
+              {reporting ? (
+                <>
+                  <span className="muted small">What's wrong with it?</span>
+                  {(
+                    [
+                      ['spam', 'Spam or ad'],
+                      ['unkind', 'Unkind or hateful'],
+                      ['unsafe', 'Unsafe or illegal'],
+                      ['other', 'Something else'],
+                    ] as const
+                  ).map(([reason, label]) => (
+                    <button
+                      key={reason}
+                      className="btn small"
+                      onClick={async () => {
+                        setReporting(false)
+                        if (await report(post.id, reason)) toast('Thanks, someone will take a look')
+                        else failed("Couldn't send the report")
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <button className="link small" onClick={() => setReporting(false)}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button className="link small quiet-danger" onClick={() => setReporting(true)}>
+                  Report this pin
+                </button>
+              )}
+            </div>
+          )}
+
+          {interested.length > 0 && (
+            <div className="facepile">
+              <span>
+                {interested.slice(0, 5).map((id) => (
+                  <Avatar key={id} id={id} size={24} />
+                ))}
+              </span>
+              <span className="muted small">
+                {interestedNames.length <= 2
+                  ? `${interestedNames.join(' and ')} ${interestedNames.length === 1 && interestedNames[0] !== 'You' ? 'is' : 'are'} in`
+                  : `${interestedNames.slice(0, 2).join(', ')} and ${plural(interestedNames.length - 2, 'other')} are in`}
+              </span>
+            </div>
+          )}
+
+          <div className="section">{said ? plural(said, 'reply', 'replies') : 'Replies'}</div>
+          {said === 0 && <p className="muted">No replies yet. Start the conversation.</p>}
+          {tree.top.map((r) => (
+            <Thread
+              key={r.id}
+              item={r}
+              below={tree.below}
+              people={people}
+              answer={(r, text, files) => reply(post.id, text, r.id, files)}
+              main={(r, answer) =>
+                r.deleted_at ? (
+                  <div className="comment-text muted">[deleted]</div>
+                ) : (
+                  <>
+                    <div className="comment-head small">
+                      <button className="plain" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
+                        <Avatar id={r.author_id} size={22} />
+                      </button>
+                      <button className="plain name" onClick={() => r.author_id && go(`user/${r.author_id}`)}>
+                        {authorName(r)}
+                      </button>
+                      {r.author_id === post.author_id && post.author_id && <span className="tag">author</span>}
+                      <span className="muted"> · {ago(r.created_at)}</span>
+                      {me && r.author_id === me && (
+                        <button
+                          className={doomedReply === r.id ? 'link danger-link' : 'link quiet'}
+                          onClick={async () => {
+                            if (doomedReply !== r.id) return setDoomedReply(r.id)
+                            if (!(await deleteReply(r.id))) failed("Couldn't delete")
+                          }}
+                          onBlur={() => setDoomedReply(null)}
+                        >
+                          {doomedReply === r.id ? 'really delete?' : 'delete'}
+                        </button>
+                      )}
+                    </div>
+                    {r.content && (
+                      <div className="comment-text reply-text">
+                        <Mentions text={r.content} />
+                      </div>
+                    )}
+                    {media.some((m) => m.reply_id === r.id) && (
+                      <div className="reply-media">
+                        {media
+                          .filter((m) => m.reply_id === r.id)
+                          .map((m) =>
+                            m.media_type === 'video' ? (
+                              <video key={m.id} src={m.url} controls preload="metadata" />
+                            ) : (
+                              <button key={m.id} onClick={() => setLightbox(m.url)}>
+                                <img src={m.url} alt="" loading="lazy" />
+                              </button>
+                            ),
+                          )}
+                      </div>
+                    )}
+                    <div className="comment-actions">
+                      <button
+                        className={liked.has(r.id) ? 'like on' : 'like'}
+                        aria-pressed={liked.has(r.id)}
+                        aria-label={liked.has(r.id) ? 'Unlike' : 'Like'}
+                        onClick={() => !needAccount() && toggleLike(r.id).then((ok) => ok || failed("Couldn't update"))}
+                      >
+                        <Icon name="heart" size={13} />
+                        {(likes.get(r.id) ?? 0) > 0 && <span>{likes.get(r.id)}</span>}
+                      </button>
+                      <button className="link answer" onClick={answer}>
+                        Reply
+                      </button>
+                    </div>
+                  </>
+                )
+              }
+            />
+          ))}
+        </>
+      )}
+      <div ref={endRef} />
+    </Panel>
+  )
+}
+
+// Up and down, Reddit-style. Enough up and it's a legend.
+function VoteBox({ post }: { post: Post }) {
+  const { score, myVote } = stats()
+  const mine = myVote.get(post.id)
+  const cast = async (value: 1 | -1) => {
+    if (needAccount()) return
+    const was = post.legend_at
+    if (!(await votePost(post.id, value))) failed("Couldn't vote")
+    else if (!was && value === 1) play('tick')
+  }
+  return (
+    <div className="votes big">
+      <button className={mine === 1 ? 'on' : ''} onClick={() => cast(1)} aria-label="Up" title="Up">
+        <Icon name="up" size={16} />
+      </button>
+      <b>{score.get(post.id) ?? 0}</b>
+      <button className={mine === -1 ? 'on down' : ''} onClick={() => cast(-1)} aria-label="Down" title="Down">
+        <Icon name="down" size={16} />
+      </button>
+    </div>
+  )
+}
+
+// A legend says so; a snap says how long it has; lore-ish pins say how close they are.
+function LoreLine({ post }: { post: Post }) {
+  const score = stats().score.get(post.id) ?? 0
+  if (post.legend_at) {
+    return (
+      <div className="when-line legend">
+        <Icon name="star" size={16} />
+        <strong>Legend</strong>
+        <span className="muted">· voted into the lore {ago(post.legend_at)}; it stays on the map for good</span>
+      </div>
+    )
+  }
+  const lore = post.flair === 'sighting' || post.flair === 'story' || post.flair === 'snap'
+  const left = msLeft(post.expires_at)
+  if (!lore && left === null) return null
+  const need = Math.max(1, LEGEND_VOTES - score)
+  return (
+    <div className="when-line lore">
+      <Icon name={left !== null ? 'clock' : 'star'} size={16} />
+      <span>
+        {left !== null && <strong>Gone in {left > 3600000 ? `${Math.ceil(left / 3600000)}h` : `${Math.max(1, Math.ceil(left / 60000))}m`}</strong>}
+        {left !== null ? ` unless it's voted a Legend: ${plural(need, 'more up-vote')}` : `${plural(need, 'more up-vote')} and it's a Legend, on the map for good`}
+      </span>
+    </div>
+  )
+}
+
+function PlaceView({ id }: { id: string }) {
+  const posts = S.posts.filter((p) => placeKey(p) === id)
+  if (!posts.length) return <Missing what="place" />
+  const street = map ? nearestStreet(map, posts[0].longitude, posts[0].latitude) : ''
+  return (
+    <Panel title={street || plural(posts.length, 'thread') + ' here'} icon={<Icon name="pin" />}>
+      <p className="muted small">{plural(posts.length, 'thread')} at this spot</p>
+      {sortedFeed(posts).map(({ post, away, active }) => (
+        <PostRow key={post.id} post={post} away={away} active={active} />
+      ))}
+    </Panel>
+  )
+}
+
+// Private pages when signed out: say why, and offer the way in.
+function SignInFirst({ title, icon, why }: { title: string; icon: IconName; why: string }) {
+  if (!S.authKnown) return <Panel title={title}>{null}</Panel>
+  return (
+    <Panel title={title} icon={<Icon name={icon} />}>
+      <Empty icon={icon}>{why}</Empty>
+      <div className="btn-row center">
+        <button className="btn primary" onClick={() => ui({ auth: 'signup' })}>
+          Create account
+        </button>
+        <button className="btn" onClick={() => ui({ auth: 'signin' })}>
+          Sign in
+        </button>
+      </div>
+    </Panel>
+  )
+}
+
+function Missing({ what }: { what: string }) {
+  return (
+    <Panel title="Not found">
+      <Empty icon="map">{S.ready ? `This ${what} is gone, or never existed.` : 'Loading…'}</Empty>
+    </Panel>
+  )
+}
+
+//
+// People.
+//
+
+function FriendButton({ id }: { id: string }) {
+  const f = friendshipWith(id)
+  if (!S.userId || id === S.userId) return null
+
+  if (!f) {
+    return (
+      <button className="btn" onClick={() => befriend(id)}>
+        <Icon name="userplus" size={16} /> Add friend
+      </button>
+    )
+  }
+  if (f.accepted_at) {
+    return (
+      <button className="btn on" onClick={() => confirm(`Remove ${nameOf(id)} from friends?`) && removeFriend(id)} title="Remove friend">
+        <Icon name="check" size={16} /> Friends
+      </button>
+    )
+  }
+  if (f.addressee === S.userId) {
+    return (
+      <>
+        <button className="btn primary" onClick={() => accept(id)}>
+          <Icon name="check" size={16} /> Accept
+        </button>
+        <button className="btn" onClick={() => removeFriend(id)}>
+          Decline
+        </button>
+      </>
+    )
+  }
+  return (
+    <button className="btn" onClick={() => removeFriend(id)} title="Cancel request">
+      Requested
+    </button>
+  )
+}
+
+// A friend who shares where they are: look, or go.
+function FriendWhere({ id }: { id: string }) {
+  const loc = locationOf(id)
+  if (!loc) return null
+  const going = UI.walk === `user/${id}`
+  return (
+    <div className="btn-row">
+      <button className="btn grow" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
+        <Icon name="locate" size={16} /> Show on the map
+      </button>
+      <button className={going ? 'btn grow on' : 'btn grow'} aria-pressed={going} onClick={() => walkTo(`user/${id}`)}>
+        <Icon name="arrow" size={16} /> Get there
+      </button>
+    </div>
+  )
+}
+
+function ProfileView({ id }: { id: string }) {
+  const profile = S.profiles.get(id)
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState('')
+  const [area, setArea] = useState('')
+  const [bio, setBio] = useState('')
+
+  if (!profile) return <Missing what="person" />
+
+  const own = id === S.userId
+  const posts = S.posts.filter((p) => p.author_id === id)
+  const replyCount = S.replies.filter((r) => r.author_id === id).length
+  const joinedCount = S.interests.filter((i) => i.user_id === id).length
+
+  async function save() {
+    const ok = await saveProfile({ display_name: name.trim(), neighbourhood: area.trim() || null, bio: bio.trim() || null })
+    if (ok) {
+      setEditing(false)
+      toast('Profile saved')
+    } else failed("Couldn't save")
+  }
+
+  return (
+    <Panel title={own ? 'You' : 'Profile'} icon={<Icon name="user" />} className="tall">
+      <div className="profile-card">
+        {own ? (
+          <label className="photo-pick" title="Change your photo">
+            <Avatar id={id} size={64} />
+            <span>
+              <Icon name="image" size={14} />
+            </span>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) uploadAvatar(file).then((ok) => (ok ? toast('Photo updated') : failed("Couldn't update your photo")))
+              }}
+            />
+          </label>
+        ) : (
+          <Avatar id={id} size={64} dot />
+        )}
+        <div>
+          <h1>{profile.display_name}</h1>
+          <SparkBadge id={id} />
+          <div className="muted small">
+            {profile.neighbourhood && <>{profile.neighbourhood} · </>}
+            Joined {new Date(profile.created_at).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
+            {isOnline(id) && <span className="online-text"> · online</span>}
+          </div>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="stack">
+          <label className="field">
+            <span>Name</span>
+            <input className="input" value={name} maxLength={50} onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Neighbourhood</span>
+            <input className="input" value={area} maxLength={80} placeholder="e.g. Kent Town" onChange={(e) => setArea(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>About you</span>
+            <textarea className="input" rows={4} value={bio} maxLength={500} placeholder="What you're into, what you can help with…" onChange={(e) => setBio(e.target.value)} />
+          </label>
+          <div className="btn-row">
+            <button className="btn" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button className="btn primary" onClick={save} disabled={!name.trim()}>
+              Save
+            </button>
+          </div>
+        </div>
+      ) : (
+        profile.bio && (
+          <p className="post-body">
+            <Linked text={profile.bio} />
+          </p>
+        )
+      )}
+
+      {/* On your own profile the numbers are a way into the feed's Mine tab. */}
+      <div className="stats">
+        {(
+          [
+            [posts.length, 'pins'],
+            [replyCount, 'replies'],
+            [joinedCount, 'joined'],
+          ] as const
+        ).map(([count, label]) => (
+          <button key={label} disabled={!own} onClick={() => { ui({ tab: 'mine', feed: true }); go('') }} title={own ? 'Show them in the feed' : undefined}>
+            <b>{count}</b>
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="actions">
+        {own ? (
+          !editing && (
+            <>
+              <button
+                className="btn"
+                onClick={() => {
+                  // Fill the form from the profile as it is now, not as it was on first render.
+                  setName(profile.display_name)
+                  setArea(profile.neighbourhood ?? '')
+                  setBio(profile.bio ?? '')
+                  setEditing(true)
+                }}
+              >
+                <Icon name="pencil" size={16} /> Edit profile
+              </button>
+              <button className="btn" onClick={() => go('friends')}>
+                <Icon name="users" size={16} /> Friends
+              </button>
+              <button className="btn" onClick={() => go('settings')}>
+                <Icon name="sliders" size={16} /> Settings
+              </button>
+            </>
+          )
+        ) : (
+          <>
+            {S.userId && (
+              <button className="btn primary" onClick={() => go(`chat/${id}`)}>
+                <Icon name="chat" size={16} /> Message
+              </button>
+            )}
+            <FriendButton id={id} />
+          </>
+        )}
+      </div>
+      {!own && <FriendWhere id={id} />}
+
+      {!own && S.userId && (
+        <div className="actions">
+          {S.blocked.has(id) ? (
+            <button className="link small" onClick={() => unblock(id).then((ok) => (ok ? toast(`Unblocked ${nameOf(id)}`) : failed("Couldn't unblock")))}>
+              Unblock {firstName(id)}
+            </button>
+          ) : (
+            <button
+              className="link small quiet-danger"
+              onClick={() => confirm(`Block ${nameOf(id)}? They won't be able to message you or add you, and you won't see their pins.`) && block(id).then((ok) => (ok ? toast(`Blocked ${nameOf(id)}`) : failed("Couldn't block")))}
+            >
+              Block {firstName(id)}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="section">{own ? 'Your pins' : 'Pins'}</div>
+      {posts.length === 0 ? (
+        <p className="muted">{own ? "You haven't pinned anything yet." : 'No pins yet.'}</p>
+      ) : (
+        sortedFeed(posts).map(({ post, away, active }) => <PostRow key={post.id} post={post} away={away} active={active} />)
+      )}
+
+      <Activity id={id} />
+
+      {own && (
+        <div className="foot-links">
+          <span className="muted small clip">{S.session?.user.email}</span>
+          <button className="link" onClick={signOut}>
+            Sign out
+          </button>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+// What someone has been up to on the map, newest first, from what's already loaded.
+function Activity({ id }: { id: string }) {
+  const [limit, setLimit] = useState(6)
+  const byId = new Map(S.posts.filter((p) => !(p.author_id && S.blocked.has(p.author_id))).map((p) => [p.id, p]))
+  const items: { key: string; time: number; icon: IconName; verb: string; post: Post; quote?: string }[] = []
+
+  for (const post of byId.values()) {
+    if (post.author_id !== id) continue
+    items.push({ key: `p${post.id}`, time: time(post.created_at), icon: 'pin', verb: 'Pinned', post })
+    if (post.resolved_at) items.push({ key: `r${post.id}`, time: time(post.resolved_at), icon: 'check', verb: 'Resolved', post })
+  }
+  for (const r of S.replies) {
+    const post = byId.get(r.post_id)
+    if (r.author_id === id && post) items.push({ key: `c${r.id}`, time: time(r.created_at), icon: 'chat', verb: 'Replied to', post, quote: r.content })
+  }
+  for (const i of S.interests) {
+    const post = byId.get(i.post_id)
+    if (i.user_id === id && post) items.push({ key: `i${post.id}`, time: time(i.created_at), icon: 'thumb', verb: "Is in on", post })
+  }
+  items.sort((a, b) => b.time - a.time)
+  if (!items.length) return null
+
+  return (
+    <>
+      <div className="section">Activity</div>
+      {items.slice(0, limit).map((item) => (
+        <button key={item.key} className="row activity" onClick={() => openPin(item.post)}>
+          <span className="activity-icon">
+            <Icon name={item.icon} size={14} />
+          </span>
+          <div className="row-main">
+            <div className="clip">
+              {item.verb} <strong>{item.post.title}</strong>
+            </div>
+            {item.quote && <div className="muted clip">“{item.quote}”</div>}
+          </div>
+          <span className="muted small nowrap">{ago(item.time)}</span>
+        </button>
+      ))}
+      {items.length > limit && (
+        <button className="link small" onClick={() => setLimit(limit + 10)}>
+          More
+        </button>
+      )}
+    </>
+  )
+}
+
+async function signOut() {
+  if (S.sharing) await setSharing(false)
+  await checkOut()
+  await supabase.auth.signOut()
+  UI.tab = 'around'
+  go('')
+  toast('Signed out')
+}
+
+function ChatView({ id }: { id: string }) {
+  const endRef = useRef<HTMLDivElement>(null)
+  const typing = useRef<ReturnType<typeof typingChannel> | null>(null)
+  const [typingAt, setTypingAt] = useState(0)
+  const me = S.userId
+
+  useEffect(() => {
+    if (!me || id === me) return
+    const channel = typingChannel(id, () => setTypingAt(Date.now()))
+    typing.current = channel
+    return () => channel.close()
+  }, [id, me])
+
+  // "typing…" goes away after a few quiet seconds.
+  useEffect(() => {
+    if (!typingAt) return
+    const timer = setTimeout(() => setTypingAt(0), 3000)
+    return () => clearTimeout(timer)
+  }, [typingAt])
+
+  const thread = S.messages.filter((m) => (m.sender_id === id && m.recipient_id === S.userId) || (m.recipient_id === id && m.sender_id === S.userId))
+  const unread = thread.some((m) => m.sender_id === id && !m.read_at)
+  const loc = locationOf(id)
+  const away = fromMe(loc)
+
+  useEffect(() => {
+    if (unread) markConversationRead(id)
+  }, [unread, id])
+
+  useLayoutEffect(() => {
+    endRef.current?.scrollIntoView()
+  }, [thread.length])
+
+  if (!S.userId) return <SignInFirst title="Messages" icon="chat" why="Sign in to message your neighbours." />
+  if (id === S.userId) return <Missing what="conversation" />
+
+  return (
+    <Panel
+      title={
+        <button className="plain person-title" onClick={() => go(`user/${id}`)}>
+          <Avatar id={id} size={28} dot />
+          <span>
+            {nameOf(id)}
+            <small className="muted">
+              {typingAt ? <em className="typing">typing…</em> : isOnline(id) ? 'online' : 'offline'}
+              {loc && ` · ${away !== null ? awayText(away) : 'on the map'}, ${since(loc.updated_at)}`}
+            </small>
+          </span>
+        </button>
+      }
+      onBack={() => go('inbox')}
+      className="chat"
+      foot={<Composer placeholder={`Message ${firstName(id)}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} onType={() => typing.current?.ping()} />}
+    >
+      <FriendWhere id={id} />
+      {thread.length === 0 && (
+        <Empty icon="chat">
+          Say hi to {firstName(id)}. Messages are private between you two.
+        </Empty>
+      )}
+      <div className="bubbles">
+        {thread.map((m, i) => {
+          const day = dayLabel(m.created_at)
+          const showDay = i === 0 || day !== dayLabel(thread[i - 1].created_at)
+          const mineMsg = m.sender_id === S.userId
+          const next = thread[i + 1]
+          const tail = !next || next.sender_id !== m.sender_id || time(next.created_at) - time(m.created_at) > 300000
+          return (
+            <div key={m.id} className="bubble-wrap">
+              {showDay && <div className="day">{day}</div>}
+              <div className={`bubble ${mineMsg ? 'out' : 'in'}${tail ? ' tail' : ''}`}>
+                <Linked text={m.body} />
+                {tail && (
+                  <span className="stamp">
+                    {new Date(m.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                    {mineMsg && m.id === thread.filter((x) => x.sender_id === S.userId).at(-1)?.id && (m.read_at ? ' · seen' : ' · sent')}
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <div ref={endRef} />
+    </Panel>
+  )
+}
+
+//
+// Inbox: notifications and conversations.
+//
+
+function InboxView() {
+  const [tab, setTab] = useState<'activity' | 'messages'>(unreadMessages().length > 0 ? 'messages' : 'activity')
+  if (!S.userId) return <SignInFirst title="Inbox" icon="bell" why="Replies to your pins, friend requests and messages land here." />
+
+  const notifications = visibleNotifications().reverse()
+  const unreadCount = notifications.filter((n) => !n.read_at).length
+  const convos = conversations()
+
+  // The same thing happening on the same pin on the same day is one row:
+  // "Tom, Priya and 1 other replied to your pin".
+  const groups: Notification[][] = []
+  for (const n of notifications) {
+    const last = groups.at(-1)?.[0]
+    const alike = last && n.post_id && last.post_id === n.post_id && last.kind === n.kind && dayLabel(last.created_at) === dayLabel(n.created_at)
+    if (alike) groups.at(-1)!.push(n)
+    else groups.push([n])
+  }
+
+  function open(group: Notification[]) {
+    const n = group[0]
+    markNotificationsRead(group.map((g) => g.id))
+    if (n.post_id) {
+      const post = S.posts.find((p) => p.id === n.post_id)
+      if (post) openPin(post)
+      else toast('That pin is gone')
+    } else if (n.block_id) go(`block/${n.block_id}`)
+    else if (n.actor_id) go(`user/${n.actor_id}`)
+  }
+
+  return (
+    <Panel title="Inbox" icon={<Icon name="bell" />} className="tall">
+      <div className="tabs">
+        <button className={tab === 'activity' ? 'tab on' : 'tab'} onClick={() => setTab('activity')}>
+          Activity {unreadCount > 0 && <b className="count">{unreadCount}</b>}
+        </button>
+        <button className={tab === 'messages' ? 'tab on' : 'tab'} onClick={() => setTab('messages')}>
+          Messages {convos.some((c) => c.unread) && <b className="count">{convos.reduce((n, c) => n + c.unread, 0)}</b>}
+        </button>
+      </div>
+
+      {tab === 'activity' ? (
+        <>
+          {unreadCount > 0 && (
+            <button className="link right" onClick={() => markNotificationsRead(notifications.map((n) => n.id))}>
+              Mark all read
+            </button>
+          )}
+          {notifications.length === 0 && <Empty icon="bell">Replies, saves and friend requests land here.</Empty>}
+          {groups.map((group, i) => {
+            const n = group[0]
+            const day = dayLabel(n.created_at)
+            const showDay = i === 0 || day !== dayLabel(groups[i - 1][0].created_at)
+            const pending = n.kind === 'friend_request' && n.actor_id && friendshipWith(n.actor_id) && !friendshipWith(n.actor_id)!.accepted_at
+            const actors = [...new Set(group.map((g) => g.actor_id))]
+            const names = actors.map((id) => (id ? nameOf(id, group.find((g) => g.actor_id === id)?.actor_name ?? null) : 'Someone'))
+            const who = n.kind === 'legend' ? 'The neighbours' : names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${plural(names.length - 2, 'other')}`
+            return (
+              <div key={n.id}>
+                {showDay && <div className="section">{day}</div>}
+                <div className={group.every((g) => g.read_at) ? 'row note' : 'row note unread'}>
+                  <button className="plain facestack" onClick={() => n.actor_id && go(`user/${n.actor_id}`)}>
+                    {actors.slice(0, 2).map((id, j) => (
+                      <Avatar key={id ?? j} id={id} size={actors.length > 1 ? 26 : 34} />
+                    ))}
+                  </button>
+                  <button className="row-main" onClick={() => open(group)}>
+                    <div>
+                      <strong>{who}</strong> {describeNotification(n)}
+                    </div>
+                    {n.preview && <div className="muted clip">“{n.preview}”</div>}
+                    <div className="muted small">
+                      {ago(n.created_at)}
+                      {group.length > 1 && ` · ${group.length} times`}
+                    </div>
+                  </button>
+                  {pending && (
+                    <div className="stack tight">
+                      <FriendButton id={n.actor_id!} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+          {S.hasOlderNotifications && (
+            <button className="btn wide" onClick={loadOlderNotifications}>
+              Older
+            </button>
+          )}
+        </>
+      ) : convos.length === 0 ? (
+        <Empty icon="chat">No messages yet. Open someone's profile, or tap a friend on the map, to start one.</Empty>
+      ) : (
+        convos.map((c) => (
+          <button key={c.other} className={c.unread ? 'row unread' : 'row'} onClick={() => go(`chat/${c.other}`)}>
+            <Avatar id={c.other} size={40} dot />
+            <div className="row-main">
+              <div className="row-top">
+                <strong className="clip">{nameOf(c.other)}</strong>
+                <span className="muted small">{ago(c.last.created_at)}</span>
+              </div>
+              <div className="clip muted">
+                {c.last.sender_id === S.userId && 'You: '}
+                {readable(c.last.body)}
+              </div>
+            </div>
+            {c.unread > 0 && <b className="count">{c.unread}</b>}
+          </button>
+        ))
+      )}
+    </Panel>
+  )
+}
+
+//
+// Friends and location sharing.
+//
+
+function FriendsView() {
+  const [query, setQuery] = useState('')
+  if (!S.userId) return <SignInFirst title="Friends" icon="users" why="Add friends to see them on the map and chat." />
+
+  const friends = friendIds().sort((a, b) => Number(isOnline(b)) - Number(isOnline(a)) || nameOf(a).localeCompare(nameOf(b)))
+  const incoming = S.friendships.filter((f) => !f.accepted_at && f.addressee === S.userId).map((f) => f.requester)
+  const outgoing = S.friendships.filter((f) => !f.accepted_at && f.requester === S.userId).map((f) => f.addressee)
+  const q = query.trim().toLowerCase()
+  // Neighbours first: people whose pins are closest to you (or to the map, if we don't know where you are).
+  const from = S.here ? { lat: S.here.latitude, lng: S.here.longitude } : UI.view
+  const nearest = new Map<string, number>()
+  for (const post of S.posts) {
+    if (!post.author_id) continue
+    const d = distance(from.lat, from.lng, post.latitude, post.longitude)
+    if (d < (nearest.get(post.author_id) ?? Infinity)) nearest.set(post.author_id, d)
+  }
+  const others = [...S.profiles.values()]
+    .filter((p) => p.id !== S.userId && !friendshipWith(p.id))
+    .filter((p) => !q || p.display_name.toLowerCase().includes(q) || (p.neighbourhood ?? '').toLowerCase().includes(q))
+    .sort((a, b) => (nearest.get(a.id) ?? Infinity) - (nearest.get(b.id) ?? Infinity))
+    .slice(0, 30)
+
+  return (
+    <Panel title="Friends" icon={<Icon name="users" />} className="tall">
+      <div className={S.sharing ? 'share-card on' : 'share-card'}>
+        <div>
+          <strong>
+            {!S.sharing ? 'Location sharing is off' : S.sharingUntil ? `Sharing for ${minutesLeft(S.sharingUntil)} more min` : 'Sharing your location'}
+          </strong>
+          <p className="muted small">
+            {S.sharing ? 'Friends see where you are while the app is open. Only friends, never anyone else.' : 'Turn it on to show up on your friends’ maps, and see theirs.'}
+          </p>
+          {!S.sharing && (
+            <button className="link small" onClick={() => shareForAnHour()}>
+              Or just for the next hour
+            </button>
+          )}
+        </div>
+        <button
+          className={S.sharing ? 'switch on' : 'switch'}
+          role="switch"
+          aria-label="Share my location with friends"
+          aria-checked={S.sharing}
+          onClick={toggleSharing}
+        >
+          <i />
+        </button>
+      </div>
+
+      {incoming.length > 0 && (
+        <>
+          <div className="section">Requests</div>
+          {incoming.map((id) => (
+            <PersonRow key={id} id={id}>
+              <FriendButton id={id} />
+            </PersonRow>
+          ))}
+        </>
+      )}
+
+      <div className="section">{friends.length ? plural(friends.length, 'friend') : 'Friends'}</div>
+      {friends.length === 0 && <p className="muted">No friends yet. Find people below, or from anyone's profile.</p>}
+      {friends.map((id) => {
+        const loc = locationOf(id)
+        const away = fromMe(loc)
+        return (
+          <PersonRow key={id} id={id} sub={`${isOnline(id) ? 'online' : 'offline'}${loc ? ` · ${away !== null ? awayText(away) : 'on the map'}` : ''}`}>
+            <div className="btn-row tight">
+              {loc && (
+                <button className="icon-btn" title="Show on map" onClick={() => reveal(loc.latitude, loc.longitude, 17, true)}>
+                  <Icon name="locate" />
+                </button>
+              )}
+              {loc && (
+                <button className={UI.walk === `user/${id}` ? 'icon-btn on' : 'icon-btn'} title="Get there" aria-pressed={UI.walk === `user/${id}`} onClick={() => walkTo(`user/${id}`)}>
+                  <Icon name="arrow" />
+                </button>
+              )}
+              <button className="icon-btn" title="Message" onClick={() => go(`chat/${id}`)}>
+                <Icon name="chat" />
+              </button>
+            </div>
+          </PersonRow>
+        )
+      })}
+
+      {outgoing.length > 0 && (
+        <>
+          <div className="section">Sent</div>
+          {outgoing.map((id) => (
+            <PersonRow key={id} id={id}>
+              <FriendButton id={id} />
+            </PersonRow>
+          ))}
+        </>
+      )}
+
+      <div className="section">People around here</div>
+      <input className="input" placeholder="Search by name or neighbourhood" value={query} onChange={(e) => setQuery(e.target.value)} />
+      {others.map((p) => (
+        <PersonRow key={p.id} id={p.id} sub={[p.neighbourhood, nearest.has(p.id) && `pins ${awayText(nearest.get(p.id)!)}`].filter(Boolean).join(' · ')}>
+          <FriendButton id={p.id} />
+        </PersonRow>
+      ))}
+    </Panel>
+  )
+}
+
+//
+// Settings.
+//
+
+const MUTABLE: [string, string][] = [
+  ['reply', 'Replies to your pins'],
+  ['saved_reply', 'Replies on pins you saved'],
+  ['thread_reply', 'Replies in threads you joined'],
+  ['interest', 'People interested in your pins'],
+  ['save', 'People saving your pins'],
+  ['resolved', 'Pins you follow getting resolved'],
+  ['friend_request', 'Friend requests'],
+  ['friend_accept', 'Friend requests accepted'],
+  ['friend_post', 'Friends pinning something new'],
+  ['mention', 'Someone mentioning you'],
+  ['comment_reply', 'Answers to your comments'],
+  ['word_reply', 'Answers to what you said on a block'],
+  ['legend', 'Your pins becoming Legends'],
+  ['nearby_pin', 'New pins close to you'],
+  ['friend_nearby', 'A friend a street away'],
+  ['starting_soon', "Things you're in on, an hour before"],
+]
+
+function ThemeSwatch({ id }: { id: string }) {
+  if (id === 'auto') {
+    // Half Day, half Night.
+    return (
+      <span className="swatch sun">
+        <ThemeSwatch id="day" />
+        <ThemeSwatch id="night" />
+      </span>
+    )
+  }
+  const t = mapThemes[id]
+  return (
+    <span className="swatch" style={{ background: t.land }}>
+      <i style={{ background: t.water }} />
+      <i style={{ background: t.park }} />
+      <i style={{ background: t.road.primary, boxShadow: t.casing ? `0 0 0 1px ${t.casing}` : undefined }} />
+    </span>
+  )
+}
+
+function ThemeGrid() {
+  return (
+    <div className="theme-grid">
+      {THEMES.map((t) => (
+        <button key={t.id} className={UI.theme === t.id ? 'theme-card on' : 'theme-card'} onClick={() => applyTheme(t.id)}>
+          <ThemeSwatch id={t.id} />
+          <strong>{t.name}</strong>
+          <span className="muted small">{t.note}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function SettingsView() {
+  const [newEmail, setNewEmail] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  async function saveEmail() {
+    if (!newEmail?.includes('@')) return
+    if (await changeEmail(newEmail.trim())) {
+      setNewEmail(null)
+      toast('Check both inboxes to confirm the change')
+    } else failed("Couldn't change your email")
+  }
+
+  async function removeAccount() {
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      return
+    }
+    if (await deleteAccount()) {
+      go('')
+      toast('Your account and everything in it is gone')
+    } else failed("Couldn't delete your account")
+  }
+
+  async function toggleAlerts() {
+    let on = !UI.alerts
+    if (on && typeof Notification !== 'undefined' && Notification.permission !== 'granted') on = (await Notification.requestPermission()) === 'granted'
+    store('aroundhere.alerts', on ? 'on' : 'off')
+    ui({ alerts: on })
+  }
+
+  return (
+    <Panel title="Settings" icon={<Icon name="sliders" />} className="tall">
+      <div className="section">Map style</div>
+      <ThemeGrid />
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={UI.sounds}
+          onChange={(e) => {
+            store('aroundhere.sounds', e.target.checked ? 'on' : 'off')
+            ui({ sounds: e.target.checked })
+            if (e.target.checked) play('sting')
+          }}
+        />
+        <span>Sounds (each style has its own)</span>
+      </label>
+
+      {S.userId && (
+        <>
+          <div className="section">Notifications</div>
+          <label className="check">
+            <input type="checkbox" checked={UI.alerts} onChange={toggleAlerts} disabled={typeof Notification === 'undefined'} />
+            <span>Desktop alerts when the tab is in the background</span>
+          </label>
+          {MUTABLE.map(([kind, label]) => (
+            <label key={kind} className="check">
+              <input
+                type="checkbox"
+                checked={!S.mutedKinds.includes(kind)}
+                onChange={(e) => setMutedKinds(e.target.checked ? S.mutedKinds.filter((k) => k !== kind) : [...S.mutedKinds, kind])}
+              />
+              <span>{label}</span>
+            </label>
+          ))}
+
+          <div className="section">Account</div>
+          {newEmail === null ? (
+            <div className="muted small">{S.session?.user.email}</div>
+          ) : (
+            <div className="composer">
+              <input className="input" type="email" placeholder="New email" value={newEmail} autoFocus onChange={(e) => setNewEmail(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveEmail()} />
+              <button className="btn primary" onClick={saveEmail} disabled={!newEmail.includes('@')}>
+                Save
+              </button>
+            </div>
+          )}
+          <div className="actions">
+            {newEmail === null && (
+              <button className="btn" onClick={() => setNewEmail('')}>
+                Change email
+              </button>
+            )}
+            <button className="btn" onClick={() => ui({ auth: 'new-password' })}>
+              Change password
+            </button>
+            <button className="btn" onClick={signOut}>
+              <Icon name="logout" size={16} /> Sign out
+            </button>
+          </div>
+          {S.blocked.size > 0 && (
+            <>
+              <div className="section">Blocked</div>
+              {[...S.blocked].map((id) => (
+                <PersonRow key={id} id={id}>
+                  <button className="btn small" onClick={() => unblock(id)}>
+                    Unblock
+                  </button>
+                </PersonRow>
+              ))}
+            </>
+          )}
+
+          <div className="danger-zone">
+            <button className={confirmDelete ? 'btn danger' : 'btn'} onClick={removeAccount} onBlur={() => setConfirmDelete(false)}>
+              <Icon name="trash" size={16} /> {confirmDelete ? 'Delete everything, for good?' : 'Delete account'}
+            </button>
+            {confirmDelete && <p className="muted small">Your pins, replies, messages and friends go too. This can't be undone.</p>}
+          </div>
+        </>
+      )}
+
+      <div className="section">Keys</div>
+      <div className="keys">
+        {[
+          ['/', 'Search and commands'],
+          ['?', 'These keys'],
+          ['N', 'New pin'],
+          ['Right-click', 'Pin there'],
+          ['J K', 'Next, previous pin'],
+          ['L', 'Where am I'],
+          ['G', 'Get there on foot, or stop'],
+          ['Y', 'Back in time, or back to now'],
+          ['T', 'Next map style'],
+          ['F', 'Friends'],
+          ['I', 'Inbox'],
+          ['+ −', 'Zoom'],
+          ['← → ↑ ↓', 'Move the map'],
+          ['Esc', 'Close'],
+        ].map(([key, what]) => (
+          <div key={key}>
+            <kbd>{key}</kbd>
+            <span>{what}</span>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  )
+}
+
+//
+// A new pin.
+//
+
+function ComposeView() {
+  const [title, setTitle] = useState('')
+  const [body, setBody] = useState('')
+  const [flair, setFlair] = useState<Flair>('general')
+  const [starts, setStarts] = useState('')
+  const [attached, setAttached] = useState<{ file: File; url: string }[]>([])
+  const [busy, setBusy] = useState(false)
+
+  // Preview URLs live as long as the attachment; the last ones go with the form.
+  const latest = useRef(attached)
+  useEffect(() => {
+    latest.current = attached
+  }, [attached])
+  useEffect(() => () => latest.current.forEach((a) => URL.revokeObjectURL(a.url)), [])
+
+  function attach(list: FileList | null) {
+    const added = Array.from(list ?? []).map((file) => ({ file, url: URL.createObjectURL(file) }))
+    setAttached([...attached, ...added].slice(0, 6))
+  }
+
+  function detach(index: number) {
+    URL.revokeObjectURL(attached[index].url)
+    setAttached(attached.filter((_, i) => i !== index))
+  }
+
+  if (!S.userId) return <SignInFirst title="New pin" icon="plus" why="Join to pin what's happening around you." />
+  const draft = UI.draft ?? viewCenter()
+  const street = map ? nearestStreet(map, draft.longitude, draft.latitude) : ''
+
+  async function submit() {
+    if (!title.trim() || busy) return
+    setBusy(true)
+    const post = await createPost({
+      title: title.trim(),
+      description: body.trim(),
+      flair,
+      startsAt: fromLocalInput(starts),
+      latitude: draft.latitude,
+      longitude: draft.longitude,
+      blocks: UI.draftBlocks,
+      files: attached.map((a) => a.file),
+    })
+    setBusy(false)
+    if (!post) {
+      failed("Couldn't post")
+      return
+    }
+    go(`pin/${post.id}`)
+    celebrate('Pin posted', 'Neighbours can see it now')
+  }
+
+  return (
+    <Panel
+      title="New pin"
+      icon={<Icon name="plus" />}
+      className="compose"
+      foot={
+        <div className="btn-row">
+          <button className="btn" onClick={() => go('')}>
+            Cancel
+          </button>
+          <button className="btn primary" onClick={submit} disabled={!title.trim() || busy}>
+            {busy ? 'Posting…' : 'Post pin'}
+          </button>
+        </div>
+      }
+    >
+      <div className="where">
+        <Icon name="pin" size={16} />
+        <div>
+          <strong>{street ? `Near ${street}` : 'At the red marker'}</strong>
+          <div className="muted small">{narrow() ? 'Tap' : 'Click'} the map to move it</div>
+        </div>
+        <button className="btn small" onClick={async () => {
+          const here = await watchHere()
+          if (!here) return toast("Can't find you")
+          ui({ draft: { latitude: here.latitude, longitude: here.longitude } })
+          reveal(here.latitude, here.longitude, Math.max(map?.zoom ?? 16, 16.5))
+        }}>
+          <Icon name="locate" size={14} /> Me
+        </button>
+      </div>
+
+      <div className="field area-field">
+        <span>
+          Where it happens <em className="muted">· a spot, or the blocks it takes over</em>
+        </span>
+        <div className="tabs">
+          <button className={!UI.picking && !UI.draftBlocks.length ? 'tab on' : 'tab'} onClick={() => ui({ picking: false, draftBlocks: [] })}>
+            A spot
+          </button>
+          <button className={UI.picking || UI.draftBlocks.length ? 'tab on' : 'tab'} onClick={() => ui({ picking: true })}>
+            Some blocks
+          </button>
+        </div>
+        {(UI.picking || UI.draftBlocks.length > 0) && (
+          <div className="area-help muted small">
+            {UI.draftBlocks.length
+              ? `${plural(UI.draftBlocks.length, 'block')}${UI.draftBlocks.length < 12 ? `; ${narrow() ? 'tap' : 'click'} more, or one again to drop it` : ', the most there can be'}`
+              : `${narrow() ? 'Tap' : 'Click'} the blocks on the map, between the streets`}
+            {UI.picking ? (
+              <button className="link small" onClick={() => ui({ picking: false })}>
+                Done
+              </button>
+            ) : (
+              <button className="link small" onClick={() => ui({ picking: true })}>
+                Change
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <FlairPick value={flair} onPick={setFlair} />
+
+      <input
+        className="input title-input"
+        placeholder={flair === 'sighting' ? 'What did you see?' : flair === 'story' ? 'The story, in a line' : "What's happening?"}
+        value={title}
+        maxLength={120}
+        autoFocus={!narrow()}
+        onChange={(e) => setTitle(e.target.value)}
+      />
+      <textarea
+        className="input"
+        rows={5}
+        placeholder={
+          flair === 'sighting'
+            ? 'Where it was, what it did, how big. A photo makes believers.'
+            : flair === 'story'
+              ? 'Tell it the way you would at the pub: what happened, who was there, what you still can’t explain…'
+              : 'Details: where exactly, who should come, what to bring…'
+        }
+        value={body}
+        maxLength={flair === 'story' ? 10000 : 2000}
+        onChange={(e) => setBody(e.target.value)}
+      />
+      <label className="field when-field">
+        <span>
+          When <em className="muted">· optional, for things that happen at a time</em>
+        </span>
+        <input className="input" type="datetime-local" value={starts} onChange={(e) => setStarts(e.target.value)} />
+      </label>
+
+      <label className="drop">
+        <input type="file" accept="image/*,video/*" multiple onChange={(e) => attach(e.target.files)} />
+        <Icon name="image" size={18} /> {attached.length ? `${plural(attached.length, 'file')} attached` : 'Add photos or video'}
+      </label>
+      {attached.length > 0 && (
+        <div className="thumbs">
+          {attached.map((a, i) => (
+            <button key={a.url} title="Remove" onClick={() => detach(i)}>
+              {a.file.type.startsWith('video/') ? <video src={a.url} muted /> : <img src={a.url} alt="" />}
+              <Icon name="close" size={14} />
+            </button>
+          ))}
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+//
+// Threads: answers under what they answer, Reddit-style.
+//
+
+type Threaded = { id: string; parent_id: string | null; deleted_at: string | null }
+
+// Comments as a tree: the ones answering nothing (or something no longer here),
+// and what's under each. Each level in the order given.
+function threadOf<T extends Threaded>(items: T[], order: (a: T, b: T) => number) {
+  const ids = new Set(items.map((i) => i.id))
+  const top: T[] = []
+  const below = new Map<string, T[]>()
+  for (const item of items) {
+    if (item.parent_id && ids.has(item.parent_id)) {
+      const list = below.get(item.parent_id)
+      if (list) list.push(item)
+      else below.set(item.parent_id, [item])
+    } else top.push(item)
+  }
+  top.sort(order)
+  for (const list of below.values()) list.sort(order)
+  return { top, below }
+}
+
+function countBelow(id: string, below: Map<string, Threaded[]>): number {
+  return (below.get(id) ?? []).reduce((n, kid) => n + 1 + countBelow(kid.id, below), 0)
+}
+
+// One comment and everything under it. The line down the left folds the thread
+// away; Reply opens a box right under the comment.
+function Thread<T extends Threaded>({ item, below, main, answer, people }: {
+  item: T
+  below: Map<string, T[]>
+  main: (item: T, answer: () => void) => ReactNode
+  answer: (item: T, text: string, files: File[]) => Promise<boolean>
+  people?: string[]
+}) {
+  const [folded, setFolded] = useState(false)
+  const [answering, setAnswering] = useState(false)
+  const kids = below.get(item.id) ?? []
+  return (
+    <div className={item.deleted_at ? 'comment deleted' : 'comment'}>
+      <div className="comment-main">
+        {main(item, () => !needAccount() && setAnswering(!answering))}
+        {answering && (
+          <Composer
+            placeholder="Your answer…"
+            autoFocus
+            people={people}
+            attach={'post_id' in item}
+            onSend={async (text, files) => {
+              const ok = await answer(item, text, files)
+              if (ok) setAnswering(false)
+              else failed("Couldn't send")
+              return ok
+            }}
+          />
+        )}
+      </div>
+      {kids.length > 0 &&
+        (folded ? (
+          <button className="folded" onClick={() => setFolded(false)}>
+            <Icon name="plus" size={12} /> {plural(countBelow(item.id, below), 'more reply', 'more replies')}
+          </button>
+        ) : (
+          <div className="comment-kids">
+            <button className="thread-line" onClick={() => setFolded(true)} aria-label="Fold this thread" title="Fold this thread" />
+            {kids.map((kid) => (
+              <Thread key={kid.id} item={kid} below={below} main={main} answer={answer} people={people} />
+            ))}
+          </div>
+        ))}
+    </div>
+  )
+}
+
+//
+// City blocks: what people call them, what they say about them, what's gone on
+// there, and whose turf they are.
+//
+
+// A line on a block: its votes, what it says, who said it; answering it, when
+// it can be answered (names can't).
+function WordRow({ word, answer, at }: { word: Word; answer?: () => void; at?: number }) {
+  const { score, mine } = talk(at)
+  const points = score.get(word.id) ?? 0
+  const my = mine.get(word.id)
+  const vote1 = async (value: 1 | -1) => {
+    if (needAccount()) return
+    if (!(await vote(word.id, value))) failed("Couldn't vote")
+  }
+  if (word.deleted_at) return <div className="word"><div className="comment-text muted">[deleted]</div></div>
+  return (
+    <div className={points <= -3 ? 'word buried' : 'word'}>
+      <div className="votes">
+        <button className={my === 1 ? 'on' : ''} onClick={() => vote1(1)} aria-label="Up" title="Up">
+          <Icon name="up" size={14} />
+        </button>
+        <b>{points}</b>
+        <button className={my === -1 ? 'on down' : ''} onClick={() => vote1(-1)} aria-label="Down" title="Down">
+          <Icon name="down" size={14} />
+        </button>
+      </div>
+      <div className="word-main">
+        <div className={word.is_name ? 'word-body name comment-text' : 'word-body comment-text'}>
+          <Linked text={word.body} />
+        </div>
+        <div className="muted small">
+          {word.author_id ? (
+            <button className="link small" onClick={() => go(`user/${word.author_id}`)}>
+              {nameOf(word.author_id)}
+            </button>
+          ) : (
+            'someone'
+          )}
+          {' · '}
+          {ago(word.created_at)}
+          {answer && at === undefined && (
+            <>
+              {' · '}
+              <button className="link small answer" onClick={answer}>
+                Reply
+              </button>
+            </>
+          )}
+          {word.author_id === S.userId && at === undefined && (
+            <>
+              {' · '}
+              <button className="link small" onClick={() => unsay(word.id).then((ok) => !ok && failed("Couldn't take it back"))}>
+                Take back
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BlockView() {
+  const [line, setLine] = useState('')
+  const [naming, setNaming] = useState('')
+  const [order, setOrder] = useState<'top' | 'new'>('top')
+  const block = openBlock()
+  if (!block) return <Missing what="block" />
+  const kept = block.id
+  const at = UI.then ?? undefined // looking back: the block as it was then, to read, not to change
+  const { score } = talk(at)
+  const away = fromMe(block)
+  const words = kept ? S.words.filter((w) => w.block_id === kept && !(w.author_id && S.blocked.has(w.author_id)) && (at === undefined || time(w.created_at) <= at)) : []
+  const byScore = (a: Word, b: Word) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) || time(b.created_at) - time(a.created_at)
+  const names = words.filter((w) => w.is_name).sort(byScore)
+  const lines = threadOf(words.filter((w) => !w.is_name), byScore)
+  if (order === 'new') lines.top.sort((a, b) => time(b.created_at) - time(a.created_at))
+  const pins = pinsOn(block).filter((p) => at === undefined || time(p.created_at) <= at)
+  const legends = pins.filter((p) => p.legend_at && (at === undefined || time(p.legend_at) <= at))
+
+  async function speak(isName: boolean) {
+    const text = (isName ? naming : line).trim()
+    if (!text || !kept || needAccount()) return
+    if (await say(kept, text, isName)) {
+      if (isName) setNaming('')
+      else setLine('')
+    } else failed(isName ? "Couldn't put the name up" : "Couldn't say it")
+  }
+
+  return (
+    <Panel title={blockTitle(block)} icon={<Icon name="flag" />} className="block-view">
+      <div className="block-head">
+        <div className="muted small">
+          {sizeText(block.ring)}
+          {away !== null && ` · ${awayText(away)}`}
+        </div>
+        {at !== undefined && (
+          <div className="banner then-note">
+            <Icon name="clock" size={16} /> As it was {thenText(at, UI.thenSpan).toLowerCase()}.
+            <button className="link" onClick={() => toggleThen()}>
+              Back to now
+            </button>
+          </div>
+        )}
+        {!kept && (
+          <div className="banner">
+            <Icon name="flag" size={16} /> Join to name this block and write on it.
+            <button className="link" onClick={() => needAccount()}>
+              Join
+            </button>
+          </div>
+        )}
+      </div>
+
+      {legends.length > 0 && (
+        <>
+          <div className="section">Legends of this block</div>
+          {legends.map((p) => (
+            <button key={p.id} className="row mini-pin legend-row" onClick={() => openPin(p)}>
+              <Blip flair={p.flair} size={24} />
+              <span className="clip">{p.title}</span>
+              <Icon name="star" size={14} />
+            </button>
+          ))}
+        </>
+      )}
+
+      {kept && (
+        <>
+          <div className="section">What people call it</div>
+          {names.map((w) => (
+            <WordRow key={w.id} word={w} at={at} />
+          ))}
+          {S.userId && at === undefined && (
+            <form className="say" onSubmit={(e) => { e.preventDefault(); speak(true) }}>
+              <input className="input" value={naming} maxLength={32} placeholder={names.length ? 'Call it something else' : 'Give it a name'} onChange={(e) => setNaming(e.target.value)} />
+              <button className="btn" disabled={!naming.trim()}>
+                Suggest
+              </button>
+            </form>
+          )}
+          {!names.length && !S.userId && <p className="muted small">No name yet.</p>}
+
+          <div className="section with-tabs">
+            <span>The word on the street</span>
+            <span className="mini-tabs">
+              <button className={order === 'top' ? 'on' : ''} onClick={() => setOrder('top')}>
+                Top
+              </button>
+              <button className={order === 'new' ? 'on' : ''} onClick={() => setOrder('new')}>
+                New
+              </button>
+            </span>
+          </div>
+          {lines.top.map((w) => (
+            <Thread key={w.id} item={w} below={lines.below} main={(w, answer) => <WordRow word={w} answer={answer} at={at} />} answer={(w, text) => say(kept, text, false, w.id)} />
+          ))}
+          {!lines.top.length && <p className="muted small">{at === undefined ? "Nothing said here yet. What's the story with this block?" : 'Nothing said here by then.'}</p>}
+          {S.userId && at === undefined && (
+            <form className="say" onSubmit={(e) => { e.preventDefault(); speak(false) }}>
+              <input className="input" value={line} maxLength={200} placeholder="Say something about this block" onChange={(e) => setLine(e.target.value)} />
+              <button className="btn primary" disabled={!line.trim()}>
+                Say
+              </button>
+            </form>
+          )}
+        </>
+      )}
+
+      <div className="section">What's gone on here</div>
+      {pins.length ? (
+        pins.slice(0, 20).map((p) => (
+          <button key={p.id} className="row mini-pin" onClick={() => openPin(p)}>
+            <Blip flair={p.flair} size={24} />
+            <span className="clip">{p.title}</span>
+            <span className="muted small nowrap">{p.resolved_at ? 'resolved' : ago(p.created_at)}</span>
+          </button>
+        ))
+      ) : (
+        <p className="muted small">No pins here yet.</p>
+      )}
+      <div className="btn-row">
+        <button
+          className="btn"
+          onClick={() => {
+            if (needAccount()) return
+            UI.draft = { latitude: block.latitude, longitude: block.longitude }
+            go('new')
+            ui({ draftBlocks: kept ? [kept] : [] })
+          }}
+        >
+          <Icon name="plus" size={14} /> Pin something here
+        </button>
+        {away !== null && away > 50 && (
+          <button className="btn" onClick={() => ui({ walk: `spot/${block.latitude},${block.longitude}/${blockTitle(block)}` })}>
+            <Icon name="arrow" size={14} /> Get there
+          </button>
+        )}
+      </div>
+    </Panel>
+  )
+}
+
+// The blocks a pin covers, by name where they have one.
+function Covers({ post }: { post: Post }) {
+  const ids = (post.blocks ?? []).filter((id) => S.blocks.has(id))
+  if (!ids.length) return null
+  const named = ids.filter((id) => blockName(id))
+  return (
+    <div className="when-line covers">
+      <Icon name="flag" size={16} />
+      <span>
+        Takes over{' '}
+        {named.slice(0, 2).map((id, i) => (
+          <span key={id}>
+            {i > 0 && ' and '}
+            <button className="link" onClick={() => go(`block/${id}`)}>
+              {blockName(id)}
+            </button>
+          </span>
+        ))}
+        {named.length === 0 ? (
+          <button className="link" onClick={() => go(`block/${ids[0]}`)}>
+            {plural(ids.length, 'block')}
+          </button>
+        ) : ids.length > Math.min(2, named.length) ? (
+          ` and ${plural(ids.length - Math.min(2, named.length), 'more block')}`
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+//
+// Accounts.
+//
+
+const AUTH_TITLES: Record<AuthMode, string> = {
+  signin: 'Welcome back',
+  signup: 'Join your neighbourhood',
+  code: 'Sign in with a code',
+  reset: 'Reset your password',
+  'new-password': 'Choose a new password',
+}
+
+function AuthView() {
+  const [mode, setMode] = useState<AuthMode>(UI.auth ?? 'signin')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [show, setShow] = useState(false)
+  const [code, setCode] = useState('')
+  const [codeSent, setCodeSent] = useState(false)
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [providers, setProviders] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    // Only offer the social logins the auth server actually has set up.
+    fetch(`${supabaseUrl}/auth/v1/settings`, { headers: { apikey: supabaseKey } })
+      .then((r) => r.json())
+      .then((settings) => setProviders(settings.external ?? {}))
+      .catch(() => {})
+  }, [])
+
+  const close = () => ui({ auth: null })
+
+  function switchTo(next: AuthMode) {
+    setMode(next)
+    setPassword('')
+    setCode('')
+    setCodeSent(false)
+    setMessage('')
+  }
+
+  const trimmed = email.trim()
+  const usesCode = mode === 'code' || mode === 'reset'
+  const valid =
+    mode === 'signup' ? !!name.trim() && trimmed.includes('@') && password.length >= 6
+    : mode === 'signin' ? trimmed.includes('@') && !!password
+    : mode === 'new-password' ? password.length >= 6
+    : codeSent ? code.trim().length === 6 : trimmed.includes('@')
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!valid || busy) return
+    setBusy(true)
+    setMessage('')
+    // Stay open and say something, or close and say something.
+    const say = (text: string) => {
+      setBusy(false)
+      setMessage(text)
+    }
+    const finish = (text: string) => {
+      setBusy(false)
+      close()
+      toast(text)
+    }
+
+    if (mode === 'signup') {
+      const { data, error } = await supabase.auth.signUp({ email: trimmed, password, options: { data: { display_name: name.trim() } } })
+      if (error) return say(error.message)
+      if (!data.session) return say('Check your email to confirm your account, then sign in.')
+      return finish(`Welcome, ${name.trim().split(' ')[0]}!`)
+    }
+
+    if (mode === 'signin') {
+      const { error } = await supabase.auth.signInWithPassword({ email: trimmed, password })
+      if (error) return say(error.message === 'Invalid login credentials' ? 'That email and password don’t match.' : error.message)
+      return finish('Signed in')
+    }
+
+    if (mode === 'new-password') {
+      const { error } = await supabase.auth.updateUser({ password })
+      if (error) return say(error.message)
+      return finish('Password updated')
+    }
+
+    // Codes: email a 6-digit code, then verify it.
+    if (!codeSent) {
+      const { error } = mode === 'reset'
+        ? await supabase.auth.resetPasswordForEmail(trimmed)
+        : await supabase.auth.signInWithOtp({ email: trimmed, options: { shouldCreateUser: false } })
+      if (error) return say(error.code === 'otp_disabled' ? 'No account with that email yet.' : error.message)
+      setCodeSent(true)
+      return say(`We emailed a 6-digit code to ${trimmed}.`)
+    }
+
+    const { error } = await supabase.auth.verifyOtp({ email: trimmed, token: code.trim(), type: mode === 'reset' ? 'recovery' : 'email' })
+    if (error) return say(error.message)
+    if (mode === 'reset') {
+      // A verified reset code signs you in; now you choose the new password.
+      setBusy(false)
+      return switchTo('new-password')
+    }
+    finish('Signed in')
+  }
+
+  const social = (['google', 'github'] as const).filter((p) => providers[p])
+  let submitLabel = 'Email me a code'
+  if (mode === 'signup') submitLabel = 'Create account'
+  else if (mode === 'signin') submitLabel = 'Sign in'
+  else if (mode === 'new-password') submitLabel = 'Save password'
+  else if (codeSent) submitLabel = mode === 'reset' ? 'Verify code' : 'Sign in'
+
+  return (
+    <div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <form className="panel modal auth" onSubmit={submit}>
+        <button type="button" className="icon-btn corner" onClick={close} aria-label="Close">
+          <Icon name="close" />
+        </button>
+        <div className="brand-mark big">
+          <Icon name="pin" size={26} />
+        </div>
+        <h1>{AUTH_TITLES[mode]}</h1>
+
+        {(mode === 'signin' || mode === 'signup') && (
+          <div className="tabs">
+            <button type="button" className={mode === 'signin' ? 'tab on' : 'tab'} onClick={() => switchTo('signin')}>
+              Sign in
+            </button>
+            <button type="button" className={mode === 'signup' ? 'tab on' : 'tab'} onClick={() => switchTo('signup')}>
+              Create account
+            </button>
+          </div>
+        )}
+
+        {mode === 'signup' && (
+          <label className="field">
+            <span>Your name</span>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="How neighbours will see you" autoComplete="nickname" maxLength={50} autoFocus />
+          </label>
+        )}
+        {mode !== 'new-password' && (
+          <label className="field">
+            <span>Email</span>
+            <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={codeSent} autoComplete="email" autoFocus={mode !== 'signup'} />
+          </label>
+        )}
+        {(mode === 'signin' || mode === 'signup' || mode === 'new-password') && (
+          <label className="field">
+            <span>
+              {mode === 'new-password' ? 'New password' : 'Password'}
+              {mode !== 'signin' && <em className="muted"> · at least 6 characters</em>}
+            </span>
+            <div className="input-wrap">
+              <input
+                className="input"
+                type={show ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                autoFocus={mode === 'new-password'}
+              />
+              <button type="button" className="link reveal" onClick={() => setShow(!show)}>
+                {show ? 'hide' : 'show'}
+              </button>
+            </div>
+          </label>
+        )}
+        {usesCode && codeSent && (
+          <label className="field">
+            <span>Code</span>
+            <input className="input code" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="••••••" autoFocus />
+          </label>
+        )}
+
+        {message && <p className="banner" role="alert">{message}</p>}
+
+        <button type="submit" className="btn primary wide" disabled={!valid || busy}>
+          {busy ? 'One moment…' : submitLabel}
+        </button>
+
+        <div className="auth-links">
+          {mode === 'signin' && (
+            <>
+              <button type="button" className="link" onClick={() => switchTo('reset')}>
+                Forgot password?
+              </button>
+              <button type="button" className="link" onClick={() => switchTo('code')}>
+                Email me a sign-in code
+              </button>
+            </>
+          )}
+          {usesCode && (
+            <button type="button" className="link" onClick={() => switchTo('signin')}>
+              Back to sign in
+            </button>
+          )}
+        </div>
+
+        {/* Local development only: the seeded neighbours, one tap each (see supabase/seed.sql). */}
+        {import.meta.env.DEV && mode === 'signin' && (
+          <div className="demo-people">
+            <span className="muted small">Demo neighbours</span>
+            {['maya', 'tom', 'priya', 'ben'].map((who) => (
+              <button
+                key={who}
+                type="button"
+                className="chip-person"
+                onClick={async () => {
+                  const { error } = await supabase.auth.signInWithPassword({ email: `${who}@aroundhere.demo`, password: 'neighbour' })
+                  if (error) setMessage("The demo neighbourhood isn't loaded here (see the README).")
+                  else close()
+                }}
+              >
+                {who[0].toUpperCase() + who.slice(1)}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {social.length > 0 && (mode === 'signin' || mode === 'signup') && (
+          <div className="stack">
+            <div className="or">or</div>
+            {social.map((p) => (
+              <button key={p} type="button" className="btn wide" onClick={() => supabase.auth.signInWithOAuth({ provider: p, options: { redirectTo: window.location.origin } })}>
+                Continue with {p === 'google' ? 'Google' : 'GitHub'}
+              </button>
+            ))}
+          </div>
+        )}
+      </form>
+    </div>
+  )
+}
+
+//
+// Search and commands.
+//
+
+type Command = { key: string; icon: ReactNode; label: string; hint?: string; run: () => void }
+
+// How well a query matches a short text: its letters in order, scoring runs of
+// letters and word starts, so "rndl" finds "Rundle". Every place the first letter
+// appears is tried as a start, and the best one counts. 0 is no match.
+function fuzzy(query: string, text: string | null | undefined) {
+  if (!query) return 1
+  if (!text) return 0
+  const t = text.toLowerCase()
+  if (t.includes(query)) return 100 + query.length
+  const q = query.replace(/ /g, '')
+  let best = 0
+
+  for (let start = t.indexOf(q[0]); start >= 0; start = t.indexOf(q[0], start + 1)) {
+    let score = 0
+    let at = start
+    let run = 0
+    for (let i = 0; i < q.length; i++) {
+      const found = t.indexOf(q[i], at)
+      if (found < 0) {
+        score = 0
+        break
+      }
+      run = i > 0 && found === at ? run + 1 : 1
+      score += 1 + run * 2 + (found === 0 || t[found - 1] === ' ' ? 5 : 0)
+      at = found + 1
+    }
+    best = Math.max(best, score)
+  }
+  // Letters scattered all over the text aren't a match anyone meant.
+  return best >= q.length * 5 ? best : 0
+}
+
+// A query's words, each matched on its own against any of an item's short texts
+// (fuzzy) or long texts (plainly), in any order: "coffee ann" finds Ann's coffee pin.
+function score(words: string[], short: (string | null | undefined)[], long: (string | null | undefined)[] = []) {
+  let total = 0
+  for (const word of words) {
+    let best = 0
+    for (const text of short) best = Math.max(best, fuzzy(word, text))
+    for (const text of long) if (text?.toLowerCase().includes(word)) best = Math.max(best, 10)
+    if (best === 0) return 0
+    total += best
+  }
+  return total
+}
+
+function paletteItems(query: string): { group: string; items: Command[] }[] {
+  const q = query.trim().toLowerCase()
+  const words = q.split(/\s+/).filter(Boolean)
+  const ranked = <T,>(items: T[], score: (item: T) => number) =>
+    items.map((item) => ({ item, score: score(item) })).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).map((r) => r.item)
+
+  const commands: Command[] = [
+    { key: 'new', icon: <Icon name="plus" />, label: 'New pin', hint: 'N', run: startCompose },
+    { key: 'locate', icon: <Icon name="locate" />, label: 'Where am I', hint: 'L', run: locate },
+    { key: 'snap', icon: <Icon name="camera" />, label: 'Snap a photo, up for a day', hint: 'S', run: startSnap },
+    { key: 'stickers', icon: <Icon name="sticker" />, label: 'Stickers and sparks', run: () => ui({ tray: true, legend: false }) },
+    { key: 'filters', icon: <Icon name="sliders" />, label: 'Filters: what the map shows', run: () => ui({ legend: true, tray: false }) },
+    ...PRESETS.slice(1).map((preset) => ({ key: `preset-${preset.label}`, icon: <Icon name="sliders" />, label: `Show: ${preset.label.toLowerCase()}`, run: () => setFilters(preset.pins) })),
+    { key: 'then', icon: <Icon name="clock" />, label: UI.then === null ? 'Back in time: the map as it was' : 'Back to now', hint: 'Y', run: toggleThen },
+    ...(walkable() || UI.walk
+      ? [{ key: 'walk', icon: <Icon name="arrow" />, label: walkable() && walkable() !== UI.walk ? 'Get there on foot' : 'Stop walking', hint: 'G', run: walkKey }]
+      : []),
+    { key: 'friends', icon: <Icon name="users" />, label: 'Friends', hint: 'F', run: () => !needAccount('signin') && go('friends') },
+    { key: 'inbox', icon: <Icon name="bell" />, label: 'Inbox', hint: 'I', run: () => !needAccount('signin') && go('inbox') },
+    { key: 'settings', icon: <Icon name="sliders" />, label: 'Settings', run: () => go('settings') },
+    ...(S.userId
+      ? [
+          { key: 'me', icon: <Icon name="user" />, label: 'My profile', run: () => go(`user/${S.userId}`) },
+          { key: 'share', icon: <Icon name="pin" />, label: S.sharing ? 'Stop sharing my location' : 'Share my location with friends', run: toggleSharing },
+          { key: 'out', icon: <Icon name="logout" />, label: 'Sign out', run: signOut },
+        ]
+      : [
+          { key: 'in', icon: <Icon name="user" />, label: 'Sign in', run: () => ui({ auth: 'signin' }) },
+          { key: 'up', icon: <Icon name="userplus" />, label: 'Create account', run: () => ui({ auth: 'signup' }) },
+        ]),
+    ...THEMES.map((t) => ({
+      key: `theme-${t.id}`, icon: <ThemeSwatch id={t.id} />, label: `Map style: ${t.name}`,
+      hint: UI.theme === t.id ? 'current' : undefined, run: () => applyTheme(t.id),
+    })),
+  ]
+  const shownCommands = q ? ranked(commands, (c) => score(words, [c.label])) : commands
+
+  const posts = S.posts.filter((p) => !(p.author_id && S.blocked.has(p.author_id)))
+  const pins = (q ? ranked(posts, (p) => score(words, [p.title, p.author_name, flairs[p.flair]?.label], [p.description])) : posts)
+    .slice(0, q ? 8 : 5)
+    .map((p) => ({ key: p.id, icon: <Blip flair={p.flair} size={22} />, label: p.title, hint: p.resolved_at ? 'resolved' : ago(p.created_at), run: () => openPin(p) }))
+
+  // Blocks by what people call them.
+  const names = talk().names
+  const blocks = q
+    ? ranked([...names.keys()], (id) => score(words, [names.get(id)]))
+        .slice(0, 5)
+        .map((id) => {
+          const b = S.blocks.get(id)!
+          return { key: `block-${id}`, icon: <Icon name="flag" />, label: names.get(id)!, hint: 'block', run: () => { go(`block/${id}`); reveal(b.latitude, b.longitude, 16.5, true) } }
+        })
+    : []
+
+  const people = q
+    ? ranked([...S.profiles.values()], (p) => score(words, [p.display_name], [p.neighbourhood]))
+        .slice(0, 6)
+        .map((p) => ({ key: p.id, icon: <Avatar id={p.id} size={22} />, label: p.display_name, hint: p.neighbourhood ?? undefined, run: () => go(`user/${p.id}`) }))
+    : []
+
+  // Places the tiles know by that name. "walk rundle" makes each one a way there.
+  const walking = /^(walk( to)?|go to|get to)\s+/i.exec(q)
+  const found = q && map ? findPlaces(map, walking ? q.slice(walking[0].length) : q) : []
+  const places = found.map((p) => ({
+    key: `place:${p.kind}:${p.name}`, icon: <Icon name={p.kind === 'Street' ? 'map' : 'pin'} />, label: p.name, hint: p.kind,
+    run: () => reveal(p.lat, p.lng, p.kind === 'Area' ? 15 : 17, true),
+  }))
+  const ways = (walking ? found : found.slice(0, 1)).map((p) => ({
+    key: `walk:${p.kind}:${p.name}`, icon: <Icon name="arrow" />, label: `Walk to ${p.name}`, hint: walking ? p.kind : undefined,
+    run: () => walkTo(`spot/${p.lat.toFixed(6)},${p.lng.toFixed(6)}/${p.name}`),
+  }))
+
+  // Pins still match the whole query ("walk to school" may be a pin's title).
+  return [
+    { group: 'Get there', items: walking ? ways : [] },
+    { group: q ? 'Pins' : 'Recent pins', items: pins },
+    { group: 'Blocks', items: blocks },
+    { group: 'People', items: people },
+    { group: 'On the map', items: walking ? [] : places },
+    { group: 'Get there', items: walking ? [] : ways },
+    { group: 'Commands', items: shownCommands },
+  ].filter((g) => g.items.length)
+}
+
+function Palette() {
+  const [query, setQuery] = useState('')
+  const [index, setIndex] = useState(0)
+  const listRef = useRef<HTMLDivElement>(null)
+  const groups = paletteItems(query)
+  const flat = groups.flatMap((g) => g.items)
+  const at = Math.min(index, flat.length - 1)
+
+  const close = () => ui({ palette: false })
+  const run = (c: Command | undefined) => {
+    if (!c) return
+    close()
+    c.run()
+  }
+
+  useEffect(() => {
+    listRef.current?.querySelector('.on')?.scrollIntoView({ block: 'nearest' })
+  }, [at])
+
+  let n = -1
+  return (
+    <div className="modal-back top" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="panel palette">
+        <div className="palette-input">
+          <Icon name="search" />
+          <input
+            autoFocus
+            value={query}
+            placeholder="Pins, people, places, or “walk …”"
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setIndex(0)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setIndex((at + 1) % Math.max(flat.length, 1))
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setIndex((at - 1 + flat.length) % Math.max(flat.length, 1))
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                run(flat[at])
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                close()
+              }
+            }}
+          />
+          <kbd>esc</kbd>
+        </div>
+        <div className="palette-list" ref={listRef} role="listbox" aria-label="Results">
+          {flat.length === 0 && <div className="muted pad">Nothing matches “{query}”.</div>}
+          {groups.map((g) => (
+            <div key={g.group}>
+              <div className="section">{g.group}</div>
+              {g.items.map((c) => {
+                n++
+                const mine = n
+                return (
+                  <button
+                    key={c.key}
+                    role="option"
+                    aria-selected={mine === at}
+                    className={mine === at ? 'palette-item on' : 'palette-item'}
+                    onMouseMove={() => mine !== at && setIndex(mine)}
+                    onClick={() => run(c)}
+                  >
+                    {c.icon}
+                    <span className="clip">{c.label}</span>
+                    {c.hint && <kbd>{c.hint}</kbd>}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+//
+// The legend.
+//
+
+// What everything on the map means, in the current style.
+function Switch({ on, label, flip }: { on: boolean; label: string; flip: () => void }) {
+  return (
+    <button className={on ? 'toggle-row on' : 'toggle-row'} role="switch" aria-checked={on} onClick={flip}>
+      <i />
+      {label}
+    </button>
+  )
+}
+
+function Legend() {
+  const f = UI.filters
+  // How many of each kind there are with everything else as it is, so a kind
+  // with nothing in it says so before it's picked.
+  const all = visiblePosts(true)
+  const count = (k: Flair) => all.filter((p) => p.flair === k).length
+  const toggle = (k: Flair) => setFilters({ kinds: f.kinds.includes(k) ? f.kinds.filter((x) => x !== k) : [...f.kinds, k] })
+  return (
+    <div className="panel legend filters">
+      <div className="legend-head">
+        <strong>Show on the map</strong>
+        {filterWords() && (
+          <button className="link" onClick={() => setFilters(PRESETS[0].pins)}>
+            Show everything
+          </button>
+        )}
+      </div>
+      <div className="presets">
+        {PRESETS.map((preset) => (
+          <button key={preset.label} className={samePins(preset.pins, f) ? 'on' : ''} onClick={() => setFilters(preset.pins)}>
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      <div className="section">Pins</div>
+      <div className="kinds">
+        {(Object.keys(flairs) as Flair[]).map((k) => (
+          <div key={k} className={f.kinds.includes(k) ? 'kind on' : f.kinds.length ? 'kind off' : 'kind'}>
+            <button className="kind-main" onClick={() => toggle(k)} aria-pressed={f.kinds.includes(k)}>
+              <Blip flair={k} size={22} />
+              <span className="label">{flairs[k].label}</span>
+              <small>{count(k)}</small>
+            </button>
+            <button className="only" onClick={() => setFilters({ kinds: [k] })} title={`Only ${flairs[k].label.toLowerCase()}`}>
+              only
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="switches">
+        <Switch on={f.friendsOnly} label="Friends' pins only" flip={() => (f.friendsOnly || !needAccount('signin')) && setFilters({ friendsOnly: !f.friendsOnly })} />
+        <Switch on={f.soon} label="On now, or in the next day" flip={() => setFilters({ soon: !f.soon })} />
+        <Switch on={f.legends} label="Legends only" flip={() => setFilters({ legends: !f.legends })} />
+      </div>
+      <div className="section">Also on the map</div>
+      <div className="switches">
+        <Switch on={f.people} label="Friends where they are" flip={() => setFilters({ people: !f.people })} />
+        <Switch on={f.stickers} label="Stickers" flip={() => setFilters({ stickers: !f.stickers })} />
+        <Switch on={f.names} label="What people call the blocks" flip={() => setFilters({ names: !f.names })} />
+        <Switch on={f.places} label="Shops, cafés and the rest" flip={() => setFilters({ places: !f.places })} />
+      </div>
+      <div className="section">Places</div>
+      <div className="legend-grid">
+        {LEGEND.map(([icon, label]) => (
+          <div key={icon}>
+            <span className="blip" style={{ width: 18, height: 18, background: poiColor(icon) }}>
+              <Icon name={icon} size={11} />
+            </span>
+            <span>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+//
+// Snaps: a photo or video from where you are, up for a day.
+//
+
+// The phone's camera (or a file, on a computer): the snap sheet takes it from there.
+function startSnap() {
+  if (needAccount()) return
+  ;(document.getElementById('snap-input') as HTMLInputElement | null)?.click()
+  watchHere() // where it goes: a fix by the time the caption's written
+}
+
+function takeSnap(file: File | undefined) {
+  if (!file) return
+  if (UI.snap) URL.revokeObjectURL(UI.snap.url)
+  ui({ snap: { file, url: URL.createObjectURL(file) } })
+}
+
+function dropSnap() {
+  if (UI.snap) URL.revokeObjectURL(UI.snap.url)
+  ui({ snap: null })
+}
+
+function SnapSheet() {
+  const [caption, setCaption] = useState('')
+  const [busy, setBusy] = useState(false)
+  const snap = UI.snap!
+  const here = S.here
+  const video = snap.file.type.startsWith('video/')
+  async function post() {
+    if (busy) return
+    setBusy(true)
+    const at = here ? { latitude: here.latitude, longitude: here.longitude } : viewCenter()
+    const made = await createSnap(snap.file, caption, at.latitude, at.longitude)
+    setBusy(false)
+    if (!made) return failed("Couldn't post the snap")
+    dropSnap()
+    reveal(at.latitude, at.longitude, Math.max(map?.zoom ?? 16, 16))
+    celebrate('Snapped', 'Up for a day, unless the neighbours vote it a Legend')
+  }
+  return (
+    <div className="snap-sheet" role="dialog" aria-label="New snap">
+      <div className="snap-card">
+        {video ? <video src={snap.url} autoPlay muted loop playsInline /> : <img src={snap.url} alt="" />}
+        <input className="input" value={caption} maxLength={120} placeholder="Say what it is (or don't)" autoFocus={!narrow()} onChange={(e) => setCaption(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && post()} />
+        <div className="muted small">{here ? 'Where you are' : 'The middle of the map'} · gone in 24 hours unless it's voted a Legend</div>
+        <div className="btn-row">
+          <button className="btn" onClick={dropSnap}>
+            Cancel
+          </button>
+          <button className="btn primary" onClick={post} disabled={busy}>
+            <Icon name="camera" size={16} /> {busy ? 'Posting…' : 'Post snap'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+//
+// Sparks: the streak, and the stickers they buy.
+//
+
+// A name for how long someone's been around, from the sparks they've ever had.
+function rankOf(earned: number) {
+  return earned >= 150 ? 'Local legend' : earned >= 50 ? 'Local' : earned >= 15 ? 'Regular' : 'Newcomer'
+}
+
+function SparkBadge({ id }: { id: string }) {
+  const p = S.profiles.get(id)
+  if (!p) return null
+  return (
+    <span className="spark-badge" title={`${rankOf(p.sparks_earned)}: ${p.streak} days in a row, ${p.sparks_earned} sparks all told`}>
+      {p.streak > 1 && <span>🔥 {p.streak}</span>}
+      <span>{rankOf(p.sparks_earned)}</span>
+    </span>
+  )
+}
+
+function StickerTray() {
+  const me = S.userId ? S.profiles.get(S.userId) : null
+  const mine = liveStickers().filter((x) => x.user_id === S.userId)
+  return (
+    <div className="panel legend tray">
+      <div className="legend-head">
+        <strong>Stickers</strong>
+        <span className="muted small">
+          ✨ {me?.sparks ?? 0} · {STICKER_SPARKS} each, up for a day
+        </span>
+      </div>
+      <div className="sticker-grid">
+        {STICKERS.map((emoji) => (
+          <button
+            key={emoji}
+            className={UI.placing === emoji ? 'on' : ''}
+            onClick={() => {
+              if (needAccount()) return
+              if ((me?.sparks ?? 0) < STICKER_SPARKS) return toast(`A sticker is ${STICKER_SPARKS} sparks. Open the app each day for more: a week in a row is 6 at once.`)
+              ui({ placing: UI.placing === emoji ? null : emoji })
+            }}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      <p className="muted small">{UI.placing ? `${narrow() ? 'Tap' : 'Click'} the map where it goes.` : 'Pick one, then put it on the map: footprints where the thing was seen, a ghost on the old gaol.'}</p>
+      {me && (
+        <p className="muted small">
+          🔥 {me.streak} {me.streak === 1 ? 'day' : 'days in a row'} · {rankOf(me.sparks_earned)}. A spark a day for opening the app, six on every seventh day, one for each up-vote your pins get and ten when one becomes a Legend.
+        </p>
+      )}
+      {mine.length > 0 && (
+        <>
+          <div className="section">Yours on the map</div>
+          <div className="sticker-grid">
+            {mine.map((x) => (
+              <button key={x.id} title="Peel it off" onClick={() => peelSticker(x.id).then((ok) => ok || failed("Couldn't peel it off"))}>
+                {x.emoji}
+                <small>✕</small>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
 }
 
-export default App
+//
+// The hover card that follows a pin on the map.
+//
+
+function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null> }) {
+  const id = UI.hover
+  if (narrow() || !id) return null
+
+  if (id.startsWith('person:')) {
+    const userId = id.slice('person:'.length)
+    const loc = locationOf(userId)
+    const away = fromMe(loc)
+    return (
+      <div className="hover-card person-card" ref={cardRef}>
+        <Avatar id={userId} size={32} dot />
+        <div>
+          <strong>{nameOf(userId)}</strong>
+          <div className="muted small">
+            {loc && `here ${since(loc.updated_at)}`}
+            {away !== null && ` · ${awayText(away)}`}
+          </div>
+          <div className="muted small">Click to message</div>
+        </div>
+      </div>
+    )
+  }
+
+  const posts = S.posts.filter((p) => placeKey(p) === id)
+  if (!posts.length || (UI.route.kind === 'pin' && posts.some((p) => p.id === UI.route.id))) return null
+  const post = posts[0]
+  const replies = stats().replies.get(post.id) ?? 0
+  const photo = stats().photo.get(post.id)
+
+  return (
+    <div className="hover-card" ref={cardRef}>
+      <div className="row-top">
+        <strong className="clip">{post.title}</strong>
+      </div>
+      <div className="muted small">
+        {nameOf(post.author_id, post.author_name)} · {ago(post.created_at)}
+        {replies > 0 && ` · ${plural(replies, 'reply', 'replies')}`}
+      </div>
+      {photo && <img className="hover-photo" src={photo.url} alt="" />}
+      {post.description && <div className="hover-body">{post.description}</div>}
+      {posts.length > 1 && <div className="muted small">+ {plural(posts.length - 1, 'more thread')} here</div>}
+    </div>
+  )
+}
+
+// Keys: the map is the main surface, so single letters drive it.
+function onKey(e: KeyboardEvent) {
+  const typing = e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]')
+  if ((e.key === 'k' || e.key === 'K') && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault()
+    ui({ palette: !UI.palette })
+    return
+  }
+  if (e.key === 'Escape') {
+    if (UI.snap) dropSnap()
+    else if (UI.placing) ui({ placing: null })
+    else if (UI.palette) ui({ palette: false })
+    else if (UI.auth) ui({ auth: null })
+    else if (UI.legend || UI.tray) ui({ legend: false, tray: false })
+    else if (UI.route.kind) go('')
+    else if (UI.then !== null) toggleThen()
+    return
+  }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey || UI.palette || UI.auth || UI.snap) return
+
+  const k = e.key.toLowerCase()
+  if (k === '/') {
+    e.preventDefault()
+    ui({ palette: true })
+  } else if (k === '?') go('settings')
+  else if (k === 'n') startCompose()
+  else if (k === 'l') locate()
+  else if (k === 'g') walkKey()
+  else if (k === 'y') toggleThen()
+  else if (k === 's') startSnap()
+  else if (k === 't') applyTheme(THEMES[(THEMES.findIndex((t) => t.id === UI.theme) + 1) % THEMES.length].id)
+  else if (k === 'f') {
+    if (!needAccount('signin')) go('friends')
+  } else if (k === 'i') {
+    if (!needAccount('signin')) go('inbox')
+  }
+  else if (k === 'j' || k === 'k') {
+    // Step through the feed, newest or nearest first, like a list of messages.
+    const rows = sortedFeed(visiblePosts())
+    const at = rows.findIndex((r) => r.post.id === UI.route.id)
+    const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (k === 'j' ? 1 : -1)))]
+    if (next) openPin(next.post)
+  } else if (k.startsWith('arrow') && map && (document.activeElement === document.body || document.activeElement === map.canvas)) {
+    // Only when nothing else has the focus: arrows still scroll a panel you're in.
+    const step = e.shiftKey ? 300 : 100
+    glideBy(map, k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0)
+  } else if ((k === '=' || k === '+') && map) zoomBy(map, 1)
+  else if (k === '-' && map) zoomBy(map, -1)
+  else return
+  e.preventDefault()
+}
+
+// Back in time: the stretch of time, the moment on it (a step at a time, or
+// played forward), and what the map holds then.
+function ThenBar() {
+  const { span, step } = spanOf(UI.thenSpan)
+  const { now, at } = thenNow()
+  const pins = visiblePosts().length
+  const legends = visiblePosts().filter((p) => p.legend_at && time(p.legend_at) <= at).length
+  return (
+    <div className="then-bar" role="group" aria-label="Back in time">
+      <div className="then-top">
+        <div className="spans">
+          {SPANS.map((s) => (
+            <button key={s.id} className={s.id === UI.thenSpan ? 'on' : ''} onClick={() => setSpan(s.id)}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <button className="icon-btn" onClick={toggleThen} title="Back to now (Esc)" aria-label="Back to now">
+          <Icon name="close" />
+        </button>
+      </div>
+      <div className="then-track">
+        <button className="icon-btn step-back" onClick={() => setThen(at - step)} aria-label="Back a step" title="Back a step">
+          <Icon name="prev" size={16} />
+        </button>
+        <input
+          type="range"
+          min={now - span}
+          max={now}
+          step={step}
+          value={now - Math.round((now - at) / step) * step}
+          onChange={(e) => {
+            stopPlaying()
+            setThen(Number(e.target.value))
+          }}
+          aria-label="When"
+        />
+        <button className="icon-btn step-forward" onClick={() => setThen(at + step)} aria-label="Forward a step" title="Forward a step">
+          <Icon name="next" size={16} />
+        </button>
+        <button className={UI.playing ? 'icon-btn play on' : 'icon-btn play'} onClick={playThen} aria-label={UI.playing ? 'Pause' : 'Play'} title={UI.playing ? 'Pause' : 'Play it forward'}>
+          <Icon name={UI.playing ? 'pause' : 'play'} size={16} />
+        </button>
+      </div>
+      <div className="then-when">
+        <strong>{thenText(at, UI.thenSpan)}</strong>
+        <small>
+          {plural(pins, 'pin')} · {plural(legends, 'legend')}
+        </small>
+      </div>
+    </div>
+  )
+}
+
+// "Get there" under way: how far, the maps app for the real thing, and stop.
+function WalkBar() {
+  const target = walkTarget()
+  if (!target || UI.route.kind === 'new') return null
+  const way = map?.route
+  const minutes = way?.points.length ? Math.max(1, Math.round(way.meters / 80)) : 0 // 80 m a minute
+
+  let status = 'Finding you…'
+  if (!way) {
+    if (noFix && !S.here) status = "Can't see where you are; your maps app can help"
+  } else if (minutes) {
+    const length = way.meters < 1000 ? `${Math.round(way.meters / 10) * 10} m` : `${(way.meters / 1000).toFixed(1)} km`
+    status = `${minutes} min walk · ${length}${way.via ? ` · via ${way.via}` : ''}`
+  } else if (way.state === 'waiting') status = 'Working out the way…'
+  else if (way.state === 'far') status = 'Too far to walk from here'
+  else status = "Can't find a way there on foot"
+  return (
+    <div className="walk" role="status">
+      <button className="walk-main" onClick={() => (UI.walk!.startsWith('spot/') ? reveal(target.lat, target.lng, 17, true) : go(UI.walk!))}>
+        <Icon name="arrow" size={18} />
+        <span>
+          <strong>{target.name}</strong>
+          <small>{status}</small>
+        </span>
+      </button>
+      {target.person && minutes > 0 && (
+        <button
+          className="icon-btn"
+          title={`Tell ${target.name} you're on your way`}
+          aria-label={`Tell ${target.name} you're on your way`}
+          onClick={async () => {
+            if (await sendMessage(UI.walk!.split('/')[1], `On my way, about ${minutes} min`)) toast(`${target.name} knows you're coming`)
+            else failed("Couldn't send")
+          }}
+        >
+          <Icon name="send" />
+        </button>
+      )}
+      <a className="icon-btn" href={directions(target.lat, target.lng)} target="_blank" rel="noreferrer noopener" title="Open in your maps app" aria-label="Open in your maps app">
+        <Icon name="map" />
+      </a>
+      <button className="icon-btn" onClick={() => ui({ walk: null })} title="Stop" aria-label="Stop">
+        <Icon name="close" />
+      </button>
+    </div>
+  )
+}
+
+//
+// The app.
+//
+
+export default function App() {
+  useStore()
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  // A clock: "5m ago", "in 3h" and the map's live and stale cues move on by
+  // themselves, even when nothing else happens.
+  useEffect(() => {
+    const tick = window.setInterval(changed, 30000)
+    return () => window.clearInterval(tick)
+  }, [])
+
+  useEffect(() => {
+    start()
+    // If location was allowed before, show where you are without asking again.
+    navigator.permissions
+      ?.query({ name: 'geolocation' })
+      .then((p) => {
+        if (p.state === 'granted') watchHere()
+      })
+      .catch(() => {})
+    // Coming back on a new day: the streak, and a spark or six.
+    setStreakHandler((streak, prize) => {
+      const line = `${streak === 1 ? 'Welcome back' : `${streak} days in a row`} · +${plural(prize, 'spark')}`
+      if (streak % 7 === 0) celebrate(`${streak}-day streak`, line)
+      else toast(`🔥 ${line}`)
+    })
+    setIncomingHandler((title, body, route) => {
+      if (document.visibilityState === 'visible') {
+        play('tick')
+        toast(body ? `${title}: ${body}` : title, route)
+        return
+      }
+      if (!UI.alerts || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+      const alert = new Notification(title, { body, tag: route })
+      alert.onclick = () => {
+        window.focus()
+        go(route)
+        alert.close()
+      }
+    })
+  }, [])
+
+  useEffect(() => {
+    const m = createMap(canvasRef.current!, UI.view.lng, UI.view.lat, UI.view.zoom, shown())
+    map = m
+    let saveTimer = 0
+    let lastCenter = center(m)
+
+    // A tap on the map between streets opens that block, a moment later, so a
+    // double tap (or click) that zooms doesn't open it too.
+    let blockTimer = 0
+    let lastEmptyTap = 0
+    m.onClick = (marker, lng, lat) => {
+      window.clearTimeout(blockTimer)
+      if (UI.route.kind === 'new') {
+        if (UI.picking) pickBlock(lng, lat)
+        else ui({ draft: { latitude: lat, longitude: lng } })
+        return
+      }
+      // A sticker picked in the tray goes where the map's tapped.
+      if (UI.placing) {
+        const emoji = UI.placing
+        ui({ placing: null })
+        dropSticker(emoji, lat, lng).then((ok) => {
+          if (!ok) return failed("Couldn't drop it")
+          play('spray')
+          navigator.vibrate?.(10)
+        })
+        return
+      }
+      if (!marker) {
+        // Tapping empty map puts the map first: the legend and the tray go, and
+        // on a phone the sheets. With the map clear, a tap opens the block.
+        if (UI.legend || UI.tray) ui({ legend: false, tray: false })
+        if (narrow() && (UI.route.kind || UI.feed)) {
+          ui({ feed: false })
+          go('')
+          return
+        }
+        const now = performance.now()
+        const second = now - lastEmptyTap < 350
+        lastEmptyTap = second ? 0 : now
+        if (second || m.zoom < 14.5) return
+        blockTimer = window.setTimeout(() => {
+          if (m.lastTap !== 0) openBlockAt(lng, lat) // (a touch double tap zeroes it)
+        }, 320)
+        return
+      }
+      if (marker.kind === 'pin') {
+        const posts = S.posts.filter((p) => placeKey(p) === marker.id)
+        go(posts.length === 1 ? `pin/${posts[0].id}` : `place/${marker.id}`)
+        reveal(posts[0].latitude, posts[0].longitude)
+      } else if (marker.kind === 'sticker') {
+        const sticker = S.stickers.find((x) => `sticker:${x.id}` === marker.id)
+        if (sticker) toast(`${sticker.emoji} from ${sticker.user_id === S.userId ? 'you' : nameOf(sticker.user_id)}, ${ago(sticker.created_at)}`)
+      } else if (marker.kind === 'person') {
+        go(`chat/${marker.id.slice('person:'.length)}`)
+      } else if (marker.kind === 'me' && S.userId) {
+        go(`user/${S.userId}`)
+      }
+    }
+    // Panels that name the nearest street redraw once the tiles around them arrive.
+    let tileTimer = 0
+    m.onTile = () => {
+      window.clearTimeout(tileTimer)
+      tileTimer = window.setTimeout(() => {
+        if (['pin', 'place', 'new'].includes(UI.route.kind)) changed()
+      }, 300)
+    }
+    m.onRoute = changed
+    m.onUserMove = () => {
+      window.clearTimeout(blockTimer)
+      if (UI.follow) ui({ follow: false })
+    }
+    // Press and hold the map (right-click with a mouse) to pin something right there.
+    m.onLongPress = (lng, lat) => {
+      if (needAccount()) return
+      navigator.vibrate?.(12)
+      UI.draft = { latitude: lat, longitude: lng }
+      go('new')
+    }
+    m.onHover = (marker) => ui({ hover: marker && marker.kind !== 'me' ? marker.id : null })
+    m.onFrame = () => {
+      // Keep the hover card glued to its pin, without a React render per frame.
+      const card = cardRef.current
+      const marker = m.markers.find((x) => x.id === UI.hover)
+      if (card && marker) {
+        const p = project(m, marker.x, marker.y)
+        const lift = marker.kind === 'pin' && m.theme.blip === 'pin' ? 52 : 26
+        card.style.transform = `translate(${Math.round(p.x - card.offsetWidth / 2)}px, ${Math.round(p.y - lift - card.offsetHeight)}px)`
+      }
+
+      // Remember the view, and re-sort "Around", once the camera has stopped moving.
+      // Frames keep coming while things pulse, so compare with the last frame.
+      const c = center(m)
+      if (c.lat !== lastCenter.lat || c.lng !== lastCenter.lng || c.zoom !== lastCenter.zoom) {
+        lastCenter = c
+        window.clearTimeout(saveTimer)
+        saveTimer = window.setTimeout(() => {
+          store('aroundhere.view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: c.zoom }))
+          ui({ view: { lat: c.lat, lng: c.lng, zoom: c.zoom } })
+        }, 250)
+      }
+    }
+
+    return () => {
+      destroyMap(m)
+      if (map === m) map = null
+    }
+  }, [])
+
+  // Everything on the map is rebuilt from the store after each render; it's cheap.
+  const posts = visiblePosts()
+  useEffect(() => {
+    if (!map) return
+    map.draftMode = UI.route.kind === 'new'
+    // "Sun" turns to Night at dusk by itself (the clock redraws every 30 s).
+    if (map.themeName !== shown()) {
+      setTheme(map, shown())
+      paintChrome(shown())
+    }
+    setMarkers(map, buildMarkers(posts))
+    setRegions(map, buildRegions(posts))
+    setPlacesShown(map, UI.filters.places)
+    // Looking back yellows the map, more the further back it goes.
+    const age = UI.then === null ? 0 : Math.min(1, (Date.now() - UI.then) / (30 * 86400000))
+    map.canvas.style.filter = UI.then === null ? '' : `sepia(${(0.3 + 0.5 * age).toFixed(2)}) saturate(${(1 - 0.3 * age).toFixed(2)})`
+    // Walking into a block with a name: it comes up, the way a game names a district.
+    const inside = S.here ? blockOf(S.here.latitude, S.here.longitude) : null
+    if ((inside?.id ?? '') !== lastRegion) {
+      lastRegion = inside?.id ?? ''
+      const name = inside && blockName(inside.id)
+      const legends = inside ? pinsOn(inside).filter((p) => p.legend_at).length : 0
+      if (inside && name) district(name, legends ? `${plural(legends, 'legend')} here` : 'Named by the neighbours')
+    }
+    const target = walkTarget()
+    const here = S.here
+    setRoute(map, target && here ? { lng: here.longitude, lat: here.latitude, accuracy: here.accuracy } : null, target)
+    if (UI.walk && !target) ui({ walk: null }) // the pin went, or the friend stopped sharing
+    else if (target && here && distance(here.latitude, here.longitude, target.lat, target.lng) < 30) {
+      ui({ walk: null })
+      celebrate('Arrived', target.person ? `You found ${target.name}` : `You're at ${target.name}`)
+    }
+    map.canvas.style.cursor = map.draftMode ? 'crosshair' : 'grab'
+    keepFollowing()
+    revealLinked()
+  })
+
+  useEffect(() => {
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const unread = visibleNotifications().filter((n) => !n.read_at).length + unreadMessages().length
+  const incomingRequests = S.friendships.filter((f) => !f.accepted_at && f.addressee === S.userId).length
+
+  useEffect(() => {
+    document.title = unread ? `(${unread}) AroundHere` : 'AroundHere'
+  }, [unread])
+
+  const route = UI.route
+  let detail: ReactNode = null
+  if (route.kind === 'pin') {
+    const post = S.posts.find((p) => p.id === route.id)
+    detail = post ? <PostView key={post.id} post={post} /> : <Missing what="pin" />
+  } else if (route.kind === 'place') detail = <PlaceView key={route.id} id={route.id} />
+  else if (route.kind === 'user') detail = <ProfileView key={route.id} id={route.id} />
+  else if (route.kind === 'chat') detail = <ChatView key={route.id} id={route.id} />
+  else if (route.kind === 'inbox') detail = <InboxView />
+  else if (route.kind === 'friends') detail = <FriendsView />
+  else if (route.kind === 'settings') detail = <SettingsView />
+  else if (route.kind === 'new') detail = <ComposeView />
+  else if (route.kind === 'block') detail = <BlockView key={route.id} />
+
+  const me = S.userId
+  const sheetUp = !!detail || UI.feed
+
+  return (
+    <div className={`app${detail ? ' has-detail' : ''}${UI.feed ? ' has-feed' : ''}${sheetUp ? ' sheet-up' : ''}${UI.sheetFull ? ' sheet-full' : ''}`}>
+      <canvas ref={canvasRef} className="map" role="application" aria-label="Map of pins and friends nearby. Drag to move, scroll or pinch to zoom." />
+      <div className="fx" aria-hidden />
+
+      <header className="topbar">
+        <button className="brand" onClick={() => ui({ feed: !UI.feed })} title="Toggle the list">
+          <span className="brand-mark">
+            <Icon name="pin" size={18} />
+          </span>
+          <span className="brand-name">AroundHere</span>
+        </button>
+        <button className="search" onClick={() => ui({ palette: true })}>
+          <Icon name="search" size={16} />
+          <span>Search pins, people, commands</span>
+          <kbd>/</kbd>
+        </button>
+        <div className="spacer" />
+        <button className="icon-btn bar" onClick={() => go(route.kind === 'settings' ? '' : 'settings')} title="Map style and settings" aria-label="Settings">
+          <Icon name="palette" />
+        </button>
+        {me ? (
+          <>
+            <button className="icon-btn bar" onClick={() => go(route.kind === 'friends' ? '' : 'friends')} title="Friends (F)" aria-label="Friends">
+              <Icon name="users" />
+              {incomingRequests > 0 && <b className="badge">{incomingRequests}</b>}
+            </button>
+            <button className="icon-btn bar hide-narrow" onClick={() => go(route.kind === 'inbox' ? '' : 'inbox')} title="Inbox (I)" aria-label="Inbox">
+              <Icon name="bell" />
+              {unread > 0 && <b className="badge">{unread > 99 ? '99+' : unread}</b>}
+            </button>
+            {S.profiles.get(me) && (
+              <button className="spark-chip hide-narrow" onClick={() => ui({ tray: !UI.tray, legend: false })} title="Your streak and sparks">
+                🔥 {S.profiles.get(me)!.streak} <span>✨ {S.profiles.get(me)!.sparks}</span>
+              </button>
+            )}
+            <button className="me-btn hide-narrow" onClick={() => go(`user/${me}`)} title="Your profile">
+              <Avatar id={me} size={30} />
+            </button>
+          </>
+        ) : (
+          <button className="btn primary" onClick={() => ui({ auth: 'signin' })}>
+            Sign in
+          </button>
+        )}
+      </header>
+
+      {UI.feed && <Feed />}
+      {detail}
+
+      <div className="map-tools">
+        <button className="icon-btn tool" onClick={() => map && zoomBy(map, 1)} aria-label="Zoom in" title="Zoom in (+)">
+          <Icon name="plus" />
+        </button>
+        <button className="icon-btn tool" onClick={() => map && zoomBy(map, -1)} aria-label="Zoom out" title="Zoom out (−)">
+          <Icon name="minus" />
+        </button>
+        <button className={UI.follow ? 'icon-btn tool follow' : S.here ? 'icon-btn tool on' : 'icon-btn tool'} onClick={locate} aria-label="Where am I" title="Where am I (L)">
+          <Icon name="locate" />
+        </button>
+        <button className={UI.then !== null ? 'icon-btn tool on' : 'icon-btn tool'} onClick={toggleThen} aria-label="Back in time" title="Back in time: the map as it was (Y)">
+          <Icon name="clock" />
+        </button>
+        <button className={UI.tray ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ tray: !UI.tray, legend: false, placing: null })} aria-label="Stickers" title="Stickers and sparks">
+          <Icon name="sticker" />
+        </button>
+        <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend, tray: false })} aria-label="Filters" title="What to show, and what the blips mean">
+          <Icon name="sliders" />
+          {filterWords() && <b className="badge dot" />}
+        </button>
+      </div>
+      {UI.legend && <Legend />}
+      {UI.tray && <StickerTray />}
+      {filterWords() && !UI.legend && (
+        <button className="filter-chip" onClick={() => ui({ legend: true })}>
+          <Icon name="sliders" size={14} /> {filterWords()}
+          <span
+            className="clear"
+            role="button"
+            aria-label="Show everything"
+            onClick={(e) => {
+              e.stopPropagation()
+              setFilters(PRESETS[0].pins)
+            }}
+          >
+            <Icon name="close" size={12} />
+          </span>
+        </button>
+      )}
+
+      {UI.then !== null && <ThenBar />}
+      {route.kind !== 'new' && UI.then === null && (
+        <div className="fab-row">
+          <button className="fab snap-fab" onClick={startSnap} title="Snap: a photo from here, up for a day (S)" aria-label="Snap">
+            <Icon name="camera" size={20} />
+            <span className="hide-narrow">Snap</span>
+          </button>
+          <button className="fab hide-narrow" onClick={startCompose} title="New pin (N)">
+            <Icon name="plus" size={20} /> Pin something
+          </button>
+        </div>
+      )}
+      <input id="snap-input" type="file" accept="image/*,video/*" capture="environment" hidden onChange={(e) => { takeSnap(e.target.files?.[0]); e.target.value = '' }} />
+      {UI.snap && <SnapSheet />}
+      {UI.placing && <div className="hint-bar">{narrow() ? 'Tap' : 'Click'} the map to put {UI.placing} there</div>}
+      {route.kind === 'new' && (
+        <div className="hint-bar">
+          {narrow() ? 'Tap' : 'Click'} {UI.picking ? 'the blocks it takes over' : 'the map to place your pin'}
+        </div>
+      )}
+
+      <nav className="tabbar">
+        <button className={!detail && !UI.feed ? 'on' : ''} onClick={() => { ui({ feed: false }); go('') }}>
+          <Icon name="map" />
+          <span>Map</span>
+        </button>
+        <button className={!detail && UI.feed ? 'on' : ''} onClick={() => { ui({ feed: true }); go('') }}>
+          <Icon name="list" />
+          <span>Feed</span>
+        </button>
+        <button className="post" onClick={startCompose} aria-label="New pin">
+          <Icon name="plus" size={26} />
+        </button>
+        <button className={route.kind === 'inbox' || route.kind === 'chat' ? 'on' : ''} onClick={() => !needAccount('signin') && go('inbox')}>
+          <Icon name="bell" />
+          <span>Inbox</span>
+          {unread > 0 && <b className="badge">{unread}</b>}
+        </button>
+        <button className={(route.kind === 'user' && route.id === me) || route.kind === 'friends' ? 'on' : ''} onClick={() => (me ? go(`user/${me}`) : needAccount('signin'))}>
+          <Icon name="user" />
+          <span>{me ? 'Me' : 'Sign in'}</span>
+          {incomingRequests > 0 && <b className="badge">{incomingRequests}</b>}
+        </button>
+      </nav>
+
+      <div className="credit">
+        © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> · OpenFreeMap
+      </div>
+      <WalkBar />
+      <HoverCard cardRef={cardRef} />
+      {UI.district && (
+        <div className="district" key={UI.district.name}>
+          <strong>{UI.district.name}</strong>
+          <span>{UI.district.sub}</span>
+        </div>
+      )}
+      {UI.objective && (
+        <div className="objective" key={UI.objective.place}>
+          {UI.objective.verb} <b>{UI.objective.place}</b>
+          {/[.!?]$/.test(UI.objective.place) ? '' : '.'}
+        </div>
+      )}
+      {UI.banner && (
+        <div className="banner-big" role="status" key={UI.banner.title + UI.banner.sub}>
+          <strong>{UI.banner.title}</strong>
+          <span>{UI.banner.sub}</span>
+        </div>
+      )}
+      {UI.toast &&
+        (UI.toastTo ? (
+          <button className="toast" aria-live="polite" onClick={() => { go(UI.toastTo); ui({ toast: '', toastTo: '' }) }}>
+            {UI.toast}
+          </button>
+        ) : (
+          <div className="toast" role="status">
+            {UI.toast}
+          </div>
+        ))}
+      {UI.palette && <Palette />}
+      {UI.auth && <AuthView key={UI.auth} />}
+    </div>
+  )
+}
