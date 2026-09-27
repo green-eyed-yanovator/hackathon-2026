@@ -31,19 +31,36 @@ What you can do:
 - **Pins take over blocks.** Something that happens across a few blocks (a
   street party, a clean-up, a blackout) is pinned to them: tap the blocks when
   making the pin. They're marked out the way each style marks ground.
-- **Turf.** Four crews (Magpies, Galahs, Possums, Owls) fight over the blocks,
-  like the gang territories on a 2004 console map. Stand in a block and tag it:
-  a twelve-second spraying game where you cover the other crews' tags on a
-  wall, and how well you do is what the tag is worth. The crew with the most
-  tags holds the block and colours it; tags fade by half every three days, so
-  ground has to be kept. A block being hit flashes red, and the people who
-  tagged it hear about it. The flag button shows the standings and the fights
-  on right now.
+- **Sightings and stories, and the ones that become Legends.** Saw a bear on
+  the bike path, something big in the parklands at 3am? Pin it as a Sighting,
+  with a photo. Got a story about a place, the kind people tell at the pub?
+  Pin it as a Story, as long as it needs. Every pin can be voted up or down,
+  Reddit-style, and one voted three up is a Legend: it gets a gold star and
+  stays on the map for good. Legends of a block show at the top of it.
+- **Snaps.** The camera button: a photo or video from where you are, a round
+  picture on the map with a ring that runs down over its day. After 24 hours
+  it's gone, unless the neighbours vote it a Legend first.
+- **Everyone's photos on a meetup.** Anyone can add their photos and videos to
+  a pin (an event gets "Add your photos from it"), or put them in a reply; they
+  show together, with whose they are.
+- **Streaks and sparks.** Opening the app each day keeps a streak going and
+  earns a spark (six on every seventh day); up-votes on your pins earn one
+  each, and a pin becoming a Legend earns ten. Sparks buy stickers (an emoji
+  dropped on the map for a day: footprints where the thing was seen, a ghost
+  on the old gaol) and boosts (a pin that glows on the map and tops the feed
+  for twelve hours). Your streak and how long you've been around (Newcomer,
+  Regular, Local, Local legend) show on your profile.
+- **Filters that are the legend.** The sliders button says what the map shows:
+  quick picks (on now, weird stuff, legends, snaps, friends), any mix of kinds
+  of pin (each with how many there are, and "only" to pick just one), friends'
+  pins only, and whether friends' dots, stickers, block names and the map's own
+  shops and cafés show at all. A chip over the map says what's filtered and
+  clears it; the choice is remembered on the device.
 - **Back in time.** The clock button (or `Y`) shows the map as it was at any
-  moment: the pins up then, what the blocks were called and who held them. Pick
+  moment: the pins up then (snaps included), what the blocks were called, the legends. Pick
   how far back the timeline reaches (an hour, a day, a week, a month, a year)
   and it steps a minute at a time over the last hour, up to a day at a time over
-  the year. Play runs it forward: pins drop in, names appear, turf spreads.
+  the year. Play runs it forward: pins drop in, names appear, legends are made.
 - **Get there.** A walking route along the streets, drawn on the map (a GPS
   line in the game styles) with the minutes it takes and
   the street most of it is on. It shortens as you walk, finds a new way if
@@ -113,6 +130,11 @@ auth, database, storage and realtime requests through the same HTTPS address,
 so location features can work too. To stop sharing this app, run
 `tailscale serve --https=443 off`.
 
+For a demo, or just a quicker phone, serve the built app instead, on the same
+port so the same `tailscale serve` finds it: `npm run build && npm run preview`.
+The development server runs React's development build, which renders
+everything twice and is several times slower.
+
 Shared locations only count while they're fresh (a real phone refreshes its
 own), so the demo neighbours fade after half an hour and leave the map after
 half a day. Before a demo, put the whole neighbourhood back (friends on the
@@ -155,13 +177,14 @@ password reset) into Authentication → Email Templates, so emails carry a
    purple GPS line. (It starts from where you really are;
    away from Adelaide, set a location near the city centre in the browser's
    dev tools, under Sensors.)
-6. As Maya, switch to Palm Coast and zoom out a little: the crews' turf in
-   their colours, Busker Row on Rundle Mall flashing because the Galahs are
-   hitting it. Tap Dumpling Alley: its names and what people say about it,
-   with votes, and its pins. Press Tag it (Touch up, since it's Maya's crew's)
-   to play the spraying game; it needs you to be there, so set the location in
-   dev tools to the block first.
-7. On a phone (or the browser's phone view): the tab bar, sheets you drag up
+6. As Maya, open the filters (the sliders button) and pick Weird stuff: the
+   sightings and stories. Open "Something big on the Torrens path": a Legend,
+   with footprint stickers beside it on the map. Vote on "Lights over the
+   parklands" and watch it get closer to a Legend. Press `S` (or the camera)
+   to post a snap, then the sticker button to spend Maya's sparks.
+7. Tap Dumpling Alley on the map: its names and what people say about it, with
+   votes and answers, and its pins. Press `Y` and play the week forward.
+8. On a phone (or the browser's phone view): the tab bar, sheets you drag up
    and down, pinch to zoom, and the locate button that follows you around.
 
 ## Map styles
@@ -197,7 +220,7 @@ for Neon Bay…) and a tick for messages. Settings turns them off.
 `/` or `Ctrl K` search pins, people, streets and commands (fuzzy: `rndl` finds
 Rundle; `walk rundle mall` walks you there) · `N` new pin ·
 `J` `K` next and previous pin · `L` where am I (follows you until you move the map) ·
-`G` get there on foot (again to stop) · `Y` back in time ·
+`G` get there on foot (again to stop) · `Y` back in time · `S` snap ·
 `T` next map style · `F` friends · `I` inbox · arrows move the map · `+` `−`
 zoom · `Esc` close
 
