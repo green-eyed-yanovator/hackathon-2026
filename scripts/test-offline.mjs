@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -66,7 +66,8 @@ test('clean offline setup, accounts, data, files, realtime and restart', { timeo
     assert.equal(readFileSync(path.join(root, '.env.local'), 'utf8'), env)
 
     backend = await openBackend(root, () => {})
-    assert.equal((await backend.sql('select count(*)::int as n from supabase_migrations.schema_migrations')).rows[0].n, 26)
+    const migrations = readdirSync(path.join(root, 'supabase/migrations')).filter((f) => f.endsWith('.sql')).length
+    assert.equal((await backend.sql('select count(*)::int as n from supabase_migrations.schema_migrations')).rows[0].n, migrations)
     server = createServer((req, res) => void backend.handle(req, res))
     server.on('upgrade', (req, socket) => backend.upgrade(req, socket))
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -109,6 +110,17 @@ test('clean offline setup, accounts, data, files, realtime and restart', { timeo
     await deadline(joined.promise)
     const message = ok(await maya.from('messages').insert({ recipient_id: 'd0000000-0000-4000-8000-000000000002', body: 'Offline hello' }).select().single())
     assert.equal((await deadline(changed.promise)).new.id, message.id)
+
+    // Meeting up: Tom dabs, Maya dabs back from beside him, and it's a link-up
+    // Maya's friends can see and strangers can't; too rough a fix is refused.
+    const MAYA = 'd0000000-0000-4000-8000-000000000001', TOM = 'd0000000-0000-4000-8000-000000000002'
+    assert.equal(ok(await tom.rpc('dab', { friend: MAYA, how: 'fist_bump', lat: -34.9212, lng: 138.5995, fix: 20 })).status, 'waiting')
+    const linked = ok(await maya.rpc('dab', { friend: TOM, how: 'dab', lat: -34.9213, lng: 138.5996, fix: 25 }))
+    assert.equal(linked.status, 'linked')
+    assert.equal(linked.link_up.move, 'fist_bump')
+    assert.ok(ok(await maya.from('link_ups').select('*')).some((l) => l.id === linked.link_up.id))
+    assert.equal((await anon.from('link_ups').select('*')).data?.length ?? 0, 0)
+    assert.match((await maya.rpc('dab', { friend: TOM, how: 'dab', lat: -34.92, lng: 138.6, fix: 900 })).error?.message ?? '', /too rough/)
 
     const signup = client()
     const registered = ok(await signup.auth.signUp({ email: 'offline-test@example.test', password: 'localpassword', options: { data: { display_name: 'Offline Tester' } } }))

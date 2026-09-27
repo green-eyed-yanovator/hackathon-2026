@@ -95,6 +95,13 @@ begin
   where posts.title = v.title and posts.author_id = any (demo);
   update public.posts set created_at = now() - interval '1 hour', starts_at = now() - interval '30 minutes'
   where title = 'Sunset picnic in Rymill Park, on now' and author_id = any (demo);
+  -- Today's two link-ups on the map, as recent as the seed made them; any made
+  -- while showing it off go.
+  delete from public.link_ups where (a = any (demo) and b = any (demo)) and created_at > now() - interval '2 hours'
+    and not (a = tom and b = ben and move = 'fist_bump');
+  update public.link_ups set created_at = now() - interval '50 minutes' where a = tom and b = ben and move = 'fist_bump';
+  update public.link_ups set created_at = now() - interval '3 hours' where a = hannah and b = priya and move = 'high_five';
+  delete from private.dabs where who = any (demo) or whom = any (demo);
   -- Maya's streak waits for her to open the app today.
   update public.profiles set streak_day = (now() at time zone 'Australia/Adelaide')::date - 1 where id = any (demo);
 end $$;

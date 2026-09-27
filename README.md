@@ -71,6 +71,20 @@ What you can do:
   Friends can share their location (until they stop, or just for an hour) and
   see each other on the map with their photos, only while the app is open;
   when one is a street away, you get a word about it.
+- **Link-ups: dab when you meet.** Out with a friend? Open their profile and
+  dab (or high-five, fist-bump, hug). They get "wants to fist bump: do it back
+  while you're together", one tap answers, and both screens go off. It lands on
+  the map where you met, for a day, for your friends and theirs to see, with
+  sparks for both (the first one each day), and profiles count how often you've
+  linked up. Nobody has to share their location: each tap brings its own fix,
+  and the server only says yes if you're really together (about a street).
+- **Finding your way around the lists.** Pick anything from the feed, the
+  inbox, a block or search and the map looks right at it, close up, with a
+  ripple so the eye finds it. Hover a row and its pin gets a ring, or, off
+  screen, an arrow at the map's edge says which way and how far. "Around"
+  keeps its order while you look (it measures from where you moved the map),
+  a pin's header steps to the previous and next one (or `J` / `K`), and a
+  half-written reply or message is still there when you come back to it.
 - **Messages.** Tap a friend on the map to talk; you'll see when they're
   typing and when they've read it. Send a pin and it shows as a card.
 - **Looking after each other.** Block someone (they can't message or add
@@ -189,6 +203,9 @@ Rymill Park picnic back to on now.
 
 ## Putting it online
 
+For a short DigitalOcean deployment of the frontend, database, auth, storage
+and realtime on one Droplet, see [deploy/README.md](deploy/README.md).
+
 The frontend is a static build (`npm run build`, then serve `dist/`). For a
 hosted Supabase project:
 
@@ -226,7 +243,12 @@ password reset) into Authentication → Email Templates, so emails carry a
    to post a snap, then the sticker button to spend Maya's sparks.
 7. Tap Dumpling Alley on the map: its names and what people say about it, with
    votes and answers, and its pins. Press `Y` and play the week forward.
-8. On a phone (or the browser's phone view): the tab bar, sheets you drag up
+8. Maya and Tom meet up: give both browsers the same spot in dev tools
+   (Sensors). As Tom, open Maya's profile, pick the fist and press Fist bump
+   Maya. Maya is told; in her inbox (Activity), Fist bump back: the move goes
+   off on both screens and the link-up lands on the map, beside Tom and Ben's.
+   Her profile of Tom now says how often they've linked up.
+9. On a phone (or the browser's phone view): the tab bar, sheets you drag up
    and down, pinch to zoom, and the locate button that follows you around.
 
 ## Map styles

@@ -528,3 +528,26 @@ begin
   select post_id, id, tom, 'image', photos || 'cleanup-skip.jpg', created_at from public.replies where id = answer;
 end;
 $$;
+
+-- Friends who met and dabbed: two on the map today, older ones counted on
+-- profiles ("Linked up 3 times").
+do $$
+declare
+  maya uuid := 'd0000000-0000-4000-8000-000000000001';
+  tom uuid := 'd0000000-0000-4000-8000-000000000002';
+  priya uuid := 'd0000000-0000-4000-8000-000000000003';
+  hannah uuid := 'd0000000-0000-4000-8000-000000000005';
+  ben uuid := 'd0000000-0000-4000-8000-000000000006';
+begin
+  if (select count(*) from auth.users where id in (maya, tom, priya, hannah, ben)) < 5
+    or exists (select 1 from public.link_ups where a = tom and b = ben) then
+    return;
+  end if;
+  insert into public.link_ups (a, b, move, latitude, longitude, created_at) values
+    (tom, ben, 'fist_bump', -34.91770, 138.60210, now() - interval '50 minutes'),
+    (hannah, priya, 'high_five', -34.92980, 138.59660, now() - interval '3 hours'),
+    (maya, tom, 'dab', -34.92280, 138.60400, now() - interval '26 hours'),
+    (hannah, maya, 'hug', -34.92250, 138.61550, now() - interval '3 days'),
+    (tom, maya, 'high_five', -34.92560, 138.60030, now() - interval '6 days');
+end;
+$$;

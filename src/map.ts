@@ -751,7 +751,7 @@ export const MARK_BOOSTED = 512 // someone spent sparks on it
 
 export type Marker = {
   id: string
-  kind: 'pin' | 'person' | 'me' | 'draft' | 'cluster' | 'sticker'
+  kind: 'pin' | 'person' | 'me' | 'draft' | 'cluster' | 'sticker' | 'linkup'
   x: number // world
   y: number
   icon: IconName
@@ -788,6 +788,9 @@ export type MapState = {
   labelAlpha: Map<Label, number> // labels fade in rather than pop
   hovered: Marker | null
   highlight: string | null // a marker lit up from outside, e.g. hovering its row in a list
+  pointAt: { x: number; y: number } | null // where that row's thing is: a ring there, or an arrow at the edge
+  beacon: { x: number; y: number; start: number } | null // "it's here": rings going out once, after opening something
+  inset: { left: number; top: number; right: number; bottom: number } // the part of the map no panel covers
   draftMode: boolean
   hidePlaces: boolean // the shops, cafes and the rest, left off
 
@@ -873,7 +876,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
   const m: MapState = {
     canvas, ctx: canvas.getContext('2d')!, width: 0, height: 0, ratio: 1,
     x: lngToX(lng), y: latToY(lat), zoom, theme: mapThemes[themeName] ?? mapThemes.day, themeName,
-    markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, draftMode: false, hidePlaces: false,
+    markers: [], visible: [], labelAlpha: new Map(), hovered: null, highlight: null, pointAt: null, beacon: null, inset: { left: 0, top: 0, right: 0, bottom: 0 }, draftMode: false, hidePlaces: false,
     fly: null, zoomTarget: null, zoomAnchorX: 0, zoomAnchorY: 0, vx: 0, vy: 0, lastTime: 0,
     pointers: new Map(), downX: 0, downY: 0, moved: false, lastTap: 0, lastPointer: 'mouse', samples: [],
     fade: null, base: document.createElement('canvas'), baseDirty: true, baseCamera: '', markerKey: '', regions: [], regionKey: '', blockAsks: [], tileUrl: null, sources: new Map(), queue: [], fetching: 0, rasters: new Map(), sprites: new Map(), textures: new Map(), images: new Map(), born: new Map(),
@@ -2230,6 +2233,51 @@ function drawSticker(c: CanvasRenderingContext2D, marker: Marker, sx: number, sy
   c.restore()
 }
 
+// Two friends met here and dabbed: the move in a badge with a little burst
+// around it, their names under it, fading over its day.
+function drawLinkUp(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean, time: number) {
+  const r = hover ? 20 : 18
+  c.save()
+  c.globalAlpha = 0.45 + 0.55 * marker.life
+  // The burst: short rays turning slowly.
+  c.strokeStyle = t.route
+  c.lineWidth = 2.5
+  c.lineCap = 'round'
+  const turn = time / 3000
+  for (let i = 0; i < 8; i++) {
+    const a = turn + (i * Math.PI) / 4
+    const inner = r + 4
+    const outer = r + (i % 2 ? 8 : 12)
+    c.beginPath()
+    c.moveTo(sx + Math.cos(a) * inner, sy + Math.sin(a) * inner)
+    c.lineTo(sx + Math.cos(a) * outer, sy + Math.sin(a) * outer)
+    c.stroke()
+  }
+  c.shadowColor = 'rgba(0,0,0,0.35)'
+  c.shadowBlur = 6
+  c.fillStyle = '#fff'
+  c.beginPath()
+  c.arc(sx, sy, r, 0, Math.PI * 2)
+  c.fill()
+  c.shadowColor = 'transparent'
+  c.lineWidth = 3
+  c.stroke()
+  c.font = `${Math.round(r * 1.05)}px ${sans}`
+  c.textAlign = 'center'
+  c.textBaseline = 'middle'
+  c.fillText(marker.text, sx, sy + 1)
+  // Whose.
+  c.font = `600 11px ${t.font}`
+  const width = c.measureText(marker.name).width + 10
+  c.fillStyle = t.blip === 'ring' ? 'rgba(3,11,6,0.9)' : 'rgba(20,22,26,0.82)'
+  c.beginPath()
+  c.roundRect(sx - width / 2, sy + r + 8, width, 16, 8)
+  c.fill()
+  c.fillStyle = t.blip === 'ring' ? t.blipInk : '#fff'
+  c.fillText(marker.name, sx, sy + r + 16.5)
+  c.restore()
+}
+
 // Several pins too close to tell apart at this zoom: one badge with how many threads.
 function drawCluster(c: CanvasRenderingContext2D, t: MapTheme, marker: Marker, sx: number, sy: number, hover: boolean) {
   const r = Math.min(24, 13 + Math.sqrt(marker.count) * 3) * (hover ? 1.1 : 1)
@@ -3464,12 +3512,14 @@ function frame(m: MapState, time: number) {
 
   const hot = drawHotRegions(m, time)
   const animated = drawMarkers(m, view, time) || hot
+  if (drawBeacon(m, time)) keepGoing = true
+  const pointing = drawPointAt(m, time)
   if (drawFade(m, time)) keepGoing = true
 
   m.onFrame()
 
   if (keepGoing) requestFrame(m)
-  else if (animated) {
+  else if (animated || pointing) {
     // Pulses are slow (a second or two each), and every frame of one redraws the
     // whole screen: a dozen frames a second looks the same and costs a fifth.
     setTimeout(() => requestFrame(m), 80)
@@ -3746,6 +3796,9 @@ function drawMarkers(m: MapState, v: View, time: number) {
       if (marker.flags & (MARK_NEW | MARK_LIVE | MARK_BOOSTED) || t.blip === 'ring') animated = true
     } else if (marker.kind === 'sticker') {
       drawSticker(c, marker, p.x, p.y, hover)
+    } else if (marker.kind === 'linkup') {
+      drawLinkUp(c, t, marker, p.x, p.y, hover, time)
+      animated = true
     } else if (marker.kind === 'cluster') {
       drawCluster(c, t, marker, p.x, p.y, hover)
     } else if (marker.kind === 'person') {
@@ -3761,6 +3814,118 @@ function drawMarkers(m: MapState, v: View, time: number) {
   // A drop needs every frame to look right; pulses can make do with fewer.
   if (dropping) requestFrame(m)
   return animated
+}
+
+// Something just opened from a list: three rings go out from it, once, so the
+// eye finds it. Returns true while they're still going.
+export function flash(m: MapState, lng: number, lat: number) {
+  m.beacon = { x: lngToX(lng), y: latToY(lat), start: performance.now() }
+  requestFrame(m)
+}
+
+function drawBeacon(m: MapState, time: number) {
+  const b = m.beacon
+  if (!b) return false
+  const age = time - b.start
+  if (age > 1800) {
+    m.beacon = null
+    return false
+  }
+  const p = project(m, b.x, b.y)
+  const c = m.ctx
+  const lift = m.theme.blip === 'pin' ? 22 : 0 // the middle of a teardrop pin, not its point
+  c.save()
+  for (let i = 0; i < 3; i++) {
+    const k = (age - i * 260) / 1000
+    if (k < 0 || k > 1) continue
+    const ease = 1 - (1 - k) * (1 - k)
+    c.globalAlpha = (1 - k) * 0.9
+    c.lineWidth = 4 - k * 2.5
+    c.strokeStyle = m.theme.route
+    c.beginPath()
+    c.arc(p.x, p.y - lift, 14 + ease * 58, 0, Math.PI * 2)
+    c.stroke()
+  }
+  c.restore()
+  return true
+}
+
+// Hovering a row in a list: a ring where its thing is, or, when that's off the
+// visible part of the map, an arrow at the edge pointing the way, with how far.
+function drawPointAt(m: MapState, time: number) {
+  if (!m.pointAt) return false
+  const c = m.ctx
+  const t = m.theme
+  const p = project(m, m.pointAt.x, m.pointAt.y)
+  const box = m.inset.right > m.inset.left ? m.inset : { left: 0, top: 0, right: m.width, bottom: m.height }
+  const pad = 34
+  const inside = p.x > box.left + 12 && p.x < box.right - 12 && p.y > box.top + 12 && p.y < box.bottom - 12
+  c.save()
+  if (inside) {
+    const lift = t.blip === 'pin' ? 22 : 0
+    const pulse = (time % 1400) / 1400
+    c.strokeStyle = t.route
+    c.lineWidth = 3
+    c.globalAlpha = 0.95
+    c.beginPath()
+    c.arc(p.x, p.y - lift, 24, 0, Math.PI * 2)
+    c.stroke()
+    c.globalAlpha = (1 - pulse) * 0.7
+    c.lineWidth = 2
+    c.beginPath()
+    c.arc(p.x, p.y - lift, 24 + pulse * 22, 0, Math.PI * 2)
+    c.stroke()
+  } else {
+    // Where the line from the middle of the visible map to it leaves the visible map.
+    const cx = (box.left + box.right) / 2
+    const cy = (box.top + box.bottom) / 2
+    const dx = p.x - cx
+    const dy = p.y - cy
+    const k = Math.min(Math.abs((box.right - box.left) / 2 - pad) / Math.abs(dx || 1e-9), Math.abs((box.bottom - box.top) / 2 - pad) / Math.abs(dy || 1e-9))
+    const ex = cx + dx * k
+    const ey = cy + dy * k
+    const angle = Math.atan2(dy, dx)
+    const here = center(m)
+    const metres = 6371000 * 2 * Math.asin(Math.sqrt(
+      Math.sin(((yToLat(m.pointAt.y) - here.lat) * Math.PI) / 360) ** 2 +
+      Math.cos((here.lat * Math.PI) / 180) * Math.cos((yToLat(m.pointAt.y) * Math.PI) / 180) * Math.sin(((xToLng(m.pointAt.x) - here.lng) * Math.PI) / 360) ** 2,
+    ))
+    const label = metres < 1000 ? `${Math.round(metres / 10) * 10} m` : `${(metres / 1000).toFixed(metres < 10000 ? 1 : 0)} km`
+    const nudge = 3 * Math.sin(time / 160)
+    c.translate(ex + Math.cos(angle) * nudge, ey + Math.sin(angle) * nudge)
+    c.shadowColor = 'rgba(0,0,0,0.35)'
+    c.shadowBlur = 8
+    c.fillStyle = t.route
+    c.beginPath()
+    c.arc(0, 0, 17, 0, Math.PI * 2)
+    c.fill()
+    c.shadowColor = 'transparent'
+    c.rotate(angle)
+    c.fillStyle = '#fff'
+    c.beginPath()
+    c.moveTo(9, 0)
+    c.lineTo(-5, -7)
+    c.lineTo(-2, 0)
+    c.lineTo(-5, 7)
+    c.closePath()
+    c.fill()
+    c.rotate(-angle)
+    // The distance, on the side towards the middle.
+    c.font = `600 12px ${sans}`
+    const w = c.measureText(label).width + 12
+    const lx = -Math.cos(angle) * 34 - w / 2
+    const ly = -Math.sin(angle) * 30 - 10
+    c.fillStyle = 'rgba(20,22,26,0.85)'
+    c.beginPath()
+    c.roundRect(lx, ly, w, 20, 10)
+    c.fill()
+    c.fillStyle = '#fff'
+    c.textAlign = 'center'
+    c.textBaseline = 'middle'
+    c.fillText(label, lx + w / 2, ly + 10.5)
+  }
+  c.restore()
+  return true
 }
 
 // After a style switch, the old picture fades out over the new one.
@@ -3784,6 +3949,7 @@ function order(marker: Marker) {
   if (marker.flags & MARK_SELECTED) return 5
   switch (marker.kind) {
     case 'sticker': return 0
+    case 'linkup': return 0
     case 'person': return 1
     case 'pin': case 'cluster': return 2
     case 'me': return 3

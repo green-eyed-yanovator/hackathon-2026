@@ -109,6 +109,19 @@ export type CityBlock = { id: string; ring: [number, number][]; latitude: number
 export type Word = { id: string; block_id: string; parent_id: string | null; author_id: string | null; body: string; is_name: boolean; created_at: string; deleted_at: string | null }
 export type Vote = { word_id: string; user_id: string; value: 1 | -1; created_at: string }
 export type PostVote = { post_id: string; user_id: string; value: 1 | -1; created_at: string }
+// Two friends who met and both dabbed: where, and how. On the map for a day.
+export type LinkUp = { id: string; a: string; b: string; move: Move; latitude: number; longitude: number; created_at: string }
+export type Move = 'dab' | 'high_five' | 'fist_bump' | 'hug'
+export const MOVES: Record<Move, { label: string; emoji: string; past: string }> = {
+  dab: { label: 'Dab', emoji: '🕺', past: 'dabbed' },
+  high_five: { label: 'High five', emoji: '🙌', past: 'high-fived' },
+  fist_bump: { label: 'Fist bump', emoji: '🤜', past: 'fist-bumped' },
+  hug: { label: 'Hug', emoji: '🫂', past: 'hugged' },
+}
+export const moveOf = (move: string | null) => MOVES[(move ?? 'dab') as Move] ?? MOVES.dab
+// A dab waits this long for the other one's.
+export const DAB_WAIT = 10 * 60000
+
 export type Sticker = { id: string; user_id: string; emoji: string; latitude: number; longitude: number; created_at: string; expires_at: string }
 
 // Enough more up than down and a pin is a legend: it stays on the map for good.
@@ -123,7 +136,7 @@ export type Like = { user_id: string; reply_id: string; created_at: string }
 export type Saved = { post_id: string; created_at: string }
 export type Revision = { id: string; title: string; description: string; replaced_at: string }
 
-export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention' | 'comment_reply' | 'word_reply' | 'legend'
+export type NotificationKind = 'reply' | 'saved_reply' | 'thread_reply' | 'save' | 'interest' | 'resolved' | 'friend_request' | 'friend_accept' | 'friend_post' | 'mention' | 'comment_reply' | 'word_reply' | 'legend' | 'dab' | 'link_up'
 
 export type Notification = {
   id: string
@@ -182,6 +195,7 @@ export const S = {
   messages: [] as Message[], // oldest first
   mutedKinds: [] as string[],
   friendships: [] as Friendship[],
+  linkUps: [] as LinkUp[], // mine and my friends', newest first
   blocked: new Set<string>(), // people I've blocked: their pins, replies and messages stay out of sight
   locations: new Map<string, Location>(),
   seen: new Map<string, Map<string, Presence>>(), // friends' devices and when each was last here
@@ -538,6 +552,7 @@ async function loadPrivate(userId: string, attempt = 0) {
     supabase.from('locations').select('*'),
     supabase.from('blocks').select('blocked'),
     supabase.from('presence').select('user_id, device, here, seen_at'),
+    supabase.from('link_ups').select('*').order('created_at', { ascending: false }).limit(500),
   ] as const)
   if (S.userId !== userId) return
   // A network blip keeps what we had, rather than emptying the inbox and the
@@ -549,7 +564,7 @@ async function loadPrivate(userId: string, attempt = 0) {
     setTimeout(() => S.userId === userId && loadPrivate(userId, attempt + 1), Math.min(60000, 5000 * 2 ** attempt))
     return
   }
-  const [saved, notifications, messages, settings, friendships, locations, blocks, presence] = results
+  const [saved, notifications, messages, settings, friendships, locations, blocks, presence, linkUps] = results
   privateLoaded = true
   markBehind('private', null)
 
@@ -563,6 +578,7 @@ async function loadPrivate(userId: string, attempt = 0) {
   S.messages = (messages.data ?? []).reverse()
   S.mutedKinds = settings.data?.muted_kinds ?? []
   S.friendships = friendships.data ?? []
+  S.linkUps = linkUps.data ?? []
   S.blocked = new Set((blocks.data ?? []).map((b: { blocked: string }) => b.blocked))
   S.seen = new Map()
   for (const p of (presence.data ?? []) as Presence[]) rememberPresence(p)
@@ -597,7 +613,8 @@ function subscribePrivate(userId: string) {
       if (n.actor_id && S.blocked.has(n.actor_id)) return // (the server stops these too, since the block)
       const text = describeNotification(n)
       const route = n.post_id ? `pin/${n.post_id}` : n.block_id ? `block/${n.block_id}` : n.actor_id ? `user/${n.actor_id}` : 'inbox'
-      onIncoming(`${n.actor_name ?? (n.kind === 'legend' ? 'The neighbours' : 'Someone')} ${text}`, n.preview ?? '', route)
+      const body = n.kind === 'dab' || n.kind === 'link_up' ? '' : (n.preview ?? '') // their preview is the move
+      onIncoming(`${n.actor_name ?? (n.kind === 'legend' ? 'The neighbours' : 'Someone')} ${text}`, body, route)
     })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, ({ new: row }) => {
       // Read on another device.
@@ -636,6 +653,13 @@ function subscribePrivate(userId: string) {
       if (payload.eventType === 'DELETE') S.seen.delete((payload.old as Presence).user_id)
       else rememberPresence(payload.new as Presence)
       changed()
+    })
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'link_ups' }, ({ new: row }) => {
+      const linkUp = row as LinkUp
+      const fresh = !S.linkUps.some((l) => l.id === linkUp.id)
+      S.linkUps = [linkUp, ...S.linkUps.filter((l) => l.id !== linkUp.id)]
+      changed()
+      if (fresh && (linkUp.a === userId || linkUp.b === userId)) onLinkUp(linkUp)
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'locations' }, (payload) => {
       // A row that stops being shared (or, for a deleted account, goes) leaves the map.
@@ -730,6 +754,7 @@ function resetPrivate() {
   S.messages = []
   S.mutedKinds = []
   S.friendships = []
+  S.linkUps = []
   S.blocked = new Set()
   S.locations = new Map()
   S.seen = new Map()
@@ -1198,6 +1223,8 @@ export function describeNotification(n: Notification) {
     case 'comment_reply': return `answered your comment on ${title}`
     case 'word_reply': return `answered you on ${n.post_title ? `“${n.post_title}”` : 'a block'}`
     case 'legend': return `voted your pin ${title} a Legend: it stays on the map for good`
+    case 'dab': return `wants to ${moveOf(n.preview).label.toLowerCase()} ${moveOf(n.preview).emoji} Do it back while you're together`
+    case 'link_up': return `and you linked up ${moveOf(n.preview).emoji}`
   }
 }
 
@@ -1394,7 +1421,7 @@ function noticeNearby() {
     const d = distance(here.latitude, here.longitude, loc.latitude, loc.longitude)
     if (d > 200 || Date.now() - saidAt(`near/${id}`) < 2 * 3600000) continue
     sayOnce(`near/${id}`)
-    onIncoming(`${nameOf(id)} is nearby`, `${Math.max(10, Math.round(d / 10) * 10)} m away`, `user/${id}`)
+    onIncoming(`${nameOf(id)} is nearby`, `${Math.max(10, Math.round(d / 10) * 10)} m away. Meet up and dab`, `user/${id}`)
   }
 }
 
@@ -1704,6 +1731,50 @@ async function checkInDay() {
   S.profiles.set(me.id, me)
   changed()
   if (prize > 0) onStreak(me.streak, prize)
+}
+
+// Link-ups: dab at a friend from where you are. Theirs back within DAB_WAIT, close
+// by, makes it a link-up (the server compares the two positions).
+let onLinkUp: (linkUp: LinkUp) => void = () => {}
+export function setLinkUpHandler(handler: typeof onLinkUp) {
+  onLinkUp = handler
+}
+
+export type DabResult = { status: 'linked'; link_up: LinkUp } | { status: 'waiting' } | { status: 'far'; apart: number } | { status: 'nofix' } | { status: 'error'; message: string }
+
+export async function dab(friend: string, how: Move): Promise<DabResult> {
+  const here = await watchHere()
+  if (!here) return { status: 'nofix' }
+  const { data, error } = await supabase.rpc('dab', { friend, how, lat: here.latitude, lng: here.longitude, fix: Math.round(here.accuracy) })
+  if (error) {
+    fail("Couldn't dab", error)
+    return { status: 'error', message: error.message }
+  }
+  const result = data as DabResult
+  if (result.status === 'linked') {
+    const linkUp = result.link_up
+    if (!S.linkUps.some((l) => l.id === linkUp.id)) {
+      S.linkUps = [linkUp, ...S.linkUps]
+      onLinkUp(linkUp)
+    }
+  }
+  changed()
+  return result
+}
+
+// Their dab at me that's still waiting for mine, if there is one.
+export function dabWaiting(friend: string) {
+  const n = S.notifications.findLast((x) => x.kind === 'dab' && x.actor_id === friend)
+  if (!n || Date.now() - time(n.created_at) > DAB_WAIT) return null
+  const answered = S.linkUps.some((l) => [l.a, l.b].includes(friend) && [l.a, l.b].includes(S.userId!) && time(l.created_at) >= time(n.created_at))
+  const move = (n.preview && n.preview in MOVES ? n.preview : 'dab') as Move
+  return answered ? null : { move, at: time(n.created_at) }
+}
+
+// How often I've linked up with someone, and when last.
+export function linkUpsWith(friend: string) {
+  const me = S.userId
+  return S.linkUps.filter((l) => (l.a === me && l.b === friend) || (l.b === me && l.a === friend))
 }
 
 export async function dropSticker(emoji: string, latitude: number, longitude: number) {

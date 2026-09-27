@@ -25,10 +25,12 @@ import {
   // Lore, snaps and sparks.
   votePost, createSnap, addMedia, removeMedia, dropSticker, peelSticker, boostPost, setStreakHandler,
   LEGEND_VOTES, STICKERS, STICKER_SPARKS, BOOST_SPARKS,
+  // Link-ups.
+  dab, dabWaiting, linkUpsWith, setLinkUpHandler, MOVES, moveOf, DAB_WAIT, type Move, type LinkUp,
   type Flair, type Post, type Reply, type Revision, type Notification, type Word,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setTheme, flyTo, zoomBy, glideBy, requestFrame,
+  createMap, destroyMap, setMarkers, setTheme, flyTo, flash, zoomBy, glideBy, requestFrame,
   project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, findBlock,
   icons, mapThemes, LEGEND, poiColor,
   MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE, MARK_LEGEND, MARK_BOOSTED, setPlacesShown,
@@ -129,6 +131,7 @@ const UI = {
   snap: null as { file: File; url: string } | null, // a photo or video about to go up as a snap
   feed: !narrow(),
   view: initialView(),
+  near: (({ lat, lng }) => ({ lat, lng }))(initialView()), // where "Around" measures from: moved by you, not by opening a pin
   draft: null as { latitude: number; longitude: number } | null,
   draftBlocks: [] as string[], // the blocks the pin being made covers
   picking: false, // making a pin, taps pick the blocks it covers instead of moving it
@@ -141,6 +144,7 @@ const UI = {
   sounds: stored('aroundhere.sounds') !== 'off',
   started: stored('aroundhere.started') === 'hidden', // the getting-started list was dismissed
   banner: null as { title: string; sub: string } | null,
+  burst: null as { emoji: string; title: string; sub: string; key: number } | null, // a link-up, celebrated
   objective: null as { verb: string; place: string } | null, // "Go to the Street clean-up.", in the game styles
   follow: false, // the camera keeps you in the middle until you move the map
   sheetFull: false, // phones: the open sheet is pulled up to full height
@@ -201,6 +205,10 @@ paintChrome(shown())
 window.addEventListener('popstate', () => {
   UI.route = readRoute()
   changed()
+  // Back or forward to a pin: the map goes there too.
+  const route = UI.route
+  const post = route.kind === 'pin' ? S.posts.find((p) => p.id === route.id) : null
+  if (post) lookAt(post)
 })
 
 function go(path: string) {
@@ -209,6 +217,8 @@ function go(path: string) {
   UI.route = readRoute()
   UI.hover = null
   UI.sheetFull = false
+  // A row's pointer goes with the list it was in.
+  if (map) map.pointAt = map.highlight = null
   if (UI.route.kind !== 'new') {
     UI.draft = null
     UI.draftBlocks = []
@@ -616,7 +626,7 @@ function sortedFeed(posts: Post[]) {
   const withMeta = posts.map((post) => ({
     post,
     active: active.get(post.id) ?? 0,
-    away: distance(UI.view.lat, UI.view.lng, post.latitude, post.longitude),
+    away: distance(UI.near.lat, UI.near.lng, post.latitude, post.longitude),
   }))
   if (UI.tab === 'around') withMeta.sort((a, b) => a.away - b.away)
   else if (UI.tab === 'soon') withMeta.sort((a, b) => time(a.post.starts_at!) - time(b.post.starts_at!))
@@ -889,6 +899,17 @@ function buildMarkers(posts: Post[]): Marker[] {
     })
   }
 
+  // Friends who met and dabbed, for a day (looking back: the day before that moment).
+  const at = UI.then ?? Date.now()
+  for (const l of UI.filters.people ? S.linkUps : []) {
+    const age = at - time(l.created_at)
+    if (age < 0 || age > 86400000 || S.blocked.has(l.a) || S.blocked.has(l.b)) continue
+    markers.push({
+      id: `linkup:${l.id}`, kind: 'linkup', x: lngToX(l.longitude), y: latToY(l.latitude), icon: 'star', color: '',
+      count: 0, flags: 0, text: moveOf(l.move).emoji, name: pairName(l), accuracy: 0, heading: null, image: null, life: 1 - age / 86400000,
+    })
+  }
+
   if (S.here) {
     markers.push({
       id: 'me', kind: 'me', x: lngToX(S.here.longitude), y: latToY(S.here.latitude), icon: 'user', color: '', count: 0,
@@ -937,9 +958,40 @@ function reveal(lat: number, lng: number, zoom?: number, force = false) {
   flyTo(map, lng, lat, z, (area.left + area.right) / 2 - map.width / 2, (area.top + area.bottom) / 2 - map.height / 2)
 }
 
+// Opened from a list (the feed, the inbox, a chat, search): the map looks right
+// at it, close enough that it isn't in a cluster, and it flashes so the eye finds
+// it. "Around" keeps its order meanwhile: it measures from where you moved the map.
+let holdNear = false
+
+function lookAt(post: Post) {
+  if (!map) return
+  holdNear = true
+  reveal(post.latitude, post.longitude, Math.max(map.zoom, 16), true)
+  flash(map, post.longitude, post.latitude)
+}
+
 function openPin(post: Post) {
   go(`pin/${post.id}`)
-  reveal(post.latitude, post.longitude, Math.max(map?.zoom ?? 16, 16))
+  lookAt(post)
+}
+
+// Hovering a row for something on the map: a ring on it there, or an arrow at
+// the edge of the map pointing the way when it's off screen.
+function pointAt(lat: number, lng: number, key: string) {
+  return {
+    onMouseEnter: () => {
+      if (!map) return
+      map.highlight = key
+      map.pointAt = { x: lngToX(lng), y: latToY(lat) }
+      requestFrame(map)
+    },
+    onMouseLeave: () => {
+      if (!map || map.highlight !== key) return
+      map.highlight = null
+      map.pointAt = null
+      requestFrame(map)
+    },
+  }
 }
 
 async function locate() {
@@ -1158,12 +1210,13 @@ type PanelProps = {
   title: ReactNode
   icon?: ReactNode
   onBack?: () => void
+  tools?: ReactNode // buttons in the header, before Close
   children: ReactNode
   foot?: ReactNode // stays put under the scrolling body, e.g. a reply box
   className?: string
 }
 
-function Panel({ title, icon, onBack, children, foot, className = '' }: PanelProps) {
+function Panel({ title, icon, onBack, tools, children, foot, className = '' }: PanelProps) {
   return (
     <aside className={`panel detail ${className}`}>
       <Grip onDismiss={() => go('')} />
@@ -1175,6 +1228,7 @@ function Panel({ title, icon, onBack, children, foot, className = '' }: PanelPro
         )}
         {icon}
         <h2>{title}</h2>
+        {tools}
         <button className="icon-btn" onClick={() => go('')} aria-label="Close" title="Close (Esc)">
           <Icon name="close" />
         </button>
@@ -1326,10 +1380,35 @@ type ComposerProps = {
   onType?: () => void
   autoFocus?: boolean
   people?: string[] // who "@" suggests, first ones first
+  draft?: string // where it's for: what's typed is kept if the sheet closes, until it's sent
 }
 
-function Composer({ placeholder, onSend, onType, autoFocus = false, people, attach = false }: ComposerProps) {
-  const [text, setText] = useState('')
+// Half-written replies and messages, kept per place for this browser tab, so
+// closing a sheet (or a reload) doesn't lose them.
+const drafts: Record<string, string> = (() => {
+  try {
+    return JSON.parse(sessionStorage.getItem('aroundhere.drafts') ?? '{}')
+  } catch {
+    return {}
+  }
+})()
+
+function keepDraft(key: string, text: string) {
+  if (text.trim()) drafts[key] = text
+  else delete drafts[key]
+  try {
+    sessionStorage.setItem('aroundhere.drafts', JSON.stringify(drafts))
+  } catch {
+    // Private browsing: kept until the tab closes anyway.
+  }
+}
+
+function Composer({ placeholder, onSend, onType, autoFocus = false, people, attach = false, draft }: ComposerProps) {
+  const [text, setTyped] = useState(() => (draft ? (drafts[draft] ?? '') : ''))
+  const setText = (value: string) => {
+    setTyped(value)
+    if (draft) keepDraft(draft, value)
+  }
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
   const [caret, setCaret] = useState(0)
@@ -1460,18 +1539,7 @@ function PostRow({ post, away, active }: { post: Post; away: number; active: num
     <button
       className={`row post-row${UI.route.id === post.id ? ' selected' : ''}`}
       onClick={() => openPin(post)}
-      onMouseEnter={() => {
-        if (map) {
-          map.highlight = key
-          requestFrame(map)
-        }
-      }}
-      onMouseLeave={() => {
-        if (map && map.highlight === key) {
-          map.highlight = null
-          requestFrame(map)
-        }
-      }}
+      {...pointAt(post.latitude, post.longitude, key)}
     >
       <Blip flair={post.flair} />
       <div className="row-main">
@@ -1677,6 +1745,33 @@ function FlairPick({ value, onPick }: { value: Flair; onPick: (flair: Flair) => 
 // A pin and its thread.
 //
 
+// The pins in the feed's order, one after another: the same as J and K.
+function stepPin(by: number) {
+  const rows = sortedFeed(visiblePosts())
+  const at = rows.findIndex((r) => r.post.id === UI.route.id)
+  const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + by))]
+  if (next) openPin(next.post)
+}
+
+function StepPins({ post }: { post: Post }) {
+  const rows = sortedFeed(visiblePosts())
+  const at = rows.findIndex((r) => r.post.id === post.id)
+  if (at === -1 || rows.length < 2) return null
+  return (
+    <div className="step-pins">
+      <button className="icon-btn" disabled={at === 0} onClick={() => stepPin(-1)} aria-label="Previous pin" title="Previous (K)">
+        <Icon name="prev" />
+      </button>
+      <span className="muted small">
+        {at + 1}/{rows.length}
+      </span>
+      <button className="icon-btn" disabled={at === rows.length - 1} onClick={() => stepPin(1)} aria-label="Next pin" title="Next (J)">
+        <Icon name="next" />
+      </button>
+    </div>
+  )
+}
+
 function PostView({ post }: { post: Post }) {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(post.title)
@@ -1758,11 +1853,13 @@ function PostView({ post }: { post: Post }) {
       title={f.label}
       icon={<Blip flair={post.flair} size={24} />}
       onBack={siblings.length > 1 ? () => go(`place/${placeKey(post)}`) : undefined}
+      tools={<StepPins post={post} />}
       foot={
         editing ? undefined : me ? (
           <Composer
             people={people}
             placeholder={`Reply to ${post.author_id ? firstName(post.author_id) : 'this pin'}…`}
+            draft={`pin/${post.id}`}
             attach
             onSend={async (text, files) => {
               const ok = await reply(post.id, text, null, files)
@@ -2286,6 +2383,116 @@ function FriendWhere({ id }: { id: string }) {
   )
 }
 
+// Two people in a link-up, by first name, "You" first when it's me.
+function pairName(l: LinkUp, join = '&') {
+  const [x, y] = l.b === S.userId ? [l.b, l.a] : [l.a, l.b]
+  const name = (id: string) => (id === S.userId ? 'You' : firstName(id))
+  return `${name(x)} ${join} ${name(y)}`
+}
+
+// Meeting a friend in person: you both dab (or high-five...) within ten minutes,
+// standing close, and it's a link-up. Mine waiting for theirs, this session:
+const myDabs = new Map<string, { move: Move; at: number }>()
+const stillWaiting = (at: number) => Date.now() - at < DAB_WAIT
+
+async function sendDab(id: string, how: Move) {
+  const result = await dab(id, how)
+  if (result.status === 'waiting') {
+    myDabs.set(id, { move: how, at: Date.now() })
+    toast(`${MOVES[how].emoji} Sent. When ${firstName(id)} does it back, you're linked up`)
+  } else if (result.status === 'linked') myDabs.delete(id)
+  else if (result.status === 'far') toast(`You're ${meters(result.apart)} apart. Link-ups are for when you meet`)
+  else if (result.status === 'nofix') toast("Can't find you: location is blocked or unavailable")
+  else failed("Couldn't dab")
+  changed()
+}
+
+function DabButton({ id, compact = false }: { id: string; compact?: boolean }) {
+  const [busy, setBusy] = useState(false)
+  const [move, setMove] = useState<Move>(() => (stored('aroundhere.move') as Move | null) ?? 'dab')
+  if (!S.userId || id === S.userId || !friendshipWith(id)?.accepted_at) return null
+  const theirs = dabWaiting(id)
+  const mine = myDabs.get(id)
+  const waiting = mine && stillWaiting(mine.at)
+  const send = async (how: Move) => {
+    setBusy(true)
+    await sendDab(id, how)
+    setBusy(false)
+  }
+
+  // They went first: one tap answers, with their move.
+  if (theirs) {
+    return (
+      <button className={compact ? 'btn primary small dab-back' : 'btn primary grow dab-back'} disabled={busy} onClick={() => send(theirs.move)}>
+        <span className="dab-emoji">{MOVES[theirs.move].emoji}</span> {MOVES[theirs.move].label} back
+      </button>
+    )
+  }
+  if (compact) return null
+  return (
+    <div className="dab-box">
+      <div className="btn-row">
+        <div className="dab-moves" role="radiogroup" aria-label="Move">
+          {(Object.keys(MOVES) as Move[]).map((key) => (
+            <button
+              key={key}
+              role="radio"
+              aria-checked={move === key}
+              className={move === key ? 'dab-move on' : 'dab-move'}
+              title={MOVES[key].label}
+              onClick={() => {
+                setMove(key)
+                store('aroundhere.move', key)
+              }}
+            >
+              {MOVES[key].emoji}
+            </button>
+          ))}
+        </div>
+        <button className="btn grow" disabled={busy} onClick={() => send(move)}>
+          {waiting ? `Waiting for ${firstName(id)}…` : `${MOVES[move].label} ${firstName(id)}`}
+        </button>
+      </div>
+      <p className="muted small">
+        {waiting
+          ? `Ask ${firstName(id)} to open your profile and do it back.`
+          : 'Together in person? Both of you do it within ten minutes and it goes on the map for your friends to see.'}
+      </p>
+    </div>
+  )
+}
+
+// How often we've linked up.
+function LinkUpLine({ id }: { id: string }) {
+  const all = linkUpsWith(id)
+  if (!all.length) return null
+  return (
+    <p className="linkup-line">
+      <span className="linkup-emoji">{moveOf(all[0].move).emoji}</span> Linked up {plural(all.length, 'time')}, last {since(all[0].created_at)}
+    </p>
+  )
+}
+
+// A link-up just happened: the move, big, with a burst of confetti.
+function Burst() {
+  const b = UI.burst
+  if (!b) return null
+  return (
+    <div className="burst" key={b.key} role="status">
+      <div className="burst-bits" aria-hidden>
+        {Array.from({ length: 18 }, (_, i) => (
+          <i key={i} style={{ '--a': `${i * 20}deg`, '--d': `${(i % 3) * 60}ms` } as React.CSSProperties} />
+        ))}
+      </div>
+      <div className="burst-emoji">{b.emoji}</div>
+      <div className="burst-text">
+        <strong>{b.title}</strong>
+        <span>{b.sub}</span>
+      </div>
+    </div>
+  )
+}
+
 function ProfileView({ id }: { id: string }) {
   const profile = S.profiles.get(id)
   const [editing, setEditing] = useState(false)
@@ -2378,6 +2585,7 @@ function ProfileView({ id }: { id: string }) {
             [posts.length, 'pins'],
             [replyCount, 'replies'],
             [joinedCount, 'joined'],
+            ...(own ? ([[S.linkUps.filter((l) => l.a === id || l.b === id).length, 'link-ups']] as const) : []),
           ] as const
         ).map(([count, label]) => (
           <button key={label} disabled={!own} onClick={() => { ui({ tab: 'mine', feed: true }); go('') }} title={own ? 'Show them in the feed' : undefined}>
@@ -2423,6 +2631,8 @@ function ProfileView({ id }: { id: string }) {
         )}
       </div>
       {!own && <FriendWhere id={id} />}
+      {!own && <LinkUpLine id={id} />}
+      {!own && <DabButton id={id} />}
 
       {!own && S.userId && (
         <div className="actions">
@@ -2488,7 +2698,7 @@ function Activity({ id }: { id: string }) {
     <>
       <div className="section">Activity</div>
       {items.slice(0, limit).map((item) => (
-        <button key={item.key} className="row activity" onClick={() => openPin(item.post)}>
+        <button key={item.key} className="row activity" onClick={() => openPin(item.post)} {...pointAt(item.post.latitude, item.post.longitude, placeKey(item.post))}>
           <span className="activity-icon">
             <Icon name={item.icon} size={14} />
           </span>
@@ -2571,7 +2781,7 @@ function ChatView({ id }: { id: string }) {
       }
       onBack={() => go('inbox')}
       className="chat"
-      foot={<Composer placeholder={`Message ${firstName(id)}…`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} onType={() => typing.current?.ping()} />}
+      foot={<Composer placeholder={`Message ${firstName(id)}…`} draft={`chat/${id}`} autoFocus={!narrow()} onSend={(text) => sendMessage(id, text)} onType={() => typing.current?.ping()} />}
     >
       <FriendWhere id={id} />
       {thread.length === 0 && (
@@ -2680,7 +2890,7 @@ function InboxView() {
                     <div>
                       <strong>{who}</strong> {describeNotification(n)}
                     </div>
-                    {n.preview && <div className="muted clip">“{n.preview}”</div>}
+                    {n.preview && n.kind !== 'dab' && n.kind !== 'link_up' && <div className="muted clip">“{n.preview}”</div>}
                     <div className="muted small">
                       {ago(n.created_at)}
                       {group.length > 1 && ` · ${group.length} times`}
@@ -2691,6 +2901,7 @@ function InboxView() {
                       <FriendButton id={n.actor_id!} />
                     </div>
                   )}
+                  {n.kind === 'dab' && n.actor_id && <DabButton id={n.actor_id} compact />}
                 </div>
               </div>
             )
@@ -3246,6 +3457,7 @@ function Thread<T extends Threaded>({ item, below, main, answer, people }: {
         {answering && (
           <Composer
             placeholder="Your answer…"
+            draft={`answer/${item.id}`}
             autoFocus
             people={people}
             attach={'post_id' in item}
@@ -3394,7 +3606,7 @@ function BlockView() {
         <>
           <div className="section">Legends of this block</div>
           {legends.map((p) => (
-            <button key={p.id} className="row mini-pin legend-row" onClick={() => openPin(p)}>
+            <button key={p.id} className="row mini-pin legend-row" onClick={() => openPin(p)} {...pointAt(p.latitude, p.longitude, placeKey(p))}>
               <Blip flair={p.flair} size={24} />
               <span className="clip">{p.title}</span>
               <Icon name="star" size={14} />
@@ -3448,7 +3660,7 @@ function BlockView() {
       <div className="section">What's gone on here</div>
       {pins.length ? (
         pins.slice(0, 20).map((p) => (
-          <button key={p.id} className="row mini-pin" onClick={() => openPin(p)}>
+          <button key={p.id} className="row mini-pin" onClick={() => openPin(p)} {...pointAt(p.latitude, p.longitude, placeKey(p))}>
             <Blip flair={p.flair} size={24} />
             <span className="clip">{p.title}</span>
             <span className="muted small nowrap">{p.resolved_at ? 'resolved' : ago(p.created_at)}</span>
@@ -4174,6 +4386,22 @@ function HoverCard({ cardRef }: { cardRef: React.RefObject<HTMLDivElement | null
   const id = UI.hover
   if (narrow() || !id) return null
 
+  if (id.startsWith('linkup:')) {
+    const l = S.linkUps.find((x) => `linkup:${x.id}` === id)
+    if (!l) return null
+    return (
+      <div className="hover-card person-card" ref={cardRef}>
+        <span className="linkup-emoji">{moveOf(l.move).emoji}</span>
+        <div>
+          <strong>{pairName(l, 'and')}</strong>
+          <div className="muted small">
+            {moveOf(l.move).past} here {since(l.created_at)}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (id.startsWith('person:')) {
     const userId = id.slice('person:'.length)
     const loc = locationOf(userId)
@@ -4251,13 +4479,8 @@ function onKey(e: KeyboardEvent) {
   } else if (k === 'i') {
     if (!needAccount('signin')) go('inbox')
   }
-  else if (k === 'j' || k === 'k') {
-    // Step through the feed, newest or nearest first, like a list of messages.
-    const rows = sortedFeed(visiblePosts())
-    const at = rows.findIndex((r) => r.post.id === UI.route.id)
-    const next = rows[at === -1 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (k === 'j' ? 1 : -1)))]
-    if (next) openPin(next.post)
-  } else if (k.startsWith('arrow') && map && (document.activeElement === document.body || document.activeElement === map.canvas)) {
+  else if (k === 'j' || k === 'k') stepPin(k === 'j' ? 1 : -1) // like a list of messages
+  else if (k.startsWith('arrow') && map && (document.activeElement === document.body || document.activeElement === map.canvas)) {
     // Only when nothing else has the focus: arrows still scroll a panel you're in.
     const step = e.shiftKey ? 300 : 100
     glideBy(map, k === 'arrowleft' ? -step : k === 'arrowright' ? step : 0, k === 'arrowup' ? -step : k === 'arrowdown' ? step : 0)
@@ -4395,6 +4618,23 @@ export default function App() {
       })
       .catch(() => {})
     // Coming back on a new day: the streak, and a spark or six.
+    // A link-up: the move goes off in the middle of the screen, and the map shows where.
+    let burstTimer = 0
+    setLinkUpHandler((l) => {
+      const other = l.a === S.userId ? l.b : l.a
+      const m = moveOf(l.move)
+      play('sting')
+      navigator.vibrate?.([30, 60, 30, 60, 90])
+      UI.burst = { emoji: m.emoji, title: `You and ${firstName(other)} linked up`, sub: `${m.label}, on the map for a day`, key: Date.now() }
+      UI.toast = '' // "wants to fist bump" has been answered
+      changed()
+      window.clearTimeout(burstTimer)
+      burstTimer = window.setTimeout(() => ui({ burst: null }), 2800)
+      if (map) {
+        reveal(l.latitude, l.longitude, Math.max(map.zoom, 16))
+        flash(map, l.longitude, l.latitude)
+      }
+    })
     setStreakHandler((streak, prize) => {
       const line = `${streak === 1 ? 'Welcome back' : `${streak} days in a row`} · +${plural(prize, 'spark')}`
       if (streak % 7 === 0) celebrate(`${streak}-day streak`, line)
@@ -4466,6 +4706,9 @@ export default function App() {
         const posts = S.posts.filter((p) => placeKey(p) === marker.id)
         go(posts.length === 1 ? `pin/${posts[0].id}` : `place/${marker.id}`)
         reveal(posts[0].latitude, posts[0].longitude)
+      } else if (marker.kind === 'linkup') {
+        const l = S.linkUps.find((x) => `linkup:${x.id}` === marker.id)
+        if (l) toast(`${pairName(l, 'and')} ${moveOf(l.move).past} here ${moveOf(l.move).emoji} ${since(l.created_at)}`, `user/${l.a === S.userId ? l.b : l.a}`)
       } else if (marker.kind === 'sticker') {
         const sticker = S.stickers.find((x) => `sticker:${x.id}` === marker.id)
         if (sticker) toast(`${sticker.emoji} from ${sticker.user_id === S.userId ? 'you' : nameOf(sticker.user_id)}, ${ago(sticker.created_at)}`)
@@ -4485,6 +4728,7 @@ export default function App() {
     }
     m.onRoute = changed
     m.onUserMove = () => {
+      holdNear = false
       window.clearTimeout(blockTimer)
       if (UI.follow) ui({ follow: false })
     }
@@ -4514,7 +4758,7 @@ export default function App() {
         window.clearTimeout(saveTimer)
         saveTimer = window.setTimeout(() => {
           store('aroundhere.view', JSON.stringify({ lat: c.lat, lng: c.lng, zoom: c.zoom }))
-          ui({ view: { lat: c.lat, lng: c.lng, zoom: c.zoom } })
+          ui(holdNear ? { view: { lat: c.lat, lng: c.lng, zoom: c.zoom } } : { view: { lat: c.lat, lng: c.lng, zoom: c.zoom }, near: { lat: c.lat, lng: c.lng } })
         }, 250)
       }
     }
@@ -4530,6 +4774,7 @@ export default function App() {
   useEffect(() => {
     if (!map) return
     map.draftMode = UI.route.kind === 'new'
+    map.inset = openArea()
     // "Sun" turns to Night at dusk by itself (the clock redraws every 30 s).
     if (map.themeName !== shown()) {
       setTheme(map, shown())
@@ -4743,6 +4988,7 @@ export default function App() {
           {/[.!?]$/.test(UI.objective.place) ? '' : '.'}
         </div>
       )}
+      <Burst />
       {UI.banner && (
         <div className="banner-big" role="status" key={UI.banner.title + UI.banner.sub}>
           <strong>{UI.banner.title}</strong>
