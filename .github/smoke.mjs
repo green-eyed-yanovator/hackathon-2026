@@ -100,7 +100,8 @@ try {
   check('the demo neighbourhood loads', pins > 10, `${pins} pins`)
   check('with no errors on the page', a.errors.length === 0, a.errors.slice(0, 2).join(' / '))
 
-  const tile = await a.eval(`fetch('/tiles/14/14502/9835.pbf').then((r) => r.status + ' ' + r.headers.get('content-type'))`)
+  // A street tile of the city centre, from the copy in public/tiles.
+  const tile = await a.eval(`fetch('/tiles/14/14500/9890.pbf').then((r) => r.status + ' ' + r.headers.get('content-type'))`)
   check("the map's tiles come from its own copy", tile.startsWith('200 application/x-protobuf'), tile)
 
   const signedIn = await inApp(a, `const r = await mod.supabase.auth.signInWithPassword({ email: 'maya@aroundhere.demo', password: 'neighbour' }); return r.error?.message ?? 'ok'`)

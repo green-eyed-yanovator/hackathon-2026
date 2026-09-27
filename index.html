@@ -22,8 +22,11 @@
       /* Shown until the app's script arrives: the map's colour and the mark, breathing. */
       html, body { margin: 0; height: 100%; background: #f3f1ec; }
       @media (prefers-color-scheme: dark) { html, body { background: #16181d; } }
-      .splash { position: fixed; inset: 0; display: grid; place-items: center; }
+      .splash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; font: 15px/1.5 system-ui, sans-serif; color: #777; text-align: center; padding: 24px; }
       .splash img { width: 56px; height: 56px; animation: breathe 1.4s ease-in-out infinite; }
+      .splash-help { max-width: 320px; }
+      .splash-help[hidden] { display: none; }
+      .splash-help button { border: 0; border-radius: 12px; background: #f25c2a; color: white; font: inherit; padding: 10px 20px; cursor: pointer; }
       @keyframes breathe { 50% { transform: scale(0.88); opacity: 0.7; } }
     </style>
     <script>
@@ -36,7 +39,23 @@
     </script>
   </head>
   <body>
-    <div id="root"><div class="splash"><img src="/favicon.svg" alt="" /></div></div>
+    <div id="root"><div class="splash"><img src="/favicon.svg" alt="" /><div class="splash-help" hidden role="alert"><p id="startup-message"></p><button id="startup-reload" type="button">Reload</button></div></div></div>
+    <script>
+      // The app replaces this splash when it starts. A failed script download
+      // or startup error should give a way back, instead of breathing forever.
+      function startupHelp(message) {
+        var help = document.querySelector('.splash-help')
+        if (!help) return
+        document.getElementById('startup-message').textContent = message
+        help.hidden = false
+      }
+      document.getElementById('startup-reload').addEventListener('click', function () { window.location.reload() })
+      window.addEventListener('error', function (event) {
+        if (event.target === window || event.target.tagName === 'SCRIPT') startupHelp("Couldn't open AroundHere. Reload to try again.")
+      }, true)
+      window.addEventListener('unhandledrejection', function () { startupHelp("Couldn't open AroundHere. Reload to try again.") })
+      window.setTimeout(function () { startupHelp('This is taking longer than expected. Check your connection or reload.') }, 15000)
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

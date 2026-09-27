@@ -447,3 +447,84 @@ begin
   where id = v.who;
 end;
 $$;
+
+-- Photos on the pins (the files are in supabase/demo; npm run setup puts them in
+-- storage under post-media/demo), a few snaps, a picnic that's on right now,
+-- and a reply that brings its own photo.
+do $$
+declare
+  maya uuid := 'd0000000-0000-4000-8000-000000000001';
+  tom uuid := 'd0000000-0000-4000-8000-000000000002';
+  priya uuid := 'd0000000-0000-4000-8000-000000000003';
+  lucas uuid := 'd0000000-0000-4000-8000-000000000004';
+  hannah uuid := 'd0000000-0000-4000-8000-000000000005';
+  ben uuid := 'd0000000-0000-4000-8000-000000000006';
+  demo uuid[] := array[maya, tom, priya, lucas, hannah, ben];
+  photos text := 'http://127.0.0.1:54321/storage/v1/object/public/post-media/demo/';
+  p record;
+  answer uuid;
+begin
+  if not exists (select 1 from public.posts where flair = 'sighting' and author_id = any (demo)) then
+    raise notice 'Load the demo lore first.';
+    return;
+  end if;
+  if exists (select 1 from public.post_media where url like '%/post-media/demo/%') then
+    raise notice 'Demo photos are already here.';
+    return;
+  end if;
+
+  -- The koala was up a tree, as its photo shows.
+  update public.posts set description = 'Up the plane tree outside the arcade like it owned the place. Security had no idea what to do. Anyone know where it went?'
+  where title = 'A koala. On Rundle Mall. At lunch.' and author_id = ben;
+
+  -- (who, kind, title, text, lat, lng, minutes ago, starts: minutes from now)
+  create temporary table demo_new (who uuid, flair text, title text, body text, lat float8, lng float8, minutes int, starts int) on commit drop;
+  insert into demo_new values
+    (hannah, 'snap', 'Sunset from the hills', '', -34.93850, 138.61950, 90, null),
+    (lucas, 'snap', 'Laneway after the rain', '', -34.92400, 138.60560, 200, null),
+    (priya, 'snap', 'Best flat white on Gouger, fight me', '', -34.92870, 138.59900, 35, null),
+    (ben, 'event', 'Sunset picnic in Rymill Park, on now', 'Blankets by the lake. Bring something to share, there''s plenty of room.', -34.92330, 138.61400, 60, -30);
+  for p in select * from demo_new loop
+    with place as (
+      insert into public.places (latitude, longitude, created_at) values (p.lat, p.lng, now() - make_interval(mins => p.minutes)) returning id
+    )
+    insert into public.posts (place_id, title, description, latitude, longitude, flair, author_id, author_name, created_at, starts_at)
+    select place.id, p.title, p.body, p.lat, p.lng, p.flair, p.who, (select display_name from public.profiles where id = p.who),
+      now() - make_interval(mins => p.minutes), case when p.starts is not null then now() + make_interval(mins => p.starts) end
+    from place;
+  end loop;
+  -- A snap's day runs from when it was taken.
+  update public.posts set expires_at = created_at + interval '24 hours' where flair = 'snap' and author_id = any (demo);
+
+  -- (pin, photo)
+  insert into public.post_media (post_id, author_id, media_type, url, created_at)
+  select post.id, post.author_id, 'image', photos || v.file || '.jpg', post.created_at + interval '2 minutes'
+  from (values
+    ('Something big on the Torrens path at 5am', 'sighting-torrens-path'),
+    ('Lights over the parklands, 3am', 'sighting-parklands-lights'),
+    ('A koala. On Rundle Mall. At lunch.', 'sighting-koala'),
+    ('The night shift at the old gaol', 'story-old-gaol'),
+    ('Why the Gouger St dumpling place has a second door', 'story-dumpling-door'),
+    ('The possum who rings the doorbell', 'story-doorbell-possum'),
+    ('Lost: grey tabby called Miso', 'lost-miso'),
+    ('Street clean-up, Saturday 9am', 'cleanup-crew'),
+    ('Garage sale, everything must go', 'garage-sale-lamp'),
+    ('Farmers market this Sunday', 'farmers-market'),
+    ('New cafe opening on King William', 'new-cafe'),
+    ('Dumpling night, three spare seats', 'dumpling-night'),
+    ('Sunset from the hills', 'snap-sunset'),
+    ('Laneway after the rain', 'snap-laneway'),
+    ('Best flat white on Gouger, fight me', 'snap-coffee'),
+    ('Sunset picnic in Rymill Park, on now', 'event-sunset-picnic')
+  ) as v (title, file)
+  join public.posts post on post.title = v.title and post.author_id = any (demo);
+
+  -- Tom answers the clean-up with last year's haul.
+  insert into public.replies (post_id, content, author_id, author_name, created_at)
+  select id, 'Last year''s haul, for motivation. The trailer''s booked again.', tom, (select display_name from public.profiles where id = tom), created_at + interval '3 hours'
+  from public.posts where title = 'Street clean-up, Saturday 9am' and author_id = hannah
+  returning id into answer;
+  insert into public.post_media (post_id, reply_id, author_id, media_type, url, created_at)
+  select post_id, id, tom, 'image', photos || 'cleanup-skip.jpg', created_at from public.replies where id = answer;
+end;
+$$;

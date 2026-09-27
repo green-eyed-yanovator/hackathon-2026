@@ -9,7 +9,7 @@
 //   /auth/v1      accounts and sessions, as GoTrue does (password, codes, tokens)
 //   /storage/v1   uploads and public files, kept in a folder
 //   /realtime/v1  live changes and broadcasts over a WebSocket, as Realtime does
-//   /tiles        the map's tiles, from a folder filled while online
+//   /tiles        the map's tiles, bundled with the project and cached on disk
 //   /_mail        the "emails" (sign-in codes, resets), since there's no post office
 //
 // Everything is kept in supabase/.local. It runs inside the dev server (see
@@ -19,7 +19,7 @@
 import { PGlite } from '@electric-sql/pglite'
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, createReadStream, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, createReadStream, statSync, copyFileSync } from 'node:fs'
 import path from 'node:path'
 
 const TILEJSON = 'https://tiles.openfreemap.org/planet'
@@ -67,11 +67,58 @@ export function keys(root) {
 // The database.
 //
 
+// Postgres in a folder belongs to one process at a time: two opening it would
+// each write over the other. Whoever has it says so in db.lock (and, once
+// serving, where), and anyone else is told to use that one or stop it.
+const lockOf = (root) => path.join(root, 'supabase/.local/db.lock')
+function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === 'EPERM'
+  }
+}
+export function holder(root) {
+  try {
+    const held = JSON.parse(readFileSync(lockOf(root), 'utf8'))
+    return alive(held.pid) ? held : null
+  } catch {
+    return null
+  }
+}
+function claim(root) {
+  mkdirSync(path.dirname(lockOf(root)), { recursive: true })
+  for (let tries = 0; ; tries++) {
+    try {
+      writeFileSync(lockOf(root), JSON.stringify({ pid: process.pid }), { flag: 'wx' })
+      return
+    } catch (error) {
+      if (error.code !== 'EEXIST' || tries) throw error
+      const held = holder(root)
+      if (held) {
+        const where = held.url ? `, serving ${held.url}` : ''
+        throw Object.assign(new Error(`The offline database is already open in another process (pid ${held.pid}${where}). Use that one, or stop it first.`), { code: 'LOCKED', held })
+      }
+      rmSync(lockOf(root), { force: true }) // left by a process that's gone
+    }
+  }
+}
+
 export async function openBackend(root, log = console.log) {
   const local = path.join(root, 'supabase/.local')
   const { secret } = keys(root)
-  const db = new PGlite({ dataDir: path.join(local, 'db'), extensions: { pgcrypto } })
-  await db.waitReady
+  claim(root)
+  const release = () => holder(root)?.pid === process.pid && rmSync(lockOf(root), { force: true })
+  process.once('exit', release)
+  let db
+  try {
+    db = new PGlite({ dataDir: path.join(local, 'db'), extensions: { pgcrypto } })
+    await db.waitReady
+  } catch (error) {
+    release()
+    throw error
+  }
 
   // Built once from supabase/migrations and the seed; new migrations after a pull.
   const fresh = !(await db.query(`select to_regnamespace('supabase_migrations') is not null as ok`)).rows[0].ok
@@ -93,6 +140,21 @@ export async function openBackend(root, log = console.log) {
   if (fresh) {
     await db.exec(readFileSync(path.join(root, 'supabase/seed.sql'), 'utf8'))
     log(`Database ready: ${migrations.length} migrations and the demo neighbourhood.`)
+  }
+
+  // Demo photos ship with the seed; put their files and storage rows in this
+  // backend too. The frontend rewrites their URLs to the app's own address.
+  const demoPhotos = path.join(root, 'supabase/demo')
+  if (existsSync(demoPhotos)) {
+    const destination = path.join(local, 'storage/post-media/demo')
+    mkdirSync(destination, { recursive: true })
+    for (const file of readdirSync(demoPhotos).filter((f) => /^[a-z0-9-]+\.jpg$/.test(f))) {
+      const source = path.join(demoPhotos, file)
+      copyFileSync(source, path.join(destination, file))
+      await db.query(`insert into storage.objects (bucket_id, name, metadata)
+        values ('post-media', $1, $2) on conflict (bucket_id, name) do update set metadata = excluded.metadata`,
+      [`demo/${file}`, JSON.stringify({ mimetype: 'image/jpeg', size: statSync(source).size })])
+    }
   }
 
   // Every table the app listens to gets a trigger that notes its changes.
@@ -120,6 +182,12 @@ export async function openBackend(root, log = console.log) {
         return work(tx)
       }),
     )
+    queue = next.then(sendChanges, sendChanges)
+    return next
+  }
+  // The same queue, as the database's owner (scripts, tests, the demo reset).
+  function asOwner(work) {
+    const next = queue.then(work)
     queue = next.then(sendChanges, sendChanges)
     return next
   }
@@ -224,7 +292,7 @@ export async function openBackend(root, log = console.log) {
   async function handle(req, res, next) {
     const url = new URL(req.url, 'http://local')
     const route = url.pathname
-    const known = ['/rest/v1', '/auth/v1', '/storage/v1', '/tiles/', '/_mail'].some((p) => route.startsWith(p))
+    const known = ['/rest/v1', '/auth/v1', '/storage/v1', '/tiles/', '/_mail', '/_demo/'].some((p) => route.startsWith(p))
     if (!known) return next ? next() : notFound(res)
     res.setHeader('Access-Control-Allow-Origin', '*')
     res.setHeader('Access-Control-Allow-Headers', '*')
@@ -237,6 +305,12 @@ export async function openBackend(root, log = console.log) {
       const claims = claimsOf(req)
       if (!claims) return send(res, 401, { code: 'PGRST301', message: 'JWT invalid', details: null, hint: null })
       if (claims === 'expired') return send(res, 401, { code: 'PGRST303', message: 'JWT expired', details: null, hint: null })
+      // npm run demo:reset, while the server has the database open.
+      if (route === '/_demo/reset') {
+        if (req.method !== 'POST' || claims.role !== 'service_role') return send(res, 403, { message: 'Needs the service key' })
+        await asOwner(() => db.exec(readFileSync(path.join(root, 'supabase/demo-reset.sql'), 'utf8')))
+        return send(res, 200, { ok: true })
+      }
       const body = await readBody(req)
       if (route.startsWith('/rest/v1/')) return await rest(req, res, url, claims, body)
       if (route.startsWith('/auth/v1/')) return await auth(req, res, url, claims, body)
@@ -629,7 +703,7 @@ export async function openBackend(root, log = console.log) {
   }
 
   //
-  // The map's tiles: from supabase/.local/tiles, fetched and kept while online.
+  // The map's tiles: from the local cache or the copy bundled with the project.
   //
 
   async function tile(route, res) {
@@ -772,14 +846,20 @@ ${rows.map((m) => `<div style="border-top: 1px solid #ddd; padding: 12px 0"><b>$
     keys: keys(root),
     async sql(query, params) {
       // For scripts and tests: straight to the database, as its owner.
-      const result = await (queue = queue.then(() => db.query(query, params)))
-      await sendChanges()
+      const result = await asOwner(() => db.query(query, params))
+      await queue
       return result
+    },
+    // Where it's being served, for npm run demo:reset to find it.
+    served(url) {
+      writeFileSync(lockOf(root), JSON.stringify({ pid: process.pid, url }))
     },
     async close() {
       for (const client of sockets) client.channels.clear()
       await queue
       await db.close()
+      release()
+      process.off('exit', release)
     },
   }
 }
@@ -880,8 +960,8 @@ function unframe(buffer) {
 }
 
 //
-// Tiles, cached: the map's own source (OpenFreeMap), kept on disk as it's used,
-// so the neighbourhood's map is there without the internet.
+// Tiles: the demo area ships in public/tiles. Extra tiles can be downloaded
+// explicitly with keepTiles; serving the offline app never contacts upstream.
 //
 
 let tileTemplate = null
@@ -892,9 +972,12 @@ async function upstream() {
   return (tileTemplate = json.tiles[0])
 }
 
-export async function cachedTile(root, z, x, y) {
+export async function cachedTile(root, z, x, y, download = false) {
   const file = path.join(root, 'supabase/.local/tiles', String(z), String(x), `${y}.pbf`)
   if (existsSync(file)) return readFileSync(file)
+  const bundled = path.join(root, 'public/tiles', String(z), String(x), `${y}.pbf`)
+  if (existsSync(bundled)) return readFileSync(bundled)
+  if (!download) return null
   try {
     const url = (await upstream()).replace('{z}', z).replace('{x}', x).replace('{y}', y)
     const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
@@ -922,7 +1005,7 @@ export async function keepTiles(root, [west, south, east, north], maxZoom = 14, 
   let kept = 0
   const worker = async () => {
     for (let job = jobs.shift(); job; job = jobs.shift()) {
-      if (await cachedTile(root, ...job)) kept++
+      if (await cachedTile(root, ...job, true)) kept++
       progress(++done)
     }
   }

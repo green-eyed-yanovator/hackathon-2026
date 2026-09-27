@@ -2,18 +2,35 @@ import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv, type Plugin, type PreviewServer, type ViteDevServer } from 'vite'
 import type { Backend } from './server/offline.mjs'
 
-// With no Docker (npm run setup decides), the backend runs in here, on the
+// In offline mode (the default for npm run setup), the backend runs here, on the
 // app's own address: Postgres in WebAssembly and the parts of Supabase the app
 // uses (server/offline.mjs). Nothing needs Docker or the internet.
+//
+// Only one process may have the database open, and Vite builds its new server
+// before closing the old one when it restarts, so there's one backend for the
+// whole process, kept across restarts and closed when the process ends.
+const shared = globalThis as typeof globalThis & { aroundhereBackend?: Promise<Backend> }
+
 function offlineBackend(): Plugin {
-  let backend: Backend | null = null
   const attach = async (server: ViteDevServer | PreviewServer) => {
     const { openBackend } = await import('./server/offline.mjs')
-    backend = await openBackend(process.cwd(), (line) => server.config.logger.info(line))
-    const b = backend
+    if (!shared.aroundhereBackend) {
+      shared.aroundhereBackend = openBackend(process.cwd(), (line) => server.config.logger.info(line))
+      shared.aroundhereBackend.catch(() => (shared.aroundhereBackend = undefined))
+      // Ctrl-C: the database closed properly and let go of (a second one quits at once).
+      const stop = () => void shared.aroundhereBackend?.then((b) => b.close()).finally(() => process.exit(130))
+      process.once('SIGINT', stop)
+      process.once('SIGTERM', stop)
+    }
+    const b = await shared.aroundhereBackend
     server.middlewares.use((req, res, next) => void b.handle(req, res, next))
     server.httpServer?.on('upgrade', (req, socket) => b.upgrade(req, socket))
-    server.httpServer?.on('close', () => void b.close())
+    const served = () => {
+      const address = server.httpServer?.address()
+      if (address && typeof address === 'object') b.served(`http://127.0.0.1:${address.port}`)
+    }
+    if (server.httpServer?.listening) served()
+    else server.httpServer?.once('listening', served)
     server.config.logger.info('Offline backend on this address; emails land in /_mail')
   }
   return { name: 'aroundhere-offline', configureServer: attach, configurePreviewServer: attach }
@@ -46,6 +63,7 @@ export default defineConfig(({ mode }) => {
         },
   }
   return {
+    define: { 'import.meta.env.VITE_OFFLINE': JSON.stringify(String(offline)) },
     plugins: offline ? [react(), offlineBackend()] : [react()],
     server: serve,
     preview: serve,

@@ -4,7 +4,7 @@
 -- hearts on replies, the lore and the stickers. Only the demo accounts are
 -- touched.
 --
---   docker exec -i supabase_db_hackathon-2026 psql -U postgres < supabase/demo-reset.sql
+--   npm run demo:reset
 
 do $$
 declare
@@ -87,6 +87,14 @@ begin
   delete from public.word_votes where user_id = any (demo) and created_at > now() - interval '2 hours';
   delete from public.post_votes where user_id = any (demo) and created_at > now() - interval '2 hours';
   update public.stickers set expires_at = now() + interval '22 hours' where user_id = any (demo);
+  -- Snaps are up for a day: the demo's go back to having most of it left, and
+  -- the picnic is on again.
+  update public.posts set created_at = now() - v.age, expires_at = now() - v.age + interval '24 hours'
+  from (values ('Sunset from the hills', interval '90 minutes'), ('Laneway after the rain', interval '200 minutes'),
+    ('Best flat white on Gouger, fight me', interval '35 minutes')) as v (title, age)
+  where posts.title = v.title and posts.author_id = any (demo);
+  update public.posts set created_at = now() - interval '1 hour', starts_at = now() - interval '30 minutes'
+  where title = 'Sunset picnic in Rymill Park, on now' and author_id = any (demo);
   -- Maya's streak waits for her to open the app today.
   update public.profiles set streak_day = (now() at time zone 'Australia/Adelaide')::date - 1 where id = any (demo);
 end $$;

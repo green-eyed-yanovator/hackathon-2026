@@ -86,30 +86,43 @@ What you can do:
 
 ## Running it
 
-You need Node (20.19 or 22.12 and up, for Vite). Docker is optional. From a
-fresh clone:
+You need **Node 22.12 or newer** (Vite and the current Supabase client need it).
+The default setup is fully local: **no Docker, Supabase account or internet
+connection needed to run it**. From a fresh clone:
 
 ```sh
-npm install
+npm ci
 npm run setup    # a backend of your own, with the demo neighbourhood, and .env.local
 npm run dev      # http://127.0.0.1:5173
 ```
 
-With Docker running, `npm run setup` starts local Supabase (the CLI comes
-through npx if it isn't installed), which builds the database from the
-migrations and loads the demo the first time. Run it again after pulling: it
-applies new migrations and never wipes anything.
+The initial `npm ci` needs internet access or a populated npm cache. For a
+machine that will be completely disconnected, install dependencies beforehand
+(on that machine) and copy the whole project including `public/tiles`. After
+that, setup, development and preview run without external requests.
 
-Without Docker, it sets up the offline backend instead, which needs neither
-Docker nor the internet: the same database (real Postgres, compiled to
+`npm run setup` sets up the offline backend: the same database (real Postgres, compiled to
 WebAssembly with PGlite, running our migrations and seed as they are) inside
 the dev server, on the app's own address, with the parts of Supabase the app
 uses in `server/offline.mjs`. Everything is kept in `supabase/.local`; sign-in
 codes and password resets land in a mailbox page at http://127.0.0.1:5173/_mail;
-and while there's internet, setup keeps the demo area's map, so the map works
-offline too (elsewhere it fills in, and is kept, as you use it online).
-`npm run setup -- --offline` uses it even with Docker. To start its database
-over, delete `supabase/.local/db`.
+and the demo area's map ships in `public/tiles`. Run setup again after pulling
+to apply new migrations; it never wipes your data. `npm run setup -- --offline`
+is also accepted. To start its database over, stop the server and delete
+`supabase/.local/db`.
+
+The bundled map covers central Adelaide. Other areas need to be downloaded
+explicitly while online: `npm run cache:map -- west south east north`. Include
+the updated `public/tiles` when sharing the project. Map searches, walking
+routes and block detection use those local tiles. External maps-app links and
+OAuth providers require internet; local email/password and code sign-in work
+offline, with codes in `/_mail`. Each machine has its own database; separate
+offline machines do not sync.
+
+To use Docker Supabase instead, opt in with `npm run setup -- --supabase`.
+This needs Docker running with Linux containers, and internet on the first
+start to download the CLI and images. It builds the database and loads the
+demo the first time; later setup runs apply migrations.
 
 With Docker, to start over from nothing: `npx supabase db reset` (wipes local data). To load
 the demo into a database you want to keep:
@@ -124,31 +137,41 @@ Demo accounts (password `neighbour`): `maya@aroundhere.demo`,
 a friend request waiting and unread messages. In development the sign-in
 sheet has one-tap buttons for them (never in a production build).
 
-Emails (sign-in codes, password resets) land in Mailpit at http://127.0.0.1:54324.
+With Docker Supabase, emails (sign-in codes, password resets) land in Mailpit
+at http://127.0.0.1:54324. With the default offline backend, use `/_mail` on
+the app's address.
 
-To try it on a phone over Tailscale, connect both devices to the same tailnet.
-With the dev server on port 5173, run:
+To use it on a phone over Tailscale, connect both devices to the same tailnet.
+Serve the built app on port 5185; with Docker Supabase the development server
+can keep running on 5173 while you edit. (With the offline backend only one
+server at a time can have the database, so stop `npm run dev` first; the
+preview says so if you forget.) Build and start it in one terminal:
 
 ```sh
-tailscale serve --bg --https=443 http://127.0.0.1:5173
+npm run build
+npm run preview -- --port 5185
+```
+
+In another terminal, point the existing HTTPS address at that preview:
+
+```sh
+tailscale serve --bg --https=443 http://127.0.0.1:5185
 ```
 
 On the first run, follow Tailscale's link to enable HTTPS. Open the HTTPS URL
 printed by the command on your phone, with Tailscale connected. Keep the Mac
-awake and the dev server running. The current Mac's URL is
+awake and the preview server running. The current Mac's URL is
 `https://nicks-macbook-pro.tail1185f0.ts.net/`; another Mac needs its own
 hostname (from `tailscale status`) added to `server.allowedHosts` in
 `vite.config.ts`.
 
-Keep `VITE_SUPABASE_URL` pointing to local Supabase. The dev server passes
-auth, database, storage and realtime requests through the same HTTPS address,
-so location features can work too. To stop sharing this app, run
+The preview uses the same backend as the development server, with auth,
+database, storage and realtime on the same HTTPS address. Location needs this
+HTTPS URL; use it without `:5173` or `:5185`. To stop sharing this app, run
 `tailscale serve --https=443 off`.
 
-For a demo, or just a quicker phone, serve the built app instead, on the same
-port so the same `tailscale serve` finds it: `npm run build && npm run preview`.
-The development server runs React's development build, which renders
-everything twice and is several times slower.
+After code changes, build again and refresh the phone. This avoids serving
+development modules and reloads over a slower Tailscale relay connection.
 
 Shared locations only count while they're fresh (a real phone refreshes its
 own), so the demo neighbours fade after half an hour and leave the map after
@@ -157,8 +180,12 @@ map, Maya's unread messages and waiting friend request, hearts on replies); it
 touches only the demo accounts:
 
 ```sh
-docker exec -i supabase_db_hackathon-2026 psql -U postgres < supabase/demo-reset.sql
+npm run demo:reset
 ```
+
+It works on either backend (offline, with or without the dev server running),
+and also brings the demo's snaps back to having most of their day left and the
+Rymill Park picnic back to on now.
 
 ## Putting it online
 

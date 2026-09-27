@@ -19,9 +19,12 @@ import { useSyncExternalStore } from 'react'
 // the page was opened from another device (a phone over Tailscale), the dev
 // server passes Supabase through on the page's own address: see vite.config.ts.
 const configured: string = import.meta.env.VITE_SUPABASE_URL
+const offline = import.meta.env.VITE_OFFLINE === 'true'
 const onThisComputer = (host: string) => ['localhost', '127.0.0.1', '[::1]'].includes(host)
 export const supabaseUrl: string =
-  configured && onThisComputer(new URL(configured).hostname) && !onThisComputer(window.location.hostname) ? window.location.origin : configured
+  offline || (configured && onThisComputer(new URL(configured).hostname) && !onThisComputer(window.location.hostname))
+    ? window.location.origin
+    : configured
 export const supabaseKey: string = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 
 // Without these two the app can't reach its database. Say so on the page, rather
@@ -30,11 +33,13 @@ if (!supabaseUrl || !supabaseKey) {
   document.getElementById('root')!.innerHTML =
     '<p style="max-width: 520px; margin: 20vh auto; padding: 0 24px; font: 15px/1.5 system-ui, sans-serif; color: #888">' +
     'AroundHere needs <b>VITE_SUPABASE_URL</b> and <b>VITE_SUPABASE_PUBLISHABLE_KEY</b> in <code>.env.local</code> ' +
-    '(copy <code>.env.example</code>, fill the key in from <code>supabase status</code>), then a restart of the dev server.</p>'
+    '(run <code>npm run setup</code>), then restart the dev server.</p>'
   throw new Error('VITE_SUPABASE_URL or VITE_SUPABASE_PUBLISHABLE_KEY is missing')
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey)
+// Supabase's default session key uses only the hostname, so the Docker and
+// offline databases on 127.0.0.1 would otherwise reuse each other's tokens.
+export const supabase = createClient(supabaseUrl, supabaseKey, offline ? { auth: { storageKey: 'aroundhere-offline-auth' } } : undefined)
 
 // Photos only ever come from our own storage: whatever host a stored address names,
 // the picture is fetched from ours, by its path in the bucket (so a database moved

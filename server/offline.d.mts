@@ -8,10 +8,12 @@ export type Backend = {
   upgrade(req: IncomingMessage, socket: Duplex): boolean
   keys: { secret: string; anon: string; service: string }
   sql(query: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>
+  served(url: string): void
   close(): Promise<void>
 }
 
 export function openBackend(root: string, log?: (line: string) => void): Promise<Backend>
+export function holder(root: string): { pid: number; url?: string } | null
 export function keys(root: string): { secret: string; anon: string; service: string }
-export function cachedTile(root: string, z: number, x: number, y: number): Promise<Buffer | null>
+export function cachedTile(root: string, z: number, x: number, y: number, download?: boolean): Promise<Buffer | null>
 export function keepTiles(root: string, box: [number, number, number, number], maxZoom?: number, progress?: (done: number) => void): Promise<{ total: number; kept: number }>
