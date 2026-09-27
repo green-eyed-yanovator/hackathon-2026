@@ -62,9 +62,21 @@ async function page() {
   await send('Page.enable')
   return {
     errors,
+    // In front first: a page in the background isn't drawn.
     async go(url, wait) {
+      await send('Page.bringToFront')
       await send('Page.navigate', { url })
       await sleep(wait)
+    },
+    // How much of the map is drawn: the share of pixels that aren't plain land.
+    async drawn() {
+      return this.eval(`(() => {
+        const c = document.querySelector('canvas.map'); const g = c.getContext('2d')
+        const d = g.getImageData(c.width * 0.35, c.height * 0.2, c.width * 0.5, c.height * 0.6).data
+        const base = [d[0], d[1], d[2]]; let other = 0
+        for (let i = 0; i < d.length; i += 4 * 50) if (Math.abs(d[i] - base[0]) + Math.abs(d[i + 1] - base[1]) + Math.abs(d[i + 2] - base[2]) > 24) other++
+        return other / (d.length / 200)
+      })()`)
     },
     async eval(expression) {
       const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
@@ -124,7 +136,13 @@ try {
   const coded = code ? await inApp(a, `const r = await mod.supabase.auth.verifyOtp({ email: 'hannah@aroundhere.demo', token: '${code}', type: 'email' }); return r.data.user?.email ?? r.error?.message`) : 'no code'
   check('a sign-in code from the mailbox page works', sent === 'sent' && coded === 'hannah@aroundhere.demo', coded)
 
-  await a.go(APP, 5000)
+  await a.go(APP, 3000)
+  let drawn = 0
+  for (let t = 0; t < 60 && drawn < 0.15; t++) {
+    drawn = await a.drawn()
+    await sleep(500)
+  }
+  check('the map finishes drawing', drawn >= 0.15, `${Math.round(drawn * 100)}% of it has streets and blocks`)
   await a.shot('smoke.png')
   check('no errors anywhere along the way', a.errors.length + b.errors.length === 0, [...a.errors, ...b.errors].slice(0, 3).join(' / '))
 } catch (error) {
