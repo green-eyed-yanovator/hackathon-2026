@@ -30,7 +30,7 @@ import {
   type Flair, type Post, type Reply, type Revision, type Notification, type Word,
 } from './data'
 import {
-  createMap, destroyMap, setMarkers, setTheme, flyTo, flash, zoomBy, glideBy, requestFrame,
+  createMap, destroyMap, setMarkers, setTheme, flyTo, flash, zoomBy, glideBy, requestFrame, setArea,
   project, center, lngToX, latToY, xToLng, yToLat, nearestStreet, findPlaces, setRoute, setRegions, findBlock,
   icons, mapThemes, LEGEND, poiColor,
   MARK_MINE, MARK_SAVED, MARK_NEW, MARK_RESOLVED, MARK_SELECTED, MARK_STALE, MARK_ONLINE, MARK_LIVE, MARK_LEGEND, MARK_BOOSTED, setPlacesShown,
@@ -116,6 +116,16 @@ function initialFilters(): Filters {
   }
 }
 
+// Local area: how far "around you" reaches. The slider steps through these; a
+// kilometre is where it starts.
+const RADII = [100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000]
+const DEFAULT_RADIUS = 1000
+
+function initialRadius() {
+  const saved = Number(stored('aroundhere.localRadius'))
+  return RADII.includes(saved) ? saved : DEFAULT_RADIUS
+}
+
 const UI = {
   route: readRoute(),
   theme: initialTheme(),
@@ -150,6 +160,11 @@ const UI = {
   sheetFull: false, // phones: the open sheet is pulled up to full height
   legend: false,
   walk: null as string | null, // "Get there": what's being walked to: "pin/<id>", "user/<id>" or "spot/<lat>,<lng>/<name>"
+  local: false, // Local area: only what's within localRadius of you shows (see localArea)
+  localRadius: initialRadius(), // metres
+  localOpen: false, // its slider is showing
+  localAt: null as { lat: number; lng: number } | null, // where you were last seen, if your location drops out meanwhile
+  localFrom: null as { lat: number; lng: number; zoom: number } | null, // the map before, to go back to when it's turned off
 }
 
 // When this device last had the app open, for "new since your last visit".
@@ -573,6 +588,69 @@ function filterWords(f = UI.filters) {
   return words.join(' · ')
 }
 
+// "500 m", "1 km", "1.5 km".
+const radiusText = (meters: number) => (meters < 1000 ? `${meters} m` : `${meters / 1000} km`)
+
+// The local area, when it's on: a circle round you (or round where you were
+// last seen, while your location's gone quiet).
+function localArea() {
+  if (!UI.local) return null
+  const here = S.here ? { lat: S.here.latitude, lng: S.here.longitude } : UI.localAt
+  return here ? { ...here, meters: UI.localRadius } : null
+}
+
+// Is this spot inside the local area (or is there none)?
+function inLocalArea(lat: number, lng: number, area = localArea()) {
+  return !area || distance(area.lat, area.lng, lat, lng) <= area.meters
+}
+
+// The map pulled back (or in) until the whole circle is in view, clear of the panels.
+function fitLocalArea() {
+  const area = localArea()
+  if (!map || !area) return
+  const open = openArea()
+  const across = Math.min(open.right - open.left, open.bottom - open.top) - 90 // room for the label and the buttons
+  const perMeter = 1 / (40075016.686 * Math.cos((area.lat * Math.PI) / 180)) // of the world's width
+  const zoom = Math.log2(Math.max(across, 120) / (2 * area.meters * perMeter * 256))
+  reveal(area.lat, area.lng, Math.min(18, Math.max(3, zoom)), true)
+}
+
+// The Local area button: on, it finds you (asking for your location if it has
+// to), draws your circle, fits the map to it and shows the slider; on again, it
+// goes back to the map round where you are, as it was before.
+let findingLocal = false
+
+async function toggleLocal() {
+  if (UI.local) {
+    const from = UI.localFrom
+    const here = S.here ? { lat: S.here.latitude, lng: S.here.longitude } : UI.localAt
+    ui({ local: false, localOpen: false, localFrom: null })
+    const back = here ?? from
+    if (back) reveal(back.lat, back.lng, from?.zoom ?? map?.zoom, true)
+    return
+  }
+  if (findingLocal) return
+  findingLocal = true
+  const here = S.here ?? (await watchHere())
+  findingLocal = false
+  if (!here) {
+    toast('Turn on your location to see your local area')
+    return
+  }
+  const view = map ? center(map) : UI.view
+  UI.localFrom = { lat: view.lat, lng: view.lng, zoom: view.zoom }
+  UI.localAt = { lat: here.latitude, lng: here.longitude }
+  UI.follow = false
+  ui({ local: true, localOpen: true, legend: false, tray: false })
+  fitLocalArea()
+}
+
+function setLocalRadius(meters: number) {
+  store('aroundhere.localRadius', String(meters))
+  ui({ localRadius: meters })
+  fitLocalArea()
+}
+
 const isBoosted = (p: Post) => !!p.boosted_until && time(p.boosted_until) > Date.now()
 const msLeft = (iso: string | null) => (iso ? time(iso) - Date.now() : null)
 const liveStickers = () => S.stickers.filter((x) => time(x.expires_at) > Date.now() && !S.blocked.has(x.user_id))
@@ -594,8 +672,10 @@ function visiblePosts(anyKind = false) {
 
   const then = UI.then
   const f = UI.filters
+  const area = localArea()
   return S.posts.filter((p) => {
     if (p.author_id && S.blocked.has(p.author_id)) return false
+    if (!inLocalArea(p.latitude, p.longitude, area)) return false
     // A snap is gone after its day, unless it's a legend.
     if (p.expires_at && !p.legend_at && time(p.expires_at) <= (then ?? Date.now())) return false
     if (f.kinds.length && !anyKind && !f.kinds.includes(p.flair)) return false
@@ -877,9 +957,10 @@ function buildMarkers(posts: Post[]): Marker[] {
   }
 
   // Friends are where they are now, so looking back leaves them out.
+  const area = localArea()
   for (const userId of UI.then === null && UI.filters.people ? S.locations.keys() : []) {
     const loc = locationOf(userId)
-    if (userId === S.userId || !loc) continue
+    if (userId === S.userId || !loc || !inLocalArea(loc.latitude, loc.longitude, area)) continue
     const name = nameOf(userId)
     const unreadFrom = S.messages.filter((m) => m.sender_id === userId && m.recipient_id === S.userId && !m.read_at).length
     markers.push({
@@ -893,6 +974,7 @@ function buildMarkers(posts: Post[]): Marker[] {
 
   // Stickers, as they are now.
   for (const sticker of UI.then === null && UI.filters.stickers ? liveStickers() : []) {
+    if (!inLocalArea(sticker.latitude, sticker.longitude, area)) continue
     markers.push({
       id: `sticker:${sticker.id}`, kind: 'sticker', x: lngToX(sticker.longitude), y: latToY(sticker.latitude), icon: 'star', color: '',
       count: 0, flags: 0, text: sticker.emoji, name: nameOf(sticker.user_id), accuracy: 0, heading: null, image: null, life: 1,
@@ -903,7 +985,7 @@ function buildMarkers(posts: Post[]): Marker[] {
   const at = UI.then ?? Date.now()
   for (const l of UI.filters.people ? S.linkUps : []) {
     const age = at - time(l.created_at)
-    if (age < 0 || age > 86400000 || S.blocked.has(l.a) || S.blocked.has(l.b)) continue
+    if (age < 0 || age > 86400000 || S.blocked.has(l.a) || S.blocked.has(l.b) || !inLocalArea(l.latitude, l.longitude, area)) continue
     markers.push({
       id: `linkup:${l.id}`, kind: 'linkup', x: lngToX(l.longitude), y: latToY(l.latitude), icon: 'star', color: '',
       count: 0, flags: 0, text: moveOf(l.move).emoji, name: pairName(l), accuracy: 0, heading: null, image: null, life: 1 - age / 86400000,
@@ -1707,7 +1789,9 @@ function Feed() {
         ) : !S.ready ? (
           <div className="skeleton">{[0, 1, 2, 3].map((i) => <div key={i} />)}</div>
         ) : rows.length === 0 ? (
-          <Empty icon="pin">{EMPTY_TAB[UI.tab]}</Empty>
+          <Empty icon="pin">
+            {UI.local ? `Nothing within ${radiusText(UI.localRadius)} of you. Widen your local area, or pin something.` : EMPTY_TAB[UI.tab]}
+          </Empty>
         ) : (
           rows.map(({ post, away, active }, i) => {
             // In Latest, a line where the new stuff since your last visit ends.
@@ -4018,6 +4102,7 @@ function paletteItems(query: string): { group: string; items: Command[] }[] {
     { key: 'snap', icon: <Icon name="camera" />, label: 'Snap a photo, up for a day', hint: 'S', run: startSnap },
     { key: 'stickers', icon: <Icon name="sticker" />, label: 'Stickers and sparks', run: () => ui({ tray: true, legend: false }) },
     { key: 'filters', icon: <Icon name="sliders" />, label: 'Filters: what the map shows', run: () => ui({ legend: true, tray: false }) },
+    { key: 'local', icon: <Icon name="area" />, label: UI.local ? 'Local area: off, see everywhere' : "Local area: only what's near you", run: toggleLocal },
     ...PRESETS.slice(1).map((preset) => ({ key: `preset-${preset.label}`, icon: <Icon name="sliders" />, label: `Show: ${preset.label.toLowerCase()}`, run: () => setFilters(preset.pins) })),
     { key: 'then', icon: <Icon name="clock" />, label: UI.then === null ? 'Back in time: the map as it was' : 'Back to now', hint: 'Y', run: toggleThen },
     ...(walkable() || UI.walk
@@ -4182,6 +4267,48 @@ function Switch({ on, label, flip }: { on: boolean; label: string; flip: () => v
       <i />
       {label}
     </button>
+  )
+}
+
+// Local area: how far round you it reaches, on a slider, and what's in it.
+function LocalPanel() {
+  const index = Math.max(0, RADII.indexOf(UI.localRadius))
+  const pins = visiblePosts().length
+  const finding = !localArea()
+  return (
+    <div className="panel legend local-panel" role="group" aria-label="Local area">
+      <div className="legend-head">
+        <strong>Local area</strong>
+        <button className="link" onClick={toggleLocal}>
+          Turn off
+        </button>
+      </div>
+      <p className="local-sub">
+        {finding ? 'Finding you…' : <>Only what's within <b>{radiusText(UI.localRadius)}</b> of you</>}
+      </p>
+      <input
+        type="range"
+        min={0}
+        max={RADII.length - 1}
+        step={1}
+        value={index}
+        onChange={(e) => setLocalRadius(RADII[Number(e.target.value)])}
+        aria-label="How far round you"
+        aria-valuetext={radiusText(UI.localRadius)}
+      />
+      <div className="local-scale">
+        <span>{radiusText(RADII[0])}</span>
+        <span>{radiusText(RADII[RADII.length - 1])}</span>
+      </div>
+      <div className="local-foot">
+        <small>
+          {plural(pins, 'pin')} {UI.then === null ? 'in your area' : 'in your area then'}
+        </small>
+        <button className="btn primary small" onClick={() => ui({ localOpen: false })}>
+          Done
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -4457,6 +4584,7 @@ function onKey(e: KeyboardEvent) {
     else if (UI.palette) ui({ palette: false })
     else if (UI.auth) ui({ auth: null })
     else if (UI.legend || UI.tray) ui({ legend: false, tray: false })
+    else if (UI.local && UI.localOpen) ui({ localOpen: false })
     else if (UI.route.kind) go('')
     else if (UI.then !== null) toggleThen()
     return
@@ -4470,6 +4598,7 @@ function onKey(e: KeyboardEvent) {
   } else if (k === '?') go('settings')
   else if (k === 'n') startCompose()
   else if (k === 'l') locate()
+  else if (k === 'a') toggleLocal()
   else if (k === 'g') walkKey()
   else if (k === 'y') toggleThen()
   else if (k === 's') startSnap()
@@ -4780,6 +4909,9 @@ export default function App() {
       setTheme(map, shown())
       paintChrome(shown())
     }
+    if (UI.local && S.here) UI.localAt = { lat: S.here.latitude, lng: S.here.longitude }
+    const area = localArea()
+    setArea(map, area ? { lng: area.lng, lat: area.lat, meters: area.meters, label: radiusText(area.meters) } : null)
     setMarkers(map, buildMarkers(posts))
     setRegions(map, buildRegions(posts))
     setPlacesShown(map, UI.filters.places)
@@ -4896,34 +5028,64 @@ export default function App() {
         <button className={UI.follow ? 'icon-btn tool follow' : S.here ? 'icon-btn tool on' : 'icon-btn tool'} onClick={locate} aria-label="Where am I" title="Where am I (L)">
           <Icon name="locate" />
         </button>
+        <button
+          className={UI.local ? 'icon-btn tool follow' : 'icon-btn tool'}
+          onClick={toggleLocal}
+          aria-label="Local area"
+          aria-pressed={UI.local}
+          title={UI.local ? `Local area: within ${radiusText(UI.localRadius)} of you. Again to see everywhere (A)` : 'Local area: only what\'s near you (A)'}
+        >
+          <Icon name="area" />
+        </button>
         <button className={UI.then !== null ? 'icon-btn tool on' : 'icon-btn tool'} onClick={toggleThen} aria-label="Back in time" title="Back in time: the map as it was (Y)">
           <Icon name="clock" />
         </button>
-        <button className={UI.tray ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ tray: !UI.tray, legend: false, placing: null })} aria-label="Stickers" title="Stickers and sparks">
+        <button className={UI.tray ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ tray: !UI.tray, legend: false, placing: null, localOpen: false })} aria-label="Stickers" title="Stickers and sparks">
           <Icon name="sticker" />
         </button>
-        <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend, tray: false })} aria-label="Filters" title="What to show, and what the blips mean">
+        <button className={UI.legend ? 'icon-btn tool on' : 'icon-btn tool'} onClick={() => ui({ legend: !UI.legend, tray: false, localOpen: false })} aria-label="Filters" title="What to show, and what the blips mean">
           <Icon name="sliders" />
           {filterWords() && <b className="badge dot" />}
         </button>
       </div>
       {UI.legend && <Legend />}
       {UI.tray && <StickerTray />}
-      {filterWords() && !UI.legend && (
-        <button className="filter-chip" onClick={() => ui({ legend: true })}>
-          <Icon name="sliders" size={14} /> {filterWords()}
-          <span
-            className="clear"
-            role="button"
-            aria-label="Show everything"
-            onClick={(e) => {
-              e.stopPropagation()
-              setFilters(PRESETS[0].pins)
-            }}
-          >
-            <Icon name="close" size={12} />
-          </span>
-        </button>
+      {UI.local && UI.localOpen && !UI.legend && !UI.tray && <LocalPanel />}
+      {((UI.local && !UI.localOpen) || (filterWords() && !UI.legend)) && (
+        <div className="map-chips">
+          {UI.local && !UI.localOpen && (
+            <button className="filter-chip local-chip" onClick={() => ui({ localOpen: true, legend: false, tray: false })} title="Change how far your local area reaches">
+              <Icon name="area" size={14} /> Within {radiusText(UI.localRadius)} of you
+              <span
+                className="clear"
+                role="button"
+                aria-label="Turn off local area"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleLocal()
+                }}
+              >
+                <Icon name="close" size={12} />
+              </span>
+            </button>
+          )}
+          {filterWords() && !UI.legend && (
+            <button className="filter-chip" onClick={() => ui({ legend: true })}>
+              <Icon name="sliders" size={14} /> {filterWords()}
+              <span
+                className="clear"
+                role="button"
+                aria-label="Show everything"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setFilters(PRESETS[0].pins)
+                }}
+              >
+                <Icon name="close" size={12} />
+              </span>
+            </button>
+          )}
+        </div>
       )}
 
       {UI.then !== null && <ThenBar />}

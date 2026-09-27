@@ -56,6 +56,13 @@ What you can do:
   pins only, and whether friends' dots, stickers, block names and the map's own
   shops and cafés show at all. A chip over the map says what's filtered and
   clears it; the choice is remembered on the device.
+- **Your local area.** The circle button (or `A`) finds you (asking to turn
+  location on if it's off) and shows only what's within a kilometre of you: the
+  map fits itself to a lit circle round you with everything outside dimmed,
+  and the feed, the counts and the timeline keep to the circle. A slider
+  takes it from 100 m out to 10 km (the choice is remembered); Done leaves a
+  chip over the map that opens the slider again, and its × (or the button
+  again) goes back to everything, and to the map round where you are.
 - **Back in time.** The clock button (or `Y`) shows the map as it was at any
   moment: the pins up then (snaps included), what the blocks were called, the legends. Pick
   how far back the timeline reaches (an hour, a day, a week, a month, a year)

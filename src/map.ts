@@ -80,6 +80,7 @@ export const icons = {
   users: 'M9 4a4 4 0 1 1 0 8 4 4 0 1 1 0-8zM1 20c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5zM16.5 5a3.3 3.3 0 1 1 0 6.6 3.3 3.3 0 0 1 0-6.6zM18.4 13.6c2.7.5 4.6 2.6 4.6 5.9v.5h-4.5c0-2.6-.8-4.6-2.3-6.1z',
   userplus: 'M9 3a4.5 4.5 0 1 1 0 9 4.5 4.5 0 1 1 0-9zM1 21c0-4.4 3.6-7 8-7s8 2.6 8 7zM19 7h2v3h3v2h-3v3h-2v-3h-3v-2h3z',
   sliders: 'M3 6h10v2H3zM17 6h4v2h-4zM13 4h4v6h-4zM3 16h4v2H3zM11 16h10v2H11zM7 14h4v6H7z',
+  area: '!M12 2a10 10 0 1 1 0 20 10 10 0 1 1 0-20zM12 3.8a8.2 8.2 0 1 0 0 16.4 8.2 8.2 0 1 0 0-16.4zM12 9.8a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 1 1 0-4.4zM14.2 11.3h5.6v1.4h-5.6z',
   thumb: 'M2 10h4v11H2zM8 10l4-7.5c1.5 0 2.5 1 2.5 2.5L14 9h5.5a2 2 0 0 1 2 2.4l-1.6 7.8a2.2 2.2 0 0 1-2.2 1.8H8z',
   link: 'M10 7H7a5 5 0 0 0 0 10h3v-2H7a3 3 0 0 1 0-6h3zM14 7h3a5 5 0 0 1 0 10h-3v-2h3a3 3 0 0 0 0-6h-3zM8 11h8v2H8z',
   trash: 'M9 2h6v2h5v2H4V4h5zM5 7h14l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1z',
@@ -846,6 +847,8 @@ export type MapState = {
   onLongPress: (lng: number, lat: number) => void // held still on the map, or a right-click
   route: Route | null // walking directions, drawn under the names
   onRoute: () => void // the route was worked out, or couldn't be
+  area: { x: number; y: number; meters: number; label: string } | null // "Local area": inside is lit, outside dimmed
+  areaDrawn: { x: number; y: number; meters: number; alpha: number } | null // what's on screen, easing toward area
 }
 
 export function worldSize(m: MapState) {
@@ -883,6 +886,7 @@ export function createMap(canvas: HTMLCanvasElement, lng: number, lat: number, z
     frameCount: 0, frameRequested: false, destroyed: false, cleanup: () => {},
     onClick: () => {}, onHover: () => {}, onFrame: () => {}, onUserMove: () => {}, onTile: () => {}, onLongPress: () => {},
     route: null, onRoute: () => {},
+    area: null, areaDrawn: null,
   }
 
   if (LOCAL_TILES) {
@@ -3454,6 +3458,122 @@ function viewOf(m: MapState): View {
   }
 }
 
+//
+// Local area: a circle round you. Everything outside it is dimmed, and the circle
+// is lit from its rim, with how far it reaches written on top. It grows in when
+// it's turned on, eases to a new size, and fades out when it's turned off.
+//
+
+export function setArea(m: MapState, area: { lng: number; lat: number; meters: number; label: string } | null) {
+  const next = area ? { x: lngToX(area.lng), y: latToY(area.lat), meters: area.meters, label: area.label } : null
+  const was = m.area
+  if (was && next && was.x === next.x && was.y === next.y && was.meters === next.meters && was.label === next.label) return
+  if (!was && !next) return
+  m.area = next
+  requestFrame(m)
+}
+
+// How bright a colour is, 0 to 1, for picking what goes on top of it.
+function lightness(color: string) {
+  const hex = color.replace('#', '')
+  if (hex.length !== 6) return 1
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+// Returns true while it's still growing, shrinking or fading.
+function drawArea(m: MapState, dt: number) {
+  const want = m.area
+  let d = m.areaDrawn
+  if (!want && !d) return false
+  if (!d) d = m.areaDrawn = { x: want!.x, y: want!.y, meters: 0, alpha: 0 }
+
+  // Ease toward what's asked for: a quarter of the way each 60 ms or so.
+  const k = 1 - Math.exp(-dt / 110)
+  if (want) {
+    d.x += (want.x - d.x) * k
+    d.y += (want.y - d.y) * k
+    d.meters += (want.meters - d.meters) * k
+    d.alpha += (1 - d.alpha) * k
+  } else d.alpha -= d.alpha * k
+  const settling =
+    (want ? Math.abs(want.meters - d.meters) > want.meters * 0.002 || Math.abs(1 - d.alpha) > 0.01 : d.alpha > 0.01) ||
+    (want !== null && Math.hypot(want.x - d.x, want.y - d.y) * worldSize(m) > 0.5)
+  if (!want && !settling) {
+    m.areaDrawn = null
+    return false
+  }
+  if (!settling && want) {
+    d.x = want.x
+    d.y = want.y
+    d.meters = want.meters
+    d.alpha = 1
+  }
+
+  const c = m.ctx
+  const t = m.theme
+  const p = project(m, d.x, d.y)
+  const r = (d.meters / metersPerWorld(d.y)) * worldSize(m)
+  const light = lightness(t.land) > 0.45
+  const accent = t.me
+
+  c.save()
+  c.globalAlpha = d.alpha
+
+  // Outside: dimmed, darker on the dark styles so it still reads as "not here".
+  c.beginPath()
+  c.rect(-4, -4, m.width + 8, m.height + 8)
+  c.arc(p.x, p.y, Math.max(r, 0.5), 0, Math.PI * 2)
+  c.fillStyle = light ? 'rgba(24, 28, 38, 0.46)' : 'rgba(0, 0, 0, 0.58)'
+  c.fill('evenodd')
+
+  // Inside: a wash of your colour, strongest at the rim.
+  if (r > 4) {
+    const wash = c.createRadialGradient(p.x, p.y, r * 0.55, p.x, p.y, r)
+    wash.addColorStop(0, 'rgba(0, 0, 0, 0)')
+    wash.addColorStop(1, accent + '2e')
+    c.beginPath()
+    c.arc(p.x, p.y, r, 0, Math.PI * 2)
+    c.fillStyle = wash
+    c.fill()
+  }
+
+  // The rim: a soft halo, then a sharp line.
+  c.beginPath()
+  c.arc(p.x, p.y, Math.max(r, 0.5), 0, Math.PI * 2)
+  c.strokeStyle = accent + '44'
+  c.lineWidth = 9
+  c.stroke()
+  c.shadowColor = accent
+  c.shadowBlur = 10
+  c.strokeStyle = accent
+  c.lineWidth = 2.5
+  c.stroke()
+  c.shadowBlur = 0
+
+  // How far it reaches, on the rim at the top (or as high as can be seen).
+  if (want && r > 24) {
+    const font = `700 12px ${sans}`
+    c.font = font
+    const text = want.label
+    const w = c.measureText(text).width + 18
+    const top = m.inset.top + 22
+    let y = p.y - r
+    if (y < top) y = Math.min(top, p.y + r - 14)
+    const x = p.x
+    c.fillStyle = accent
+    c.beginPath()
+    c.roundRect(x - w / 2, y - 11, w, 22, 11)
+    c.fill()
+    c.fillStyle = lightness(accent) > 0.6 ? '#111111' : '#ffffff'
+    c.textAlign = 'center'
+    c.textBaseline = 'middle'
+    c.fillText(text, x, y + 0.5)
+  }
+  c.restore()
+  return settling
+}
+
 function frame(m: MapState, time: number) {
   m.frameRequested = false
   if (m.destroyed || m.width === 0) return
@@ -3510,6 +3630,7 @@ function frame(m: MapState, time: number) {
     c.setTransform(m.ratio, 0, 0, m.ratio, 0, 0)
   }
 
+  if (drawArea(m, dt)) keepGoing = true
   const hot = drawHotRegions(m, time)
   const animated = drawMarkers(m, view, time) || hot
   if (drawBeacon(m, time)) keepGoing = true
