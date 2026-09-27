@@ -2,11 +2,15 @@
 //
 //   npm install && npm run setup && npm run dev
 //
-// Starts local Supabase (Docker underneath; the Supabase CLI comes through npx
+// With Docker running: starts local Supabase (the Supabase CLI comes through npx
 // if it isn't installed). The first start builds the database from the
-// migrations and loads the demo neighbourhood. Later runs, after a pull, apply
-// whatever migrations are new. Then .env.local gets the local address and key.
-// Safe to run again: it never wipes anything.
+// migrations and loads the demo neighbourhood; later runs, after a pull, apply
+// whatever migrations are new. Safe to run again: it never wipes anything.
+//
+// Without Docker, or with `npm run setup -- --hosted`: uses the team's shared
+// Supabase project instead (supabase/hosted.env), the same for everyone.
+//
+// Either way, .env.local gets the address and key the app needs.
 
 import { execSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
@@ -22,20 +26,34 @@ function has(command) {
   }
 }
 
-if (!has('docker info')) {
-  console.error('Docker isn’t running. Start Docker Desktop, OrbStack or Colima, then run this again.')
-  console.error('(With a Colima profile of its own, point DOCKER_HOST at its socket first.)')
-  process.exit(1)
-}
+// VITE_... lines from a file of them.
+const settingsIn = (file) =>
+  Object.fromEntries(
+    readFileSync(file, 'utf8')
+      .split('\n')
+      .map((line) => /^(VITE_[A-Z_]+)=(.*)$/.exec(line.trim()))
+      .filter((match) => match && match[2])
+      .map((match) => [match[1], match[2]]),
+  )
 
-const supabase = has('supabase --version') ? 'supabase' : 'npx --yes supabase'
-run(`${supabase} start`)
-run(`${supabase} migration up`)
-
-const status = JSON.parse(run(`${supabase} status -o json`, true))
-const settings = {
-  VITE_SUPABASE_URL: status.API_URL,
-  VITE_SUPABASE_PUBLISHABLE_KEY: status.PUBLISHABLE_KEY || status.ANON_KEY,
+let settings
+let where
+if (process.argv.includes('--hosted') || !has('docker info')) {
+  if (!existsSync('supabase/hosted.env')) {
+    console.error('Docker isn’t running, and there’s no shared project set up yet (supabase/hosted.env).')
+    console.error('Start Docker Desktop, OrbStack or Colima and run this again.')
+    process.exit(1)
+  }
+  if (!process.argv.includes('--hosted')) console.log('No Docker running: using the shared Supabase project instead.')
+  settings = settingsIn('supabase/hosted.env')
+  where = `the shared project at ${settings.VITE_SUPABASE_URL} (everyone's data is in it together)`
+} else {
+  const supabase = has('supabase --version') ? 'supabase' : 'npx --yes supabase'
+  run(`${supabase} start`)
+  run(`${supabase} migration up`)
+  const status = JSON.parse(run(`${supabase} status -o json`, true))
+  settings = { VITE_SUPABASE_URL: status.API_URL, VITE_SUPABASE_PUBLISHABLE_KEY: status.PUBLISHABLE_KEY || status.ANON_KEY }
+  where = `local Supabase. Emails (sign-in codes, resets) land in ${status.MAILPIT_URL || status.INBUCKET_URL}; the database is at ${status.STUDIO_URL}`
 }
 
 // Anything else already in .env.local stays.
@@ -45,9 +63,8 @@ const kept = existsSync('.env.local')
 writeFileSync('.env.local', [...kept, ...Object.entries(settings).map(([key, value]) => `${key}=${value}`)].join('\n') + '\n')
 
 console.log(`
-Ready. Now: npm run dev, and open http://127.0.0.1:5173
+Ready, on ${where}.
+Now: npm run dev, and open http://127.0.0.1:5173
 
 Demo accounts, password "neighbour": maya@aroundhere.demo (friends, messages
-and a request waiting), tom@, priya@, lucas@, hannah@, ben@aroundhere.demo.
-Emails (sign-in codes, resets) land in ${status.MAILPIT_URL || status.INBUCKET_URL}.
-The database, to look around: ${status.STUDIO_URL}.`)
+and a request waiting), tom@, priya@, lucas@, hannah@, ben@aroundhere.demo.`)
