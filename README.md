@@ -86,8 +86,9 @@ What you can do:
 
 ## Running it
 
-You need Node (20.19 or 22.12 and up, for Vite) and Docker running (Docker
-Desktop, OrbStack or Colima). From a fresh clone:
+You need Node (20.19 or 22.12 and up, for Vite), and either Docker running
+(Docker Desktop, OrbStack or Colima) or a free Supabase account. From a fresh
+clone:
 
 ```sh
 npm install
@@ -101,12 +102,13 @@ the migrations and loads the demo the first time, and writes `.env.local`.
 Run it again after pulling: it applies any new migrations and never wipes
 anything. The first run downloads the Supabase images, a few minutes.
 
-No Docker? `npm run setup` notices and uses the team's shared Supabase
-instead: the one on Nick's Mac, reached over Tailscale (`supabase/shared.env`).
-Join the team's tailnet first; it works while that Mac is awake and running
-Supabase, and everyone's data is in it together. `npm run setup -- --shared`
-uses it even with Docker. (On that Mac, the API is opened to the tailnet with
-`tailscale serve --bg --tcp 54321 tcp://127.0.0.1:54321`.)
+No Docker? `npm run setup` sets you up a free Supabase project of your own
+instead, in your own Supabase account: it logs you in (a browser window, and
+a free account if you don't have one), makes the project, builds its database
+with the demo neighbourhood and turns off email confirmation. It takes a few
+minutes the first time; after a pull it just applies new migrations. The
+project and its database password are kept in `.env.local`. `npm run setup --
+--cloud` does the same even with Docker.
 
 To start over from nothing: `npx supabase db reset` (wipes local data). To load
 the demo into a database you want to keep:
