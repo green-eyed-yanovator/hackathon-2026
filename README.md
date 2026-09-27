@@ -86,19 +86,23 @@ What you can do:
 
 ## Running it
 
-You need Node (20.19 or 22.12 and up, for Vite) and the Supabase CLI (Docker
-underneath).
+You need Node (20.19 or 22.12 and up, for Vite) and Docker running (Docker
+Desktop, OrbStack or Colima). From a fresh clone:
 
 ```sh
 npm install
-supabase start                      # local Postgres, auth, realtime, storage
-supabase db reset                   # migrations + the demo neighbourhood (wipes local data)
-cp .env.example .env.local          # then paste the publishable key from `supabase status`
-npm run dev
+npm run setup    # local Supabase with the demo neighbourhood, and .env.local
+npm run dev      # http://127.0.0.1:5173
 ```
 
-Already have a local database you want to keep? Apply new migrations with
-`supabase migration up`, and load the demo on top of it with:
+`npm run setup` starts local Supabase (Postgres, auth, realtime, storage; the
+CLI comes through npx if it isn't installed), which builds the database from
+the migrations and loads the demo the first time, and writes `.env.local`.
+Run it again after pulling: it applies any new migrations and never wipes
+anything. The first run downloads the Supabase images, a few minutes.
+
+To start over from nothing: `npx supabase db reset` (wipes local data). To load
+the demo into a database you want to keep:
 
 ```sh
 docker exec -i supabase_db_hackathon-2026 psql -U postgres < supabase/seed.sql
@@ -122,8 +126,9 @@ tailscale serve --bg --https=443 http://127.0.0.1:5173
 On the first run, follow Tailscale's link to enable HTTPS. Open the HTTPS URL
 printed by the command on your phone, with Tailscale connected. Keep the Mac
 awake and the dev server running. The current Mac's URL is
-`https://nicks-macbook-pro.tail1185f0.ts.net/`; another Mac needs its hostname
-added to `server.allowedHosts` in `vite.config.ts`.
+`https://nicks-macbook-pro.tail1185f0.ts.net/`; another Mac needs its own
+hostname (from `tailscale status`) added to `server.allowedHosts` in
+`vite.config.ts`.
 
 Keep `VITE_SUPABASE_URL` pointing to local Supabase. The dev server passes
 auth, database, storage and realtime requests through the same HTTPS address,
